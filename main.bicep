@@ -23,6 +23,14 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2026-04-01' = {
     accessTier: 'Hot'
     allowBlobPublicAccess: false
     publicNetworkAccess: 'Disabled'
+    supportsHttpsTrafficOnly: true
+  }
+  resource service 'blobServices' = {
+    name: 'default'
+
+    resource blob 'containers' = {
+      name: 'def-blob'
+    }
   }
 }
 
