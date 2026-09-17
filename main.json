@@ -1,0 +1,145 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.47.16.16243",
+      "templateHash": "9043308225302643930"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "WestUS3"
+    },
+    "storageAccountName": {
+      "type": "string",
+      "defaultValue": "[format('dfsk{0}', uniqueString(resourceGroup().id))]"
+    },
+    "appServiceAppName": {
+      "type": "string",
+      "defaultValue": "[format('defenstack-mvp{0}', uniqueString(resourceGroup().id))]"
+    },
+    "environmentType": {
+      "type": "string",
+      "allowedValues": [
+        "prod",
+        "dev",
+        "test"
+      ]
+    }
+  },
+  "variables": {
+    "storageAccountSkuName": "[if(equals(parameters('environmentType'), 'prod'), 'Standard_GRS', 'Standard_LRS')]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Storage/storageAccounts",
+      "apiVersion": "2026-04-01",
+      "name": "[parameters('storageAccountName')]",
+      "location": "[parameters('location')]",
+      "sku": {
+        "name": "[variables('storageAccountSkuName')]"
+      },
+      "kind": "StorageV2",
+      "properties": {
+        "accessTier": "Hot",
+        "allowBlobPublicAccess": false,
+        "publicNetworkAccess": "Disabled"
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "appService",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "appServiceAppName": {
+            "value": "[parameters('appServiceAppName')]"
+          },
+          "environmentType": {
+            "value": "[parameters('environmentType')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "languageVersion": "2.0",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "5946625348900053757"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string"
+            },
+            "appServiceAppName": {
+              "type": "string"
+            },
+            "environmentType": {
+              "type": "string",
+              "allowedValues": [
+                "prod",
+                "dev",
+                "test"
+              ]
+            }
+          },
+          "variables": {
+            "appServicePlanName": "defenstack-product-plan",
+            "appServicePlanSkuName": "[if(equals(parameters('environmentType'), 'prod'), 'P2V3', 'F1')]"
+          },
+          "resources": {
+            "appServiceplan": {
+              "type": "Microsoft.Web/serverfarms",
+              "apiVersion": "2025-03-01",
+              "name": "[variables('appServicePlanName')]",
+              "location": "[parameters('location')]",
+              "sku": {
+                "name": "[variables('appServicePlanSkuName')]",
+                "tier": "Free"
+              }
+            },
+            "appServiceApp": {
+              "type": "Microsoft.Web/sites",
+              "apiVersion": "2025-03-01",
+              "name": "[parameters('appServiceAppName')]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('appServicePlanName'))]",
+                "httpsOnly": true,
+                "publicNetworkAccess": "Disabled"
+              },
+              "dependsOn": [
+                "appServiceplan"
+              ]
+            }
+          },
+          "outputs": {
+            "appServiceAppHostName": {
+              "type": "string",
+              "value": "[reference('appServiceApp').defaultHostName]"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "appServiceAppHostName": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Resources/deployments', 'appService'), '2025-04-01').outputs.appServiceAppHostName.value]"
+    }
+  }
+}
