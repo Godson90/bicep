@@ -124,7 +124,7 @@ module keyVault 'modules/keyVault.bicep' = {
     location: location
     keyVaultName: keyVaultName
     logAnalyticsWorkspaceId: monitoring.outputs.id
-    enablePurgeProtection: environmentType == 'prod'
+    enablePurgeProtection: true
   }
 }
 

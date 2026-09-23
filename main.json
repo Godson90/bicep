@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "9796050188143909957"
+      "templateHash": "14990295552931262895"
     }
   },
   "parameters": {
@@ -299,7 +299,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "7822236878901558865"
+              "templateHash": "9114129942937769395"
             }
           },
           "parameters": {
@@ -373,12 +373,6 @@
               "name": "storage-diagnostics",
               "properties": {
                 "workspaceId": "[parameters('logAnalyticsWorkspaceId')]",
-                "logs": [
-                  {
-                    "categoryGroup": "allLogs",
-                    "enabled": true
-                  }
-                ],
                 "metrics": [
                   {
                     "category": "AllMetrics",
@@ -430,7 +424,7 @@
             "value": "[reference(resourceId('Microsoft.Resources/deployments', 'monitoring'), '2025-04-01').outputs.id.value]"
           },
           "enablePurgeProtection": {
-            "value": "[equals(parameters('environmentType'), 'prod')]"
+            "value": true
           }
         },
         "template": {
@@ -2164,7 +2158,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "6518173761925390480"
+              "templateHash": "5380841957638665573"
             }
           },
           "parameters": {
@@ -2258,6 +2252,7 @@
               "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
               "apiVersion": "2024-06-01",
               "name": "[format('{0}/{1}', format('privatelink.blob.{0}', environment().suffixes.storage), 'storage-link')]",
+              "location": "global",
               "properties": {
                 "registrationEnabled": false,
                 "virtualNetwork": {
@@ -2272,6 +2267,7 @@
               "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
               "apiVersion": "2024-06-01",
               "name": "[format('{0}/{1}', format('privatelink.blob.{0}', environment().suffixes.storage), 'hub-storage-link')]",
+              "location": "global",
               "properties": {
                 "registrationEnabled": false,
                 "virtualNetwork": {
@@ -2286,6 +2282,7 @@
               "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
               "apiVersion": "2024-06-01",
               "name": "[format('{0}/{1}', 'privatelink.azurewebsites.net', 'appservice-link')]",
+              "location": "global",
               "properties": {
                 "registrationEnabled": false,
                 "virtualNetwork": {
@@ -2300,6 +2297,7 @@
               "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
               "apiVersion": "2024-06-01",
               "name": "[format('{0}/{1}', 'privatelink.azurewebsites.net', 'hub-appservice-link')]",
+              "location": "global",
               "properties": {
                 "registrationEnabled": false,
                 "virtualNetwork": {
@@ -2314,6 +2312,7 @@
               "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
               "apiVersion": "2024-06-01",
               "name": "[format('{0}/{1}', 'privatelink.vaultcore.azure.net', 'keyvault-link')]",
+              "location": "global",
               "properties": {
                 "registrationEnabled": false,
                 "virtualNetwork": {
@@ -2328,6 +2327,7 @@
               "type": "Microsoft.Network/privateDnsZones/virtualNetworkLinks",
               "apiVersion": "2024-06-01",
               "name": "[format('{0}/{1}', 'privatelink.vaultcore.azure.net', 'hub-keyvault-link')]",
+              "location": "global",
               "properties": {
                 "registrationEnabled": false,
                 "virtualNetwork": {

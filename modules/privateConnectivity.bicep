@@ -56,6 +56,7 @@ resource keyVaultPrivateDnsZone 'Microsoft.Network/privateDnsZones@2024-06-01' =
 resource storagePrivateDnsLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = {
   parent: storagePrivateDnsZone
   name: 'storage-link'
+  location: 'global'
   properties: {
     registrationEnabled: false
     virtualNetwork: {
@@ -68,6 +69,7 @@ resource storagePrivateDnsLink 'Microsoft.Network/privateDnsZones/virtualNetwork
 resource storagePrivateDnsHubLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = {
   parent: storagePrivateDnsZone
   name: 'hub-storage-link'
+  location: 'global'
   properties: {
     registrationEnabled: false
     virtualNetwork: {
@@ -80,6 +82,7 @@ resource storagePrivateDnsHubLink 'Microsoft.Network/privateDnsZones/virtualNetw
 resource appServicePrivateDnsLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = {
   parent: appServicePrivateDnsZone
   name: 'appservice-link'
+  location: 'global'
   properties: {
     registrationEnabled: false
     virtualNetwork: {
@@ -92,6 +95,7 @@ resource appServicePrivateDnsLink 'Microsoft.Network/privateDnsZones/virtualNetw
 resource appServicePrivateDnsHubLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = {
   parent: appServicePrivateDnsZone
   name: 'hub-appservice-link'
+  location: 'global'
   properties: {
     registrationEnabled: false
     virtualNetwork: {
@@ -104,6 +108,7 @@ resource appServicePrivateDnsHubLink 'Microsoft.Network/privateDnsZones/virtualN
 resource keyVaultPrivateDnsLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = {
   parent: keyVaultPrivateDnsZone
   name: 'keyvault-link'
+  location: 'global'
   properties: {
     registrationEnabled: false
     virtualNetwork: {
@@ -116,6 +121,7 @@ resource keyVaultPrivateDnsLink 'Microsoft.Network/privateDnsZones/virtualNetwor
 resource keyVaultPrivateDnsHubLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = {
   parent: keyVaultPrivateDnsZone
   name: 'hub-keyvault-link'
+  location: 'global'
   properties: {
     registrationEnabled: false
     virtualNetwork: {

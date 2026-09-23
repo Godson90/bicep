@@ -116,7 +116,7 @@ Budget notifications can lag actual usage, and budget alerts are not a replaceme
 
 ### Key Vault and deployment secrets
 
-The Key Vault module creates an RBAC-enabled vault with public access disabled, soft delete, configurable retention, optional purge protection, and a private endpoint in the private endpoint subnet. It intentionally does not accept secret values. Secret values must not be placed in Bicep source, generated `main.json`, or ordinary command-line arguments.
+The Key Vault module creates an RBAC-enabled vault with public access disabled, soft delete, configurable retention, purge protection, and a private endpoint in the private endpoint subnet. Purge protection is intentionally enabled for the composed stack because Azure does not allow it to be disabled after it has been enabled. The module parameter remains available for standalone module reuse. It intentionally does not accept secret values. Secret values must not be placed in Bicep source, generated `main.json`, or ordinary command-line arguments.
 
 Bicep reads deployment secrets through a `.bicepparam` file, using `az.getSecret()`. The vault and secret must already exist before the parameter file is evaluated; deploy the infrastructure in two phases:
 
@@ -327,7 +327,183 @@ az network nic list-effective-nsg -g <resource-group> -n <nic-name> -o json
 
 ### Safe teardown
 
-Remove the App Service subnet route-table association first, then remove both peering resources, private DNS links, private endpoints, the firewall policy/firewall/public IP, and finally the hub VNet. Do not delete only one side of a peering. Use `az deployment group what-if` after changing the template to review destructive operations before applying them.
+Use this order when removing the deployment. Replace placeholders before running commands, and run each step from an authenticated administrator session.
+
+#### 1. Select the subscription and confirm the target
+
+```powershell
+$subscriptionId = '<subscription-id>'
+$resourceGroup = 'defenStack'
+$spokeVnet = '<spoke-vnet-name>'
+$hubVnet = '<hub-vnet-name>'
+
+az account set --subscription $subscriptionId
+az group show --name $resourceGroup --query "{name:name,location:location,provisioningState:properties.provisioningState}" -o table
+```
+
+Never run teardown commands against a production resource group until the resource group name and subscription are confirmed.
+
+#### 2. Capture the current deployment and preview deletion
+
+```powershell
+az resource list --resource-group $resourceGroup `
+	--query "[].{name:name,type:type,id:id}" -o table
+
+az deployment group what-if `
+	--resource-group $resourceGroup `
+	--template-file main.bicep `
+	--parameters environmentType=dev
+```
+
+Export any required resource IDs, Key Vault secrets, diagnostic settings, and application data before continuing. A what-if of the unchanged template is not a deletion plan; use the explicit commands below or a reviewed resource-group deletion plan.
+
+#### 3. Stop or detach application consumers
+
+Disable application traffic and stop any clients that use Storage, Key Vault, or App Service. If the optional VM is deployed, remove or stop it first:
+
+```powershell
+az vm list -g $resourceGroup -o table
+az vm deallocate -g $resourceGroup -n <vm-name>
+az vm delete -g $resourceGroup -n <vm-name> --yes
+```
+
+Do not delete the VM before capturing required disks, snapshots, or application data.
+
+#### 4. Remove the App Service route association
+
+Detach the firewall route table from the App Service integration subnet before deleting the firewall or route table:
+
+```powershell
+az network vnet subnet update `
+	--resource-group $resourceGroup `
+	--vnet-name $spokeVnet `
+	--name appservice-integration `
+	--remove routeTable
+```
+
+Confirm that the subnet no longer references the route table:
+
+```powershell
+az network vnet subnet show `
+	--resource-group $resourceGroup `
+	--vnet-name $spokeVnet `
+	--name appservice-integration `
+	--query "{routeTable:routeTable.id}" -o json
+```
+
+#### 5. Remove both peering directions
+
+Delete both sides together. Do not leave one side of a peering behind:
+
+```powershell
+az network vnet peering delete -g $resourceGroup --vnet-name $hubVnet -n hub-to-spoke
+az network vnet peering delete -g $resourceGroup --vnet-name $spokeVnet -n spoke-to-hub
+```
+
+#### 6. Remove private endpoints before DNS zones
+
+List and delete the Storage, App Service, and Key Vault private endpoints first. Private DNS zone groups are removed with their parent private endpoints:
+
+```powershell
+az network private-endpoint list -g $resourceGroup -o table
+az network private-endpoint delete -g $resourceGroup -n <storage-private-endpoint>
+az network private-endpoint delete -g $resourceGroup -n <appservice-private-endpoint>
+az network private-endpoint delete -g $resourceGroup -n <keyvault-private-endpoint>
+```
+
+Then remove the private DNS links before removing the zones:
+
+```powershell
+az network private-dns link vnet list -g $resourceGroup --zone-name privatelink.blob.core.windows.net -o table
+az network private-dns link vnet delete -g $resourceGroup --zone-name privatelink.blob.core.windows.net -n storage-link
+az network private-dns link vnet delete -g $resourceGroup --zone-name privatelink.blob.core.windows.net -n hub-storage-link
+
+az network private-dns link vnet delete -g $resourceGroup --zone-name privatelink.azurewebsites.net -n appservice-link
+az network private-dns link vnet delete -g $resourceGroup --zone-name privatelink.azurewebsites.net -n hub-appservice-link
+
+az network private-dns link vnet delete -g $resourceGroup --zone-name privatelink.vaultcore.azure.net -n keyvault-link
+az network private-dns link vnet delete -g $resourceGroup --zone-name privatelink.vaultcore.azure.net -n hub-keyvault-link
+```
+
+Delete the zones only after all links and private endpoints are gone:
+
+```powershell
+az network private-dns zone delete -g $resourceGroup -n privatelink.blob.core.windows.net --yes
+az network private-dns zone delete -g $resourceGroup -n privatelink.azurewebsites.net --yes
+az network private-dns zone delete -g $resourceGroup -n privatelink.vaultcore.azure.net --yes
+```
+
+#### 7. Remove application resources and RBAC
+
+Delete the App Service and Storage resources after their private endpoints are removed. Remove the managed identity role assignment if it is not needed elsewhere:
+
+```powershell
+az webapp list -g $resourceGroup -o table
+az webapp delete -g $resourceGroup -n <app-service-name>
+az storage account delete -g $resourceGroup -n <storage-account-name> --yes
+
+az role assignment list --scope "/subscriptions/$subscriptionId/resourceGroups/$resourceGroup" -o table
+az role assignment delete --ids <role-assignment-resource-id>
+```
+
+Storage deletion is destructive. Confirm retention, backup, replication, and data export requirements first.
+
+#### 8. Remove the firewall and hub resources
+
+Delete the Firewall before its policy and public IP, then delete the route table, NSGs, and hub VNet:
+
+```powershell
+az network firewall delete -g $resourceGroup -n <firewall-name>
+az network firewall policy delete -g $resourceGroup -n <firewall-policy-name>
+az network public-ip delete -g $resourceGroup -n <firewall-public-ip-name>
+az network route-table delete -g $resourceGroup -n <route-table-name>
+az network nsg delete -g $resourceGroup -n <private-endpoint-nsg-name>
+az network nsg delete -g $resourceGroup -n <appservice-integration-nsg-name>
+az network vnet delete -g $resourceGroup -n $hubVnet
+```
+
+The spoke VNet still owns subnet NSG associations. Remove the spoke VNet only after all private endpoints, App Service integration, and VM resources have been removed.
+
+#### 9. Handle Key Vault retention and locks
+
+If the production VNet delete lock is enabled, remove it before deleting the VNet:
+
+```powershell
+az lock list --resource-group $resourceGroup -o table
+az lock delete --ids <lock-resource-id>
+```
+
+Key Vault soft delete and purge protection are intentional. Deleting the vault does not immediately make its name reusable, and purge protection prevents immediate purge. Verify the retention requirement before deleting it:
+
+```powershell
+az keyvault delete -g $resourceGroup -n <key-vault-name>
+az keyvault list-deleted --query "[].{name:name,location:properties.location}" -o table
+```
+
+Do not run `az keyvault purge` for a purge-protected production vault.
+
+#### 10. Verify and remove the budget separately
+
+Budgets are Cost Management resources, not ARM resources in the deployment template. Review and remove the budget only if it is no longer needed:
+
+```powershell
+az consumption budget show -g $resourceGroup -n defenstack-monthly -o json
+az consumption budget delete -g $resourceGroup -n defenstack-monthly
+```
+
+Verify that no managed resources remain:
+
+```powershell
+az resource list -g $resourceGroup --query "[].{name:name,type:type}" -o table
+```
+
+For a complete disposable environment only, and only after reviewing the resource list and retaining required data, the final option is:
+
+```powershell
+az group delete --name $resourceGroup --yes --no-wait
+```
+
+This removes unrelated resources in the resource group as well. Do not use it for a shared or production resource group. Budget alerts, soft-deleted Key Vault resources, and billing data may remain outside the normal resource list.
 
 ### Security notes
 
