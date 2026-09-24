@@ -20,6 +20,28 @@ This deployment creates a private spoke VNet, a dedicated hub VNet, Azure Firewa
 
 Module outputs carry resource IDs between ownership boundaries so deployment dependencies remain explicit without a resource-heavy entry point.
 
+### Query a resource ID
+
+Use the helper script to return a resource ID by name. Add `-ResourceType` when the name is not unique within the resource group:
+
+```powershell
+.\scripts\Get-AzureResourceId.ps1 `
+	-ResourceGroupName defenStack `
+	-ResourceName defenstack-mvp4mm7irhbhmhtw `
+	-ResourceType Microsoft.Web/sites
+```
+
+For example, query the Azure Firewall resource ID with its resource type:
+
+```powershell
+.\scripts\Get-AzureResourceId.ps1 `
+	-ResourceGroupName defenStack `
+	-ResourceName <firewall-name> `
+	-ResourceType Microsoft.Network/azureFirewalls
+```
+
+Without `-ResourceType`, the script returns every resource with the matching name and warns when multiple matches exist.
+
 ### API version policy
 
 Resource API versions use the newest stable version that is both available from the target Azure provider and typed by the installed Bicep CLI. The Azure provider can expose newer versions before the local Bicep type catalog supports them; using those versions would remove compile-time property validation. Review provider metadata and the Bicep CLI catalog together before upgrading, then run lint, build, Azure deployment validation, and what-if.
