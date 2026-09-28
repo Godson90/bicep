@@ -6,8 +6,10 @@ param location string
 @maxLength(63)
 param workspaceName string
 
-@description('Number of days to retain workspace data.')
-param retentionInDays int = 30
+@description('Number of days to retain workspace data. 90 days matches the retention included with Microsoft Sentinel.')
+@minValue(30)
+@maxValue(730)
+param retentionInDays int = 90
 
 // Central workspace for platform, network, storage, and application diagnostics.
 resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2026-03-01' = {

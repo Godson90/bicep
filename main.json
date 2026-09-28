@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "4840435594044875629"
+      "templateHash": "1285785393718674415"
     }
   },
   "parameters": {
@@ -248,7 +248,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "7216927585977055108"
+              "templateHash": "16848760813146021458"
             }
           },
           "parameters": {
@@ -268,9 +268,11 @@
             },
             "retentionInDays": {
               "type": "int",
-              "defaultValue": 30,
+              "defaultValue": 90,
+              "minValue": 30,
+              "maxValue": 730,
               "metadata": {
-                "description": "Number of days to retain workspace data."
+                "description": "Number of days to retain workspace data. 90 days matches the retention included with Microsoft Sentinel."
               }
             }
           },

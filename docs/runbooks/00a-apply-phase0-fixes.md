@@ -41,6 +41,7 @@ Applies the Phase 0 defect fixes to the existing `defenStack` resource group (de
 | `healthCheckPath` (App Service) | `/` | Application health endpoint, e.g. `/healthz` | Unhealthy instances are removed from rotation |
 | `zoneRedundant` (App Service) | `false` | `true` in Phase 1 greenfield | Set at plan creation only |
 | `instanceCount` (App Service) | `1` | `3` with zone redundancy | Zone-redundant minimum |
+| `retentionInDays` (monitoring) | `90` | `90` (longer via archive tier in Phase 6) | Investigation window; included free once Sentinel is enabled |
 
 ## 4. Step-by-step deployment
 1. Run the local test suite and confirm every test passes:
@@ -258,6 +259,17 @@ az role assignment delete --ids $oldId
 
    This must run from a network path that can reach the SCM private endpoint (Phase 3).
 
+### F10 - Log Analytics retention
+**Change:** workspace retention goes from 30 to 90 days. Public ingestion and query lockdown through AMPLS is **Phase 6**; it is not included here because it would cut off agents that have no private path yet.
+
+**Expected what-if:** `~ Modify` on the workspace, where `retentionInDays` goes 30 → 90.
+
+**Cost:** until Sentinel is enabled (Phase 6), days 31–90 are billed as data retention per GB-month. Record the workspace's daily ingestion so the cost can be estimated:
+
+```kusto
+Usage | where TimeGenerated > ago(7d) | summarize GB = sum(Quantity) / 1000
+```
+
 ## 6. Validation
 | Check | Command | Expected result |
 |---|---|---|
@@ -273,6 +285,7 @@ az role assignment delete --ids $oldId
 | Template deployment enabled | `az keyvault show -n <key-vault-name> --query "{tmpl:properties.enabledForTemplateDeployment,public:properties.publicNetworkAccess}" -o table` | `tmpl` True, `public` Disabled |
 | Data protection on | `az storage account blob-service-properties show -g defenStack -n <storage-account> --query "{ver:isVersioningEnabled,soft:deleteRetentionPolicy.days,pitr:restorePolicy.days}" -o table` | `ver` True, `soft` 14, `pitr` 13 |
 | Blob logs arriving | Log Analytics: `StorageBlobLogs \| take 5` after blob activity | Rows returned |
+| Retention | `az monitor log-analytics workspace show -g defenStack -n <workspace> --query retentionInDays -o tsv` | `90` |
 | Only container-scoped access | `az role assignment list --assignee <app-principal-id> --all --query "[?roleDefinitionName=='Storage Blob Data Contributor'].scope" -o tsv` | Exactly one scope ending `/containers/def-blob` |
 | App still reads/writes | Application smoke test against `def-blob` | Success; `StorageBlobLogs` shows `AuthenticationType == "OAuth"` |
 | Basic auth off | `az resource show -g defenStack --namespace Microsoft.Web --parent sites/<app-service-name> --resource-type basicPublishingCredentialsPolicies -n scm --query properties.allow -o tsv` | `false` (repeat with `-n ftp`) |
