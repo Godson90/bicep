@@ -1,7 +1,7 @@
 [CmdletBinding()]
 param(
     [Parameter()]
-    [string[]]$Path = @($PSScriptRoot),
+    [string[]]$Path,
 
     [Parameter()]
     [switch]$CI
@@ -9,16 +9,19 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+if (-not $PSBoundParameters.ContainsKey('Path')) { $Path = @($PSScriptRoot) }
+
 if (-not (Get-Command bicep -ErrorAction SilentlyContinue)) {
     throw 'Bicep CLI is required on PATH. Install it with "az bicep install" and add its folder to PATH.'
 }
 
 $minimumPester = [version]'5.5.0'
-if (-not (Get-Module -ListAvailable -Name Pester | Where-Object { $_.Version -ge $minimumPester })) {
+$maximumPester = [version]'5.999.999'
+if (-not (Get-Module -ListAvailable -Name Pester | Where-Object { $_.Version -ge $minimumPester -and $_.Version.Major -eq 5 })) {
     [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
-    Install-Module -Name Pester -MinimumVersion $minimumPester -Scope CurrentUser -Force -SkipPublisherCheck
+    Install-Module -Name Pester -MinimumVersion $minimumPester -MaximumVersion $maximumPester -Scope CurrentUser -Force -SkipPublisherCheck
 }
-Import-Module -Name Pester -MinimumVersion $minimumPester
+Import-Module -Name Pester -MinimumVersion $minimumPester -MaximumVersion $maximumPester
 
 $configuration = New-PesterConfiguration
 $configuration.Run.Path = $Path
