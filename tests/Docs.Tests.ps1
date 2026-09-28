@@ -18,3 +18,31 @@ Describe 'Phase 1 documentation' {
         Get-Content (Get-RepoPath 'docs/architecture/overview.md') -Raw | Should -Match '```mermaid'
     }
 }
+
+Describe 'README reflects the subscription-scope layout' {
+    BeforeAll {
+        $script:readmeText = Get-Content (Get-RepoPath 'README.md') -Raw
+        $script:teardownHeading = '### Safe teardown'
+        $script:beforeTeardown = $script:readmeText.Substring(0, $script:readmeText.IndexOf($script:teardownHeading))
+    }
+
+    It 'does not contain a param environmentType assignment before the legacy Safe teardown section' {
+        $script:beforeTeardown | Should -Not -Match 'param environmentType'
+    }
+
+    It 'does not contain an environmentType= CLI argument before the legacy Safe teardown section' {
+        $script:beforeTeardown | Should -Not -Match 'environmentType='
+    }
+
+    It 'does not mention spokeVnetAddressSpace' {
+        $script:readmeText | Should -Not -Match 'spokeVnetAddressSpace'
+    }
+
+    It 'does not mention a virtual-machines subnet' {
+        $script:readmeText | Should -Not -Match 'virtual-machines'
+    }
+
+    It 'only uses az deployment group inside or after the Safe teardown section' {
+        $script:beforeTeardown | Should -Not -Match 'az deployment group'
+    }
+}

@@ -35,3 +35,7 @@ NSGs until an explicit narrow allow rule is required. Exclude
 - Re-evaluate this exclusion after Phase 3 lands: if the App Service integration NSG is
   still the only resource tripping this rule, consider whether PSRule supports a
   per-resource waiver at that point instead of a blanket rule exclusion.
+
+**Phase 1 naming note:** this ADR predates the Phase 1 subscription-scope rename;
+`environmentType` is now `environmentName`, and `<spoke>-virtual-machines-nsg` is now
+`vnet-defenstack-<env>-<regionCode>-spoke-management-nsg`.

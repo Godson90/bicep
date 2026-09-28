@@ -21,7 +21,7 @@ The only values stored in GitHub are three **identifiers**, kept as environment 
 | Where | What |
 |---|---|
 | Microsoft Entra ID | One app registration and service principal (`gh-Godson90-bicep-dev-deploy`) with one federated credential (`github-dev`) |
-| Azure RBAC, at subscription scope | Custom role `DefenStack Subscription Deployment Operator` (deployment read/write/validate/whatIf, deployment-operation read, subscription and resource-group read — no resource rights, and deliberately no deployment delete/cancel/exportTemplate), assigned to the identity |
+| Azure RBAC, at subscription scope | Custom role `DefenStack Subscription Deployment Operator` (deployment read/write/validate/whatIf, deployment-operation read, subscription and resource-group read, subscription operation-results read — no resource rights, and deliberately no deployment delete/cancel/exportTemplate), assigned to the identity |
 | Azure RBAC, on `rg-defenstack-dev-global` and `rg-defenstack-dev-wus3` only | `Contributor`; `Role Based Access Control Administrator` with a condition that allows assigning only `Storage Blob Data Contributor` |
 | GitHub `Godson90/bicep` | Environment `dev` with three variables |
 
@@ -32,8 +32,8 @@ The only values stored in GitHub are three **identifiers**, kept as environment 
 | Requirement | How to check |
 |---|---|
 | Entra role that can create app registrations (`Application Developer`, or `Cloud Application Administrator`, or tenant setting "Users can register applications" = Yes) | Entra admin center → **Roles & admins** → **My roles** |
-| Azure role for the **first** run against a subscription (it creates the custom `DefenStack Subscription Deployment Operator` role definition, which needs `Microsoft.Authorization/roleDefinitions/write`): `Owner`, or `User Access Administrator`, at subscription scope. `Role Based Access Control Administrator` is **not** sufficient for this step — it cannot create a role definition. | `az role assignment list --assignee <your-upn> --scope /subscriptions/<subscription-id> -o table` |
-| Azure role for **later** runs, once the custom role definition already exists (a second environment, or re-running the script): `Role Based Access Control Administrator` at subscription scope and on the target resource groups (plus `Contributor` to see resources) | Same command; check the role name column |
+| Azure role for any run that creates a custom role — the **first** run against a subscription (`DefenStack Subscription Deployment Operator`, needs `Microsoft.Authorization/roleDefinitions/write`) and the **first prod run with `-GrantLockManagement`** (`DefenStack Resource Lock Operator`): `Owner`, or `User Access Administrator`, at subscription scope. `Role Based Access Control Administrator` is **not** sufficient for either — it cannot create a role definition. | `az role assignment list --assignee <your-upn> --scope /subscriptions/<subscription-id> -o table` |
+| Azure role for **other** runs, once the role definitions they need already exist (a second environment, or re-running the script without creating a new custom role): `Role Based Access Control Administrator` at subscription scope and on the target resource groups (plus `Contributor` to see resources) | Same command; check the role name column |
 | Resource groups `rg-defenstack-dev-global` and `rg-defenstack-dev-wus3` exist | `az group show -n rg-defenstack-dev-global --query name -o tsv`; `az group show -n rg-defenstack-dev-wus3 --query name -o tsv` |
 | GitHub admin access to `Godson90/bicep` (needed for **Settings** → **Environments**) | Repository page shows the **Settings** tab |
 | Azure CLI 2.90+ signed in to the right tenant and subscription | `az version`; `az account show --query "{sub:id,tenant:tenantId}" -o table` |
@@ -144,7 +144,8 @@ Check that `subscription` is the one that contains `rg-defenstack-dev-global` an
           "Microsoft.Resources/deployments/operations/read",
           "Microsoft.Resources/deployments/operationstatuses/read",
           "Microsoft.Resources/subscriptions/read",
-          "Microsoft.Resources/subscriptions/resourceGroups/read"
+          "Microsoft.Resources/subscriptions/resourceGroups/read",
+          "Microsoft.Resources/subscriptions/operationresults/read"
         ],
         "NotActions": [],
         "AssignableScopes": ["/subscriptions/<subscription-id>"]
@@ -153,7 +154,7 @@ Check that `subscription` is the one that contains `rg-defenstack-dev-global` an
 
       Replace `<subscription-id>` with the actual subscription ID, then **Review + create** → **Create**. This is exactly what the script writes, and it avoids typing each action by hand through the **Permissions** tab's search box.
 
-      Alternative: use the **Permissions** tab and add these eight actions individually (search each by name): `Microsoft.Resources/deployments/read`, `Microsoft.Resources/deployments/write`, `Microsoft.Resources/deployments/validate/action`, `Microsoft.Resources/deployments/whatIf/action`, `Microsoft.Resources/deployments/operations/read`, `Microsoft.Resources/deployments/operationstatuses/read`, `Microsoft.Resources/subscriptions/read`, `Microsoft.Resources/subscriptions/resourceGroups/read`. Do **not** add `deployments/delete`, `deployments/cancel/action` or `deployments/exportTemplate/action` — none is needed to validate, what-if or create a deployment, and because this role is assigned at subscription scope, granting them would let this identity cancel or delete another environment's in-flight deployments or export its templates. Leave **Assignable scopes** at the subscription (do not narrow it further; the script assigns it there too).
+      Alternative: use the **Permissions** tab and add these nine actions individually (search each by name): `Microsoft.Resources/deployments/read`, `Microsoft.Resources/deployments/write`, `Microsoft.Resources/deployments/validate/action`, `Microsoft.Resources/deployments/whatIf/action`, `Microsoft.Resources/deployments/operations/read`, `Microsoft.Resources/deployments/operationstatuses/read`, `Microsoft.Resources/subscriptions/read`, `Microsoft.Resources/subscriptions/resourceGroups/read`, `Microsoft.Resources/subscriptions/operationresults/read`. Do **not** add `deployments/delete`, `deployments/cancel/action` or `deployments/exportTemplate/action` — none is needed to validate, what-if or create a deployment, and because this role is assigned at subscription scope, granting them would let this identity cancel or delete another environment's in-flight deployments or export its templates. Leave **Assignable scopes** at the subscription (do not narrow it further; the script assigns it there too).
    3. Back on the subscription's **Access control (IAM)** → **Add** → **Add role assignment** → select **DefenStack Subscription Deployment Operator** → **Members**: `gh-Godson90-bicep-dev-deploy` → **Review + assign**.
 
    This grants deployment operations and read-only visibility at subscription scope only — no rights over any resource, and no ability to cancel or delete a deployment record.
@@ -190,7 +191,11 @@ az role assignment list --assignee $spId --resource-group rg-defenstack-dev-glob
   --query "[].{role:roleDefinitionName,scope:scope,hasCondition:condition!=null}" -o table
 az role assignment list --assignee $spId --resource-group rg-defenstack-dev-wus3 `
   --query "[].{role:roleDefinitionName,scope:scope,hasCondition:condition!=null}" -o table
+az role definition list --name "DefenStack Subscription Deployment Operator" --custom-role-only true `
+  --query "[0].permissions[0].actions" -o tsv
 ```
+
+The last command is a drift check: it must return exactly the 9 actions in §1 above (no more, no fewer). A role created before `Microsoft.Resources/subscriptions/operationresults/read` was added will be missing that action (§9).
 
 Expected:
 - One federated credential, `github-dev`, with subject `repo:Godson90/bicep:environment:dev` and issuer `https://token.actions.githubusercontent.com`.
@@ -243,13 +248,13 @@ gh variable delete AZURE_RESOURCE_GROUP --env dev --repo Godson90/bicep
 1. Open the pull request → **Checks** → `bicep-ci` → **Re-run jobs** → **Re-run failed jobs**. Alternatively, push any commit to the branch.
 2. Open the `what-if` job log. Expected:
    - **azure/login** step: `Login successful.` (Federated token details are logged; no secret is used.)
-   - **What-if against dev** step: a what-if listing. Changes should match the "Expected what-if" lists in `00a-apply-phase0-fixes.md` §5.
+   - **What-if against dev** step: a what-if listing. For a new environment this is an all-`+ Create` greenfield across the new resource groups — see runbook 01 §4 steps 4–5.
    - The PR gets a **What-if: dev (subscription scope, rg-defenstack-dev-*)** comment.
 
 ## 5. Manual and post-deployment steps
 
 - The role assignments can take up to 10 minutes to propagate. If the first re-run fails with `AuthorizationFailed`, wait and re-run.
-- Once `validate` and `what-if` are green, continue with `00a-apply-phase0-fixes.md` §4 (the dev dry run) before merging. Merging to `main` triggers `deploy.yml`, which uses the same credentials.
+- Once `validate` and `what-if` are green, continue with runbook 01 §4 (the dev deploy) and runbook 01a (the `defenStack` migration) before merging. Merging to `main` triggers `deploy.yml`, which uses the same credentials.
 - **Prod.** Repeat this runbook for the `prod` environment:
   1. Create the prod resource groups first (`docs/runbooks/01-*.md` §4 step 2): `rg-defenstack-prod-global`, `rg-defenstack-prod-wus3` and `rg-defenstack-prod-eus`.
   2. Run the script with `-EnvironmentName prod -ResourceGroupNames 'rg-defenstack-prod-global','rg-defenstack-prod-wus3','rg-defenstack-prod-eus' -GrantLockManagement`. This creates a **separate** app registration (the script derives the name `gh-Godson90-bicep-prod-deploy`), its own federated credential (subject `repo:Godson90/bicep:environment:prod`), and grants it `Contributor` plus the constrained `Role Based Access Control Administrator` on each of the three prod resource groups, plus the `DefenStack Resource Lock Operator` role (from `-GrantLockManagement`) needed to manage the `CanNotDelete` locks prod deploys. It reuses the same subscription-scope `DefenStack Subscription Deployment Operator` custom role definition created for dev (one role definition, one assignment per identity).
@@ -295,7 +300,7 @@ gh variable delete AZURE_RESOURCE_GROUP --env dev --repo Godson90/bicep
   1. Add the role's GUID to `-DelegatableRoleDefinitionIds`.
   2. Delete the existing RBAC Administrator assignment on **each** resource group the environment uses.
   3. Re-run the script. It refuses a mismatched condition on purpose.
-- **Quarterly review:** re-run Step 3. The role list must be unchanged at all three scopes and the credential list must be empty.
+- **Quarterly review:** re-run Step 3, including the role-definition drift check. The role list must be unchanged at all three scopes, the credential list must be empty, and the custom role's actions must still be exactly the 9 listed in §1.
 
 ## 9. Troubleshooting
 
@@ -308,10 +313,11 @@ gh variable delete AZURE_RESOURCE_GROUP --env dev --repo Godson90/bicep
 | `Unable to get ACTIONS_ID_TOKEN_REQUEST_URL env variable` | Job lacks `permissions: id-token: write`, or it's a fork PR | Workflows already grant it; fork PRs are skipped by design |
 | `No subscriptions found for …` | No role assignment yet, or not yet propagated | Step 3; wait 10 minutes and re-run |
 | `AuthorizationFailed … Microsoft.Resources/deployments/write … /subscriptions/<id>` | The subscription-scope `DefenStack Subscription Deployment Operator` role assignment is missing | Step 3 subscription-scope role query; re-run the script, or add the assignment manually (Method B step 3) |
+| `AuthorizationFailed … Microsoft.Resources/subscriptions/operationresults/read` | The custom role predates this action (created before it was added to the 9-action set) | Update the role definition in place: `az role definition update --role-definition <updated-json-with-9-actions>`, or delete and let the script recreate it |
 | `AuthorizationFailed … Microsoft.Resources/deployments/whatIf/action` | `Contributor` missing on the target resource group, or not yet propagated | Step 3 resource-group role query; add `Contributor` |
 | `AuthorizationFailed … Microsoft.Authorization/roleAssignments/write` with a condition in the message | Template assigns a role the condition doesn't allow | Expected for disallowed roles; to allow one deliberately, see §8 |
 | `ResourceGroupNotFound` | The resource group was not pre-created, `AZURE_SUBSCRIPTION_ID` is wrong, or the RG is in another subscription | Create the resource group first (runbook 01); check `AZURE_SUBSCRIPTION_ID` |
-| Script: `Role definition 'DefenStack Subscription Deployment Operator' not found` on first run | The custom role was just created and has not finished replicating through Entra ID yet | Expected transiently; the script retries the assignment 6 times, `-RoleReplicationWaitSeconds` (default 20s) apart, before failing |
+| Script: `Role definition 'DefenStack Subscription Deployment Operator' not found` on first run | The custom role was just created and has not finished replicating through Azure RBAC yet | Expected transiently; the script retries the assignment 6 times, `-RoleReplicationWaitSeconds` (default 20s) apart, before failing |
 | Script: `Role definition <guid> is privileged and cannot be delegated to the pipeline.` | `-DelegatableRoleDefinitionIds` included `Owner`, `User Access Administrator`, `Role Based Access Control Administrator` or `Contributor` | By design: these roles are never delegable, since the pipeline identity itself only has an ABAC-constrained `Role Based Access Control Administrator`, and delegating one of these would let it re-grant itself broader rights |
 | Script: `Multiple Entra applications are named …` | Duplicate display names in the tenant | Delete the stale app, or pass a unique `-DisplayName` |
 | Script: `An unconditioned 'Role Based Access Control Administrator' assignment already exists …` | A manual or portal assignment without the script's condition exists | Delete the named assignment and re-run the script |

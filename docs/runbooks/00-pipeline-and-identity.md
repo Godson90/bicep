@@ -4,20 +4,20 @@
 
 ## 1. Purpose and scope
 - `bicep-ci` runs on every PR and push to `main`: lint, build, Pester template assertions, the `main.json` drift check and PSRule for Azure. On same-repo PRs it also posts a what-if against dev as a PR comment.
-- `deploy` deploys `main` to dev through a gated GitHub environment.
+- `deploy` deploys `main` to dev (on push to `main`) or to dev/prod (on `workflow_dispatch`, prod gated by required reviewers on the `prod` GitHub environment).
 - Azure access uses an Entra application with a **federated credential** bound to the GitHub environment. No client secret exists anywhere.
 
 ## 2. Prerequisites
 - GitHub CLI signed in with admin rights on `Godson90/bicep`: `gh auth status`.
 - Entra role able to create app registrations: `Application Developer`, or `Cloud Application Administrator`.
-- Azure role at subscription scope: for the **first** run against a subscription (creates the custom `DefenStack Subscription Deployment Operator` role definition, which needs `Microsoft.Authorization/roleDefinitions/write`), `Owner` or `User Access Administrator` — `Role Based Access Control Administrator` cannot create a role definition. For **later** runs, once that role definition already exists, `Role Based Access Control Administrator` + `Contributor` is sufficient.
+- Azure role at subscription scope: any run that creates a custom role needs `Owner` or `User Access Administrator` at subscription scope — `Role Based Access Control Administrator` cannot create a role definition (`Microsoft.Authorization/roleDefinitions/write`). Two runs create a role: the **first** run against a subscription (`DefenStack Subscription Deployment Operator`) and the **first prod run with `-GrantLockManagement`** (`DefenStack Resource Lock Operator`). Other runs need `Role Based Access Control Administrator` + `Contributor`.
 - Azure CLI 2.90 or later and PowerShell 5.1 or 7.
 
 ## 3. Parameters
 | Name | Default | Prod value | Rationale |
 |---|---|---|---|
 | `-GitHubRepository` | none | `Godson90/bicep` | Federated credential subject |
-| `-EnvironmentName` | none | `dev` now; `prod` in Phase 1 | One identity per environment limits blast radius |
+| `-EnvironmentName` | none | `dev` and `prod` | One identity per environment limits blast radius |
 | `-ResourceGroupNames` | none | `rg-defenstack-prod-global`, `rg-defenstack-prod-wus3`, `rg-defenstack-prod-eus` | Resource groups the identity may deploy resources into; the identity separately gets the custom `DefenStack Subscription Deployment Operator` role at subscription scope so it can run subscription-scope deployments (see ADR-009) |
 | `-DelegatableRoleDefinitionIds` | Storage Blob Data Contributor | extended per phase | Roles the pipeline may assign; `Owner`, `User Access Administrator`, `Role Based Access Control Administrator` and `Contributor` are always refused, and all other roles are blocked by the ABAC condition |
 | `-GrantLockManagement` | off | on for prod | Needed only where `CanNotDelete` locks are deployed |

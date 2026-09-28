@@ -15,7 +15,7 @@ does not buy anything dev-specific.
 - **Prod West US 3 (primary):** zone-redundant, 3-instance P-v3 App Service plan.
   Everything else (firewall, Key Vault, storage, private endpoints, Log Analytics
   workspace) is deployed at full production strength.
-- **Prod East US (warm standby):** always deployed, not conditional. Firewall,
+- **Prod East US (warm standby):** always deployed in prod, not conditional. Firewall,
   a 1-instance P-v3 App Service plan (non-zonal), Key Vault, storage and private
   endpoints are stood up so that only a scale-out is needed during a real failover,
   not a from-scratch deployment. Azure Bastion and the VPN gateway are deferred:
@@ -34,9 +34,12 @@ does not buy anything dev-specific.
   enforce zone redundancy and replication against them.
 
 ## Consequences
-- Failing over to East US requires a scale-out of the standby App Service plan (1
-  instance, non-zonal) to the prod primary's zone-redundant, 3-instance
-  configuration; that scale-out is not instantaneous.
+- Failing over to East US requires a scale-out of the standby App Service plan
+  from 1 instance to 3 instances (`runbook 01` §8: `az appservice plan update
+  --number-of-workers 3`); the East US plan stays non-zonal — zone redundancy is
+  fixed at plan creation and is not part of the failover scale-out — so this is
+  not the same as the prod primary's zone-redundant configuration, and the
+  scale-out itself is not instantaneous.
 - Dev cannot rehearse a regional failover, since it has no secondary region at all.
 - Cost is lower for dev by roughly one Azure Firewall (and the other East US
   resources it would otherwise need) compared with running two regions everywhere.

@@ -155,13 +155,19 @@ sequenceDiagram
     Zone-->>Client: Private IP A record
 ```
 
+Every deployed stamp's hub **and** spoke VNet is linked to each shared zone (`modules/privateDnsZoneLinks.bicep`), but in normal operation only the hub's link is actually used for resolution: every VNet's `dnsServer` is the firewall's private IP (in the hub), so a query always reaches the firewall's DNS proxy first, which resolves against the zone through the **hub's** link. The spoke VNets' links to the same zones exist as a fallback — they matter only if a client bypasses the firewall DNS proxy (a supported but non-default configuration) and queries a private zone's Azure-provided resolver directly from the spoke.
+
 ### Ingress
 
 None yet. There is no public entry point in Phase 1 — App Service, Key Vault and Storage all have public network access disabled and only private endpoints reach them. The app remains private-only until Phase 4 adds Azure Front Door Premium with WAF.
 
+### Admin access
+
+None yet (Phase 3 adds Azure Bastion and Point-to-Site VPN). `managementSourceCidrs` defaults to empty, so the management subnet accepts no administrative inbound traffic today.
+
 ## 4. Address plan
 
-Copied from the design spec's Global Constraints (`docs/superpowers/specs/2026-09-25-secure-connectivity-design.md` §1) and the shipped parameter files.
+From the Phase 1 plan (prod ranges per `docs/superpowers/specs/2026-09-25-secure-connectivity-design.md` §1) and the shipped parameter files.
 
 | Env | Region | Hub address space | Firewall subnet | Spoke address space | `private-endpoints` | `appservice-integration` | `management` | Reserved (not yet allocated) |
 |---|---|---|---|---|---|---|---|---|
@@ -207,9 +213,9 @@ One row per `names.*` key in `modules/regionStamp.bicep`, plus the resource grou
 
 | Resource group | Contents |
 |---|---|
-| `rg-defenstack-prod-global` | Log Analytics workspace `log-defenstack-prod` (`replication.enabled: true, location: eastus`); the same three private DNS zones, each with 4 VNet links (wus3 hub, wus3 spoke, eus hub, eus spoke) |
-| `rg-defenstack-prod-wus3` (primary) | Same shape as dev's region resource group, but: Firewall `threatIntelMode: Deny`; App Service Plan `asp-defenstack-prod-wus3` zone-redundant, 3 instances (`isProd && isPrimary`); Storage account `Standard_GRS`; `enableDeleteLock: true` on the spoke VNet and the global zones/workspace |
-| `rg-defenstack-prod-eus` (secondary, warm standby) | Same resource types as `rg-defenstack-prod-wus3`, deployed only when `deploySecondaryRegion = true`: App Service Plan `asp-defenstack-prod-eus`, 1 instance, non-zonal (no scale-out until failover, `ADR-008`); Storage account `Standard_GRS`; hub↔spoke peering local to this region |
+| `rg-defenstack-prod-global` | Log Analytics workspace `log-defenstack-prod` (`replication.enabled: true, location: eastus`); the same three private DNS zones, each with 4 VNet links (wus3 hub, wus3 spoke, eus hub, eus spoke); `enableDeleteLock: true` on the zones and the workspace |
+| `rg-defenstack-prod-wus3` (primary) | Same shape as dev's region resource group, but: Firewall `threatIntelMode: Deny`; App Service Plan `asp-defenstack-prod-wus3` zone-redundant, 3 instances (`isProd && isPrimary`); Storage account `Standard_GRS`; `enableDeleteLock: true` on the spoke VNet |
+| `rg-defenstack-prod-eus` (secondary, warm standby) | Same resource types as `rg-defenstack-prod-wus3`, deployed only when `deploySecondaryRegion = true`: App Service Plan `asp-defenstack-prod-eus`, 1 instance, non-zonal (no scale-out until failover, `ADR-008`); Storage account `Standard_GRS`; hub↔spoke peering local to this region; `enableDeleteLock: true` on the spoke VNet, same as the primary |
 
 ## 7. Design decisions
 

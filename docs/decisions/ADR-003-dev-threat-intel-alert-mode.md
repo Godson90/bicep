@@ -34,3 +34,7 @@ the dev parameter file PSRule evaluates in CI.
 - If a prod-like parameter file (for example a `staging.bicepparam`) is added before
   Phase 2, evaluate whether it should also pass `environmentType = 'prod'` for firewall
   purposes rather than relying on this exclusion.
+
+**Phase 1 naming note:** this ADR predates the Phase 1 subscription-scope rename;
+`main.bicep`'s parameter is now `environmentName` (still `@allowed(['dev', 'prod'])`),
+not `environmentType`.

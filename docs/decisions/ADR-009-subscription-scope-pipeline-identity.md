@@ -30,10 +30,13 @@ other environment's.
   scope.
 - At subscription scope, the pipeline identity holds only the new custom role
   **DefenStack Subscription Deployment Operator**, limited to exactly the
-  eight actions `az deployment sub validate|what-if|create` needs: deployment
+  nine actions `az deployment sub validate|what-if|create` needs: deployment
   read, deployment write, deployment validate, deployment whatIf, deployment
-  operation read, deployment operation-status read, and subscription /
-  resource-group read. It deliberately excludes `deployments/delete`,
+  operation read, deployment operation-status read, subscription /
+  resource-group read, and subscription operation-results read (subscription-scope
+  validate/what-if are asynchronous and poll
+  `/subscriptions/{id}/operationresults/...`, which needs its own read action).
+  It deliberately excludes `deployments/delete`,
   `deployments/cancel/action` and `deployments/exportTemplate/action` — none
   of those three is needed to validate, what-if or create a deployment (ARM
   prunes deployment history itself), and because this role's assignment is at
@@ -75,7 +78,7 @@ other environment's.
   and prod share one subscription; scoping resource rights per resource group
   is what keeps the dev identity from reaching prod's resource groups (or vice
   versa) even though both identities can create deployment records anywhere.
-- The custom role needs to replicate through Azure AD before the first role
+- The custom role needs to replicate through Azure RBAC before the first role
   assignment against it succeeds; the script retries assignment of roles it
   just created (6 attempts, `-RoleReplicationWaitSeconds` apart) to absorb
   that delay.
@@ -83,7 +86,7 @@ other environment's.
 ## Revisit when
 A future phase needs the pipeline identity to manage resource groups
 themselves (create/delete), which would require a new, narrowly scoped
-subscription-level grant beyond deployment operations; or if a phase merges
+subscription-level grant beyond deployment operations; or if a phase splits
 dev and prod into separate subscriptions, at which point the per-resource-group
 scoping this ADR relies on could be relaxed back to a per-subscription grant
 per environment.

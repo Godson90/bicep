@@ -15,7 +15,7 @@ It does **not** create resource groups (§4 step 2, a human operator action) or 
 
 ## 2. Prerequisites
 
-- **Roles:** subscription `Owner` or `User Access Administrator` for the one-time pipeline-identity setup (runbook 00b, first run only); `Contributor` to create the resource groups in §4 step 2. Once the resource groups exist, the pipeline identity itself only needs the subscription-scope custom role and per-resource-group `Contributor` that runbook 00b grants it (`ADR-009`) — it never creates or deletes resource groups.
+- **Roles:** subscription `Owner` or `User Access Administrator` for the one-time pipeline-identity setup (runbook 00b, first run only); `Contributor` to create the resource groups in §4 step 2. Once the resource groups exist, the pipeline identity itself needs only the three grants runbook 00b makes it (`ADR-009`): the subscription-scope custom role `DefenStack Subscription Deployment Operator`; per-resource-group `Contributor`; and per-resource-group, ABAC-constrained `Role Based Access Control Administrator`. It never creates or deletes resource groups.
 - **Register the resource providers** this stack uses, then verify each is `Registered`:
 
   ```powershell
@@ -75,7 +75,7 @@ Every `main.bicep` parameter, with the value each committed `.bicepparam` file s
    if ($env -eq 'prod') { az group create -n 'rg-defenstack-prod-eus' -l eastus -o table }
    ```
 
-3. Run [runbook 00b](00b-configure-pipeline-credentials.md) for the environment's identity, passing every resource group just created as `-ResourceGroupNames` (dev: the two `dev` groups; prod: all three `prod` groups, plus `-GrantLockManagement`).
+3. Run [runbook 00b](00b-configure-pipeline-credentials.md) for the environment's identity, passing every resource group just created as `-ResourceGroupNames` (dev: the two `dev` groups; prod: all three `prod` groups, plus `-GrantLockManagement`). This grants the identity the subscription-scope custom role (`DefenStack Subscription Deployment Operator`), per-resource-group `Contributor`, and per-resource-group ABAC-constrained `Role Based Access Control Administrator`.
 
 4. Validate:
 
@@ -125,6 +125,9 @@ Every `main.bicep` parameter, with the value each committed `.bicepparam` file s
 | Peering | `az network vnet peering list -g rg-defenstack-<env>-wus3 --vnet-name vnet-defenstack-<env>-wus3-hub --query "[].peeringState" -o tsv` | `Connected` |
 | Workspace replication (prod) | `az monitor log-analytics workspace show -g rg-defenstack-prod-global -n log-defenstack-prod --query replication` | `enabled: true, location: eastus` |
 | Private endpoint records | `az network private-dns record-set a list -g rg-defenstack-<env>-global -z privatelink.vaultcore.azure.net --query "[].name" -o tsv` | One record per stamp's Key Vault |
+| Firewall zones (prod East US) | `az network firewall show -g rg-defenstack-prod-eus -n afw-defenstack-prod-eus --query zones -o tsv` | `1 2 3` |
+| Peering (prod East US) | `az network vnet peering list -g rg-defenstack-prod-eus --vnet-name vnet-defenstack-prod-eus-hub --query "[].peeringState" -o tsv` | `Connected` |
+| App Service plan (prod East US, warm standby) | `az appservice plan show -g rg-defenstack-prod-eus -n asp-defenstack-prod-eus --query "{zr:zoneRedundant,capacity:sku.capacity}"` | `false`, `1` |
 
 ## 7. Rollback
 
@@ -137,9 +140,10 @@ Every `main.bicep` parameter, with the value each committed `.bicepparam` file s
   ```
 
 - **Key Vault soft delete and purge protection reserve the vault name for 90 days.** Every Key Vault name is deterministic (`kv-<regionCode>-<uniqueString(subscription().id, environmentName, location)>` — `modules/regionStamp.bicep`), and every vault has purge protection on with 90-day soft-delete retention (`modules/keyVault.bicep`). Consequently, deleting a resource group and immediately redeploying the same stamp fails: the redeploy's Key Vault create hits `A vault with the same name already exists in deleted state` (a soft-deleted, purge-protected vault blocks reuse of its name). Recovery options, in order of speed:
-  1. Recover the soft-deleted vault, then redeploy: `az keyvault recover --name <key-vault-name>` (the redeploy then updates the recovered vault in place).
+  1. Recover the soft-deleted vault: first recreate the resource group (§4 step 2), then `az keyvault recover --name <key-vault-name>`, then redeploy (the redeploy then updates the recovered vault in place).
   2. Wait out the 90-day retention window before redeploying.
-  3. Use a new `environmentName` suffix only if you must redeploy immediately and cannot recover the old vault (this changes every deterministic resource name, not only the vault, so treat it as a new environment).
+
+  `environmentName` cannot be used to work around this: it is `@allowed(['dev', 'prod'])` in `main.bicep`, and every deterministic resource name (including the Key Vault name) is seeded from `subscription().id`, `environmentName`, and `location` (`modules/regionStamp.bicep`). Changing the name seed to avoid a name collision would require a code change, not a parameter change.
 
   `az keyvault purge` does **not** help here: purge protection blocks it by design (that is the point of enabling it), so it always fails against these vaults.
 
@@ -162,5 +166,6 @@ Every `main.bicep` parameter, with the value each committed `.bicepparam` file s
 | `The template parameter 'secondaryAddressPlan' is null. Assign a value to this parameter …` (a type error on `addressPlan`) | `deploySecondaryRegion = true` without also setting `secondaryAddressPlan` | `params/prod.bicepparam` already supplies `secondaryAddressPlan`; if you copy `dev.bicepparam` and only flip `deploySecondaryRegion`, you must also add `secondaryAddressPlan` |
 | Deployment fails with a duplicate-deployment or resource-conflict error, both stamps writing what looks like the same names | `primaryLocation` equals `secondaryLocation` while `deploySecondaryRegion = true` | The two regions must differ; use the shipped defaults (`westus3` / `eastus`) or another distinct pair |
 | Key Vault create fails: `A vault with the same name already exists in deleted state`, or `ConflictError` mentioning soft-deleted | Deterministic Key Vault name collides with a soft-deleted, purge-protected vault from a prior deploy of the same environment/region (§7) | `az keyvault recover --name <name>`, then redeploy; or wait out the 90-day retention; `az keyvault purge` is blocked by purge protection |
-| `az keyvault list-deleted` shows the name you need | Confirms the §7/above scenario | Recover it, or pick a new `environmentName` if you cannot wait or recover |
+| `az keyvault list-deleted` shows the name you need | Confirms the §7/above scenario | Recover it (`az keyvault recover`), or wait out the 90-day retention; `environmentName` cannot be changed to work around this without a code change (§7) |
 | Zone-redundant App Service plan create fails on SKU/zone quota | The subscription or region lacks quota for `P2V3` with `zoneRedundant: true` | `az appservice list-locations --sku P2V3`; request a quota increase or choose a supported region |
+| `ScopeLocked` when removing a stamp's private DNS zone VNet link or record set, or when removing a region stamp | Prod's `CanNotDelete` lock on the global resource group's zones/workspace (`enableDeleteLock`) also protects the zones' child VNet links and record sets, not only the zone resources themselves | Lift the zone lock temporarily (`az lock list -g rg-defenstack-prod-global -o table`, then `az lock delete --ids <lock-id>`), apply the change, then re-create the lock by redeploying (§4 step 6) |

@@ -235,7 +235,8 @@ Set-CustomRole -Name $deploymentRoleName -Description 'Run subscription-scope AR
     'Microsoft.Resources/deployments/operations/read',
     'Microsoft.Resources/deployments/operationstatuses/read',
     'Microsoft.Resources/subscriptions/read',
-    'Microsoft.Resources/subscriptions/resourceGroups/read'
+    'Microsoft.Resources/subscriptions/resourceGroups/read',
+    'Microsoft.Resources/subscriptions/operationresults/read'
 )
 Set-RoleAssignment -Role $deploymentRoleName -Scope $subscriptionScope -AllowReplicationRetry
 

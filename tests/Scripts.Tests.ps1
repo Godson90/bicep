@@ -194,7 +194,7 @@ Describe 'New-GitHubDeploymentIdentity.ps1' {
             $script:roleDefinitionPayload = $global:RoleDefinitionPayload | ConvertFrom-Json
         }
 
-        It 'grants exactly the 8 deployment-operation and read-only actions, no wildcard' {
+        It 'grants exactly the 9 deployment-operation and read-only actions, no wildcard' {
             $expectedActions = @(
                 'Microsoft.Resources/deployments/read',
                 'Microsoft.Resources/deployments/write',
@@ -203,7 +203,8 @@ Describe 'New-GitHubDeploymentIdentity.ps1' {
                 'Microsoft.Resources/deployments/operations/read',
                 'Microsoft.Resources/deployments/operationstatuses/read',
                 'Microsoft.Resources/subscriptions/read',
-                'Microsoft.Resources/subscriptions/resourceGroups/read'
+                'Microsoft.Resources/subscriptions/resourceGroups/read',
+                'Microsoft.Resources/subscriptions/operationresults/read'
             )
             @($script:roleDefinitionPayload.Actions | Sort-Object) | Should -Be @($expectedActions | Sort-Object)
             $script:roleDefinitionPayload.Actions | Should -Not -Contain '*'
