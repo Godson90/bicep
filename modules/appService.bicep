@@ -34,7 +34,11 @@ param zoneRedundant bool = false
 @maxValue(30)
 param instanceCount int = 1
 
-var appServicePlanName string = 'defenstack-${environmentType}-plan'
+@description('App Service plan name. Include the environment and region so every stamp gets its own plan.')
+@minLength(1)
+@maxLength(60)
+param appServicePlanName string
+
 var appServicePlanSkuName = (environmentType == 'prod') ? 'P2V3' : 'S1'
 var appServicePlanSkuTier = (environmentType == 'prod') ? 'PremiumV3' : 'Standard'
 

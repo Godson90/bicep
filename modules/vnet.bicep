@@ -32,7 +32,7 @@ param subnets array = [
     privateLinkServiceNetworkPolicies: 'Enabled'
   }
   {
-    name: 'virtual-machines'
+    name: 'management'
     addressPrefix: '10.0.3.0/24'
     privateEndpointNetworkPolicies: 'Disabled'
     privateLinkServiceNetworkPolicies: 'Enabled'
@@ -46,7 +46,7 @@ param privateEndpointSubnetName string = 'private-endpoints'
 param appServiceIntegrationSubnetName string = 'appservice-integration'
 
 @description('Name of the virtual machine subnet.')
-param virtualMachineSubnetName string = 'virtual-machines'
+param virtualMachineSubnetName string = 'management'
 
 @description('Enable delete lock')
 param enableDeleteLock bool = false

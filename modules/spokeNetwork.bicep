@@ -33,7 +33,7 @@ param privateEndpointSubnetAddressPrefix string = '10.0.1.0/24'
 param appServiceIntegrationSubnetAddressPrefix string = '10.0.2.0/24'
 
 @description('Virtual machine subnet name.')
-param virtualMachineSubnetName string = 'virtual-machines'
+param virtualMachineSubnetName string = 'management'
 
 @description('Virtual machine subnet address prefix.')
 param virtualMachineSubnetAddressPrefix string = '10.0.3.0/24'

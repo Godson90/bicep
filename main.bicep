@@ -1,258 +1,173 @@
-@description('Azure region for all regional resources.')
-param location string = 'WestUS3'
+targetScope = 'subscription'
 
-@description('Globally unique storage account name.')
-@minLength(3)
-@maxLength(24)
-param storageAccountName string = 'dfsk${uniqueString(resourceGroup().id)}'
+import { regionAddressPlan, privateDnsZoneSet } from 'modules/types.bicep'
 
-@description('Globally unique App Service application name.')
-@minLength(2)
-@maxLength(60)
-param appServiceAppName string = 'defenstack-mvp${uniqueString(resourceGroup().id)}'
+@description('Deployment environment. Selects resource group names, redundancy, and deletion protection.')
+@allowed([
+  'dev'
+  'prod'
+])
+param environmentName string
 
-@description('Log Analytics workspace name.')
-@minLength(4)
-@maxLength(63)
-param logAnalyticsWorkspaceName string = 'defenstack-law-${uniqueString(resourceGroup().id)}'
+@description('Primary (active) Azure region. Each allowed region has a short code in regionCodes.')
+@allowed([
+  'westus3'
+  'eastus'
+])
+param primaryLocation string = 'westus3'
 
-@description('Globally unique Key Vault name. Use only letters, numbers, and hyphens.')
-@minLength(3)
-@maxLength(24)
-param keyVaultName string = 'kv${uniqueString(resourceGroup().id)}'
+@description('Secondary (warm standby) Azure region, the platform pair of the primary.')
+@allowed([
+  'westus3'
+  'eastus'
+])
+param secondaryLocation string = 'eastus'
 
-@description('Dedicated hub VNet name.')
-@minLength(2)
-@maxLength(64)
-param hubVnetName string = 'defenstack-hub-${uniqueString(resourceGroup().id)}'
+@description('Deploy the secondary region stamp. Prod enables it; dev runs primary-only to halve cost.')
+param deploySecondaryRegion bool = false
 
-@description('Non-overlapping address space for the firewall hub VNet.')
-param hubVnetAddressSpace array = [
-  '10.1.0.0/16'
-]
+@description('Address plan for the primary region.')
+param primaryAddressPlan regionAddressPlan
 
-@description('Azure Firewall name.')
-@minLength(1)
-@maxLength(56)
-param firewallName string = 'defenstack-firewall-${uniqueString(resourceGroup().id)}'
+@description('Address plan for the secondary region. Required when deploySecondaryRegion is true.')
+param secondaryAddressPlan regionAddressPlan?
 
-@description('Azure Firewall Policy name.')
-@minLength(1)
-@maxLength(80)
-param firewallPolicyName string = 'defenstack-fw-policy-${uniqueString(resourceGroup().id)}'
+@description('Approved outbound HTTPS destinations for both regions. Empty keeps application traffic denied.')
+param allowedOutboundFqdns array = []
 
-@description('Azure Firewall public IP name.')
-@minLength(1)
-@maxLength(80)
-param firewallPublicIpName string = 'defenstack-fw-pip-${uniqueString(resourceGroup().id)}'
+@description('Extra CIDR ranges allowed to reach private endpoints over HTTPS in every region.')
+param additionalPrivateEndpointSourceCidrs array = []
 
-@description('Deploy the optional private VM workload.')
+@description('CIDR ranges allowed to administer management VMs over SSH/RDP. Empty denies all administrative inbound traffic.')
+param managementSourceCidrs array = []
+
+@description('Relative path probed by App Service health check in every region.')
+param healthCheckPath string = '/'
+
+@description('Deploy the optional management VM in the primary region.')
 param enableVirtualMachine bool = false
 
-@description('Virtual machine name. It must also be valid as the computer hostname.')
-@minLength(1)
-@maxLength(15)
-param virtualMachineName string = 'vm${uniqueString(resourceGroup().id)}'
-
-@description('Virtual machine operating system.')
+@description('Management VM operating system.')
 @allowed([
   'Linux'
   'Windows'
 ])
 param virtualMachineOsType string = 'Linux'
 
-@description('Virtual machine local administrator username.')
+@description('Management VM local administrator username.')
 @minLength(1)
 @maxLength(64)
 param virtualMachineAdminUsername string = 'azureadmin'
 
-@description('SSH public key for Linux VM deployments.')
+@description('SSH public key for Linux management VMs.')
 param virtualMachineAdminSshPublicKey string = ''
 
-@description('Local administrator password for Windows VM deployments.')
+@description('Local administrator password for Windows management VMs.')
 @secure()
 param virtualMachineAdminPassword string = ''
 
-@description('Approved outbound HTTPS destinations. An empty list keeps application traffic denied by the firewall.')
-param allowedOutboundFqdns array = []
+var isProd = environmentName == 'prod'
+var regionCodes = {
+  westus3: 'wus3'
+  eastus: 'eus'
+}
+var primaryRegionCode = regionCodes[toLower(primaryLocation)]
+var secondaryRegionCode = regionCodes[toLower(secondaryLocation)]
+var globalResourceGroupName = 'rg-defenstack-${environmentName}-global'
+var primaryResourceGroupName = 'rg-defenstack-${environmentName}-${primaryRegionCode}'
+var secondaryResourceGroupName = 'rg-defenstack-${environmentName}-${secondaryRegionCode}'
+var privateDnsZoneNames privateDnsZoneSet = {
+  blob: 'privatelink.blob.${environment().suffixes.storage}'
+  sites: 'privatelink.azurewebsites.net'
+  vault: 'privatelink.vaultcore.azure.net'
+}
 
-@description('Spoke VNet address space. Also used as the firewall source range for spoke egress rules.')
-param spokeVnetAddressSpace array = [
-  '10.0.0.0/16'
-]
-
-@description('Private endpoint subnet prefix inside spokeVnetAddressSpace.')
-param privateEndpointSubnetAddressPrefix string = '10.0.1.0/24'
-
-@description('App Service integration subnet prefix inside spokeVnetAddressSpace.')
-param appServiceIntegrationSubnetAddressPrefix string = '10.0.2.0/24'
-
-@description('Management VM subnet prefix inside spokeVnetAddressSpace.')
-param virtualMachineSubnetAddressPrefix string = '10.0.3.0/24'
-
-@description('Extra CIDR ranges, beyond the App Service integration and management subnets, allowed to reach private endpoints over HTTPS.')
-param additionalPrivateEndpointSourceCidrs array = []
-
-@description('CIDR ranges allowed to administer management VMs over SSH/RDP, such as AzureBastionSubnet or the P2S client pool. Empty denies all administrative inbound traffic.')
-param managementSourceCidrs array = []
-
-@description('CIDR prefix for AzureFirewallSubnet. It must be at least /26 and contained in hubVnetAddressSpace.')
-param firewallSubnetAddressPrefix string = '10.1.0.0/26'
-
-@description('Deployment environment that controls redundancy, plan sizing, and deletion protection.')
-@allowed([
-  'prod'
-  'dev'
-  'test'
-])
-param environmentType string
-
-var storageAccountSkuName = (environmentType == 'prod') ? 'Standard_GRS' : 'Standard_LRS'
-var spokeVnetName = uniqueString(resourceGroup().id)
-var privateEndpointSubnetName = 'private-endpoints'
-var appServiceIntegrationSubnetName = 'appservice-integration'
-
-@description('Central diagnostics workspace module.')
-module monitoring 'modules/monitoring.bicep' = {
-  name: 'monitoring'
+// Shared layer: Log Analytics and private DNS zones. Resource groups are pre-created (runbook 01).
+module global 'modules/global.bicep' = {
+  name: 'global-${environmentName}'
+  scope: resourceGroup(globalResourceGroupName)
   params: {
-    location: location
-    workspaceName: logAnalyticsWorkspaceName
+    location: primaryLocation
+    workspaceName: 'log-defenstack-${environmentName}'
+    privateDnsZoneNames: privateDnsZoneNames
+    workspaceReplicationLocation: isProd && deploySecondaryRegion ? secondaryLocation : ''
+    enableDeleteLock: isProd
   }
 }
 
-@description('Private storage account and storage diagnostics module.')
-module storage 'modules/storage.bicep' = {
-  name: 'storage'
+module primaryStamp 'modules/regionStamp.bicep' = {
+  name: 'region-${primaryRegionCode}'
+  scope: resourceGroup(primaryResourceGroupName)
   params: {
-    location: location
-    storageAccountName: storageAccountName
-    storageAccountSkuName: storageAccountSkuName
-    logAnalyticsWorkspaceId: monitoring.outputs.id
-  }
-}
-
-@description('RBAC-enabled private Key Vault with soft delete, purge protection, and diagnostics.')
-module keyVault 'modules/keyVault.bicep' = {
-  name: 'key-vault'
-  params: {
-    location: location
-    keyVaultName: keyVaultName
-    logAnalyticsWorkspaceId: monitoring.outputs.id
-    enablePurgeProtection: true
-    enabledForTemplateDeployment: true
-  }
-}
-
-@description('Dedicated hub VNet and Azure Firewall subnet module.')
-module hubNetwork 'modules/hubNetwork.bicep' = {
-  name: 'hub-network'
-  params: {
-    location: location
-    vnetName: hubVnetName
-    addressSpace: hubVnetAddressSpace
-    firewallSubnetAddressPrefix: firewallSubnetAddressPrefix
-  }
-}
-
-@description('Azure Firewall, policy, public IP, DNS proxy, and diagnostics module.')
-module azureFirewall 'modules/azureFirewall.bicep' = {
-  name: 'azure-firewall'
-  params: {
-    location: location
-    firewallName: firewallName
-    firewallPolicyName: firewallPolicyName
-    publicIpName: firewallPublicIpName
-    firewallSubnetId: hubNetwork.outputs.firewallSubnetId
-    logAnalyticsWorkspaceId: monitoring.outputs.id
-    spokeAddressPrefixes: spokeVnetAddressSpace
+    environmentName: environmentName
+    regionRole: 'primary'
+    location: primaryLocation
+    regionCode: primaryRegionCode
+    addressPlan: primaryAddressPlan
+    logAnalyticsWorkspaceId: global.outputs.logAnalyticsWorkspaceId
+    privateDnsZoneIds: global.outputs.privateDnsZoneIds
     allowedOutboundFqdns: allowedOutboundFqdns
-    threatIntelMode: environmentType == 'prod' ? 'Deny' : 'Alert'
-  }
-}
-
-@description('Spoke VNet, subnet NSGs, App Service route table, and subnet associations module.')
-module spokeNetwork 'modules/spokeNetwork.bicep' = {
-  name: 'spoke-network'
-  params: {
-    location: location
-    vnetName: spokeVnetName
-    firewallPrivateIp: azureFirewall.outputs.privateIp
-    logAnalyticsWorkspaceId: monitoring.outputs.id
-    vnetAddressSpace: spokeVnetAddressSpace
-    privateEndpointSubnetAddressPrefix: privateEndpointSubnetAddressPrefix
-    appServiceIntegrationSubnetAddressPrefix: appServiceIntegrationSubnetAddressPrefix
-    virtualMachineSubnetAddressPrefix: virtualMachineSubnetAddressPrefix
-    approvedPrivateEndpointSourceCidrs: concat([
-      appServiceIntegrationSubnetAddressPrefix
-      virtualMachineSubnetAddressPrefix
-    ], additionalPrivateEndpointSourceCidrs)
-    privateEndpointSubnetName: privateEndpointSubnetName
-    appServiceIntegrationSubnetName: appServiceIntegrationSubnetName
-    enableDeleteLock: environmentType == 'prod'
+    additionalPrivateEndpointSourceCidrs: additionalPrivateEndpointSourceCidrs
     managementSourceCidrs: managementSourceCidrs
+    healthCheckPath: healthCheckPath
+    enableVirtualMachine: enableVirtualMachine
+    virtualMachineOsType: virtualMachineOsType
+    virtualMachineAdminUsername: virtualMachineAdminUsername
+    virtualMachineAdminSshPublicKey: virtualMachineAdminSshPublicKey
+    virtualMachineAdminPassword: virtualMachineAdminPassword
   }
 }
 
-@description('App Service plan, site, managed identity, route-all, and diagnostics module.')
-module appService 'modules/appService.bicep' = {
-  name: 'app-service'
+module secondaryStamp 'modules/regionStamp.bicep' = if (deploySecondaryRegion) {
+  name: 'region-${secondaryRegionCode}'
+  scope: resourceGroup(secondaryResourceGroupName)
   params: {
-    location: location
-    appServiceAppName: appServiceAppName
-    environmentType: environmentType
-    vnetIntegrationSubnetId: spokeNetwork.outputs.appServiceIntegrationSubnetId
-    logAnalyticsWorkspaceId: monitoring.outputs.id
-  }
-}
-
-@description('Linux or Windows VM module with private networking, managed identity, and trusted launch security.')
-module virtualMachine 'modules/virtualMachine.bicep' = if (enableVirtualMachine) {
-  name: 'virtual-machine'
-  params: {
-    location: location
-    vmName: virtualMachineName
-    osType: virtualMachineOsType
-    subnetId: spokeNetwork.outputs.virtualMachineSubnetId
-    adminUsername: virtualMachineAdminUsername
-    adminSshPublicKey: virtualMachineAdminSshPublicKey
-    adminPassword: virtualMachineAdminPassword
-    logAnalyticsWorkspaceId: monitoring.outputs.id
+    environmentName: environmentName
+    regionRole: 'secondary'
+    location: secondaryLocation
+    regionCode: secondaryRegionCode
+    addressPlan: secondaryAddressPlan!
+    logAnalyticsWorkspaceId: global.outputs.logAnalyticsWorkspaceId
+    privateDnsZoneIds: global.outputs.privateDnsZoneIds
+    allowedOutboundFqdns: allowedOutboundFqdns
+    additionalPrivateEndpointSourceCidrs: additionalPrivateEndpointSourceCidrs
     managementSourceCidrs: managementSourceCidrs
+    healthCheckPath: healthCheckPath
   }
 }
 
-@description('Reciprocal hub/spoke peerings and managed identity storage RBAC module.')
-module networkIntegration 'modules/networkIntegration.bicep' = {
-  name: 'network-integration'
+var primaryVirtualNetworks = [
+  {
+    name: primaryStamp.outputs.hubVnetName
+    id: primaryStamp.outputs.hubVnetId
+  }
+  {
+    name: primaryStamp.outputs.spokeVnetName
+    id: primaryStamp.outputs.spokeVnetId
+  }
+]
+var secondaryVirtualNetworks = deploySecondaryRegion
+  ? [
+      {
+        name: secondaryStamp!.outputs.hubVnetName
+        id: secondaryStamp!.outputs.hubVnetId
+      }
+      {
+        name: secondaryStamp!.outputs.spokeVnetName
+        id: secondaryStamp!.outputs.spokeVnetId
+      }
+    ]
+  : []
+
+// Link every region's hub (firewall DNS proxy) and spoke to each shared zone.
+module privateDnsLinks 'modules/privateDnsZoneLinks.bicep' = [for zone in items(privateDnsZoneNames): {
+  name: 'dns-links-${zone.key}'
+  scope: resourceGroup(globalResourceGroupName)
   params: {
-    hubVnetName: hubVnetName
-    hubVnetId: hubNetwork.outputs.id
-    spokeVnetName: spokeVnetName
-    spokeVnetId: spokeNetwork.outputs.id
-    storageAccountName: storageAccountName
-    storageAccountId: storage.outputs.id
-    storageContainerName: storage.outputs.blobContainerName
-    appServicePrincipalId: appService.outputs.appServicePrincipalId
-    appServiceName: appServiceAppName
+    zoneName: zone.value
+    virtualNetworks: concat(primaryVirtualNetworks, secondaryVirtualNetworks)
   }
-}
+}]
 
-@description('Private DNS zones, VNet links, private endpoints, and DNS zone groups module.')
-module privateConnectivity 'modules/privateConnectivity.bicep' = {
-  name: 'private-connectivity'
-  params: {
-    location: location
-    storageAccountId: storage.outputs.id
-    storageAccountName: storageAccountName
-    appServiceId: appService.outputs.appServiceAppId
-    appServiceName: appServiceAppName
-    spokeVnetId: spokeNetwork.outputs.id
-    hubVnetId: hubNetwork.outputs.id
-    privateEndpointSubnetId: spokeNetwork.outputs.privateEndpointSubnetId
-    keyVaultId: keyVault.outputs.id
-    keyVaultName: keyVaultName
-  }
-}
-
-output appServiceAppHostName string = appService.outputs.appServiceAppHostName
+output primaryAppServiceHostName string = primaryStamp.outputs.appServiceHostName
+output secondaryAppServiceHostName string = deploySecondaryRegion ? secondaryStamp!.outputs.appServiceHostName : ''

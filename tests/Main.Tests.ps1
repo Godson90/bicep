@@ -1,54 +1,81 @@
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot 'Bicep.TestHelpers.psm1') -Force
     $main = Get-BicepTemplate -RelativePath 'main.bicep'
+    $global = Get-TemplateResourceBySymbol -Template $main -Symbol 'global'
+    $primary = Get-TemplateResourceBySymbol -Template $main -Symbol 'primaryStamp'
+    $secondary = Get-TemplateResourceBySymbol -Template $main -Symbol 'secondaryStamp'
+    $dnsLinks = Get-TemplateResourceBySymbol -Template $main -Symbol 'privateDnsLinks'
 }
 
-Describe 'Management access wiring (F1)' {
-    It 'passes managementSourceCidrs to <_>' -ForEach 'spoke-network', 'virtual-machine' {
-        $deployment = Get-ModuleDeployment -Template $main -Name $_
-        $deployment.properties.parameters.managementSourceCidrs.value | Should -Be "[parameters('managementSourceCidrs')]"
-    }
-}
-
-Describe 'Spoke CIDR single source of truth (F5)' {
-    It 'firewall spoke source ranges come from spokeVnetAddressSpace' {
-        (Get-ModuleDeployment -Template $main -Name 'azure-firewall').properties.parameters.spokeAddressPrefixes.value |
-            Should -Be "[parameters('spokeVnetAddressSpace')]"
+Describe 'Subscription-scope entry point' {
+    It 'targets the subscription' {
+        $main.'$schema' | Should -Match 'subscriptionDeploymentTemplate\.json'
     }
 
-    It 'spoke VNet address space comes from spokeVnetAddressSpace' {
-        (Get-ModuleDeployment -Template $main -Name 'spoke-network').properties.parameters.vnetAddressSpace.value |
-            Should -Be "[parameters('spokeVnetAddressSpace')]"
+    It 'accepts only dev and prod environments' {
+        @($main.parameters.environmentName.allowedValues) -join ',' | Should -Be 'dev,prod'
     }
 
-    It 'private endpoint sources are derived from the App Service and management subnet prefixes' {
-        $value = (Get-ModuleDeployment -Template $main -Name 'spoke-network').properties.parameters.approvedPrivateEndpointSourceCidrs.value
-        $value | Should -Match 'appServiceIntegrationSubnetAddressPrefix'
-        $value | Should -Match 'virtualMachineSubnetAddressPrefix'
-        $value | Should -Match 'additionalPrivateEndpointSourceCidrs'
+    It 'maps each allowed region to a short code used in names' {
+        @($main.parameters.primaryLocation.allowedValues) -join ',' | Should -Be 'westus3,eastus'
+        $main.variables.regionCodes.westus3 | Should -Be 'wus3'
+        $main.variables.regionCodes.eastus | Should -Be 'eus'
     }
 
-    It 'no longer exposes approvedPrivateEndpointSourceCidrs' {
-        $main.parameters.PSObject.Properties.Name | Should -Not -Contain 'approvedPrivateEndpointSourceCidrs'
+    It 'names resource groups rg-defenstack-<env>-global and rg-defenstack-<env>-<region>' {
+        $main.variables.globalResourceGroupName | Should -Be "[format('rg-defenstack-{0}-global', parameters('environmentName'))]"
+        $main.variables.primaryResourceGroupName | Should -Be "[format('rg-defenstack-{0}-{1}', parameters('environmentName'), variables('primaryRegionCode'))]"
     }
 }
 
-Describe 'Firewall threat intelligence wiring (F9)' {
-    It 'uses Deny in prod and Alert elsewhere' {
-        (Get-ModuleDeployment -Template $main -Name 'azure-firewall').properties.parameters.threatIntelMode |
-            Should -Be "[if(equals(parameters('environmentType'), 'prod'), createObject('value', 'Deny'), createObject('value', 'Alert'))]"
+Describe 'Composition' {
+    It 'deploys the global layer into the global resource group' {
+        $global.resourceGroup | Should -Be "[variables('globalResourceGroupName')]"
+    }
+
+    It 'replicates the workspace to the secondary region only for prod with DR enabled' {
+        $global.properties.parameters.workspaceReplicationLocation |
+            Should -Be "[if(and(variables('isProd'), parameters('deploySecondaryRegion')), createObject('value', parameters('secondaryLocation')), createObject('value', ''))]"
+    }
+
+    It 'deploys the primary stamp as primary into the primary resource group' {
+        $primary.resourceGroup | Should -Be "[variables('primaryResourceGroupName')]"
+        $primary.properties.parameters.regionRole.value | Should -Be 'primary'
+        $primary.properties.parameters.addressPlan.value | Should -Be "[parameters('primaryAddressPlan')]"
+    }
+
+    It 'deploys the secondary stamp only when deploySecondaryRegion is true' {
+        $secondary.condition | Should -Be "[parameters('deploySecondaryRegion')]"
+        $secondary.resourceGroup | Should -Be "[variables('secondaryResourceGroupName')]"
+        $secondary.properties.parameters.regionRole.value | Should -Be 'secondary'
+    }
+
+    It 'feeds both stamps the shared workspace and DNS zone IDs' {
+        foreach ($stamp in $primary, $secondary) {
+            $stamp.properties.parameters.logAnalyticsWorkspaceId.value | Should -Be "[reference('global').outputs.logAnalyticsWorkspaceId.value]"
+            $stamp.properties.parameters.privateDnsZoneIds.value | Should -Be "[reference('global').outputs.privateDnsZoneIds.value]"
+        }
     }
 }
 
-Describe 'Key Vault wiring (F4)' {
-    It 'enables template deployment for the composed stack so az.getSecret() references resolve' {
-        (Get-ModuleDeployment -Template $main -Name 'key-vault').properties.parameters.enabledForTemplateDeployment.value | Should -BeTrue
+Describe 'Shared private DNS' {
+    It 'defines the three zone names once' {
+        @($main.variables.privateDnsZoneNames.PSObject.Properties.Name) -join ',' | Should -Be 'blob,sites,vault'
+        $main.variables.privateDnsZoneNames.sites | Should -Be 'privatelink.azurewebsites.net'
+        $main.variables.privateDnsZoneNames.vault | Should -Be 'privatelink.vaultcore.azure.net'
     }
-}
 
-Describe 'Storage RBAC wiring (F11)' {
-    It 'passes the container name from the storage module output' {
-        (Get-ModuleDeployment -Template $main -Name 'network-integration').properties.parameters.storageContainerName.value |
-            Should -Match "outputs.blobContainerName"
+    It 'links every zone in the global resource group' {
+        $dnsLinks.copy.count | Should -Be "[length(items(variables('privateDnsZoneNames')))]"
+        $dnsLinks.resourceGroup | Should -Be "[variables('globalResourceGroupName')]"
+    }
+
+    It 'links the hub and spoke VNets of the primary and (when deployed) the secondary stamp' {
+        $value = $dnsLinks.properties.parameters.virtualNetworks.value
+        foreach ($output in 'hubVnetId', 'spokeVnetId') {
+            $value | Should -Match "reference\('primaryStamp'\)\.outputs\.$output"
+            $value | Should -Match "reference\('secondaryStamp'\)\.outputs\.$output"
+        }
+        $value | Should -Match "parameters\('deploySecondaryRegion'\)"
     }
 }
