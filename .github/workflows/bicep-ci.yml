@@ -1,0 +1,87 @@
+name: bicep-ci
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  BICEP_VERSION: v0.47.16
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Bicep CLI
+        run: |
+          az bicep install --version "$BICEP_VERSION"
+          echo "$HOME/.azure/bin" >> "$GITHUB_PATH"
+
+      - name: Lint, build, template assertions, main.json drift
+        shell: pwsh
+        run: ./tests/Invoke-Tests.ps1 -CI
+
+      - name: PSRule for Azure
+        shell: pwsh
+        run: |
+          Install-Module -Name PSRule.Rules.Azure -Scope CurrentUser -Force
+          New-Item -ItemType Directory -Path reports -Force | Out-Null
+          Assert-PSRule -InputPath params/ -Module PSRule.Rules.Azure -Format File -Outcome Fail, Error -OutputFormat Sarif -OutputPath reports/ps-rule.sarif
+
+      - name: Upload results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-results
+          path: |
+            test-results.xml
+            reports/
+
+  what-if:
+    if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
+    needs: validate
+    runs-on: ubuntu-latest
+    environment: dev
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: What-if against dev
+        run: |
+          set -o pipefail
+          az bicep install --version "$BICEP_VERSION"
+          az deployment group what-if \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --parameters params/dev.bicepparam \
+            --exclude-change-types Ignore NoChange 2>&1 \
+            | sed -r 's/\x1B\[[0-9;]*[mK]//g' > whatif.txt
+          {
+            echo "### What-if: dev (\`${{ vars.AZURE_RESOURCE_GROUP }}\`)"
+            echo '```'
+            head -c 60000 whatif.txt
+            echo '```'
+          } > whatif.md
+          cat whatif.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Comment what-if on PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment "${{ github.event.pull_request.number }}" --body-file whatif.md --edit-last \
+            || gh pr comment "${{ github.event.pull_request.number }}" --body-file whatif.md

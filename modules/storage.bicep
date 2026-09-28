@@ -33,6 +33,10 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2026-04-01' = {
     minimumTlsVersion: 'TLS1_2'
     publicNetworkAccess: 'Disabled'
     supportsHttpsTrafficOnly: true
+    networkAcls: {
+      defaultAction: 'Deny'
+      bypass: 'AzureServices'
+    }
   }
   resource service 'blobServices' = {
     name: 'default'

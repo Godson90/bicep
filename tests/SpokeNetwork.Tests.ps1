@@ -32,3 +32,14 @@ Describe 'Management subnet isolation (F1)' {
         @($template.parameters.managementSourceCidrs.defaultValue).Count | Should -Be 0
     }
 }
+
+Describe 'Subnet default outbound access (PSRule Azure.VNET.PrivateSubnet)' {
+    It 'disables default outbound internet access on the private endpoint and management subnets' {
+        $subnets[0].defaultOutboundAccess | Should -Be $false
+        $subnets[2].defaultOutboundAccess | Should -Be $false
+    }
+
+    It 'leaves the delegated App Service integration subnet unset (delegation manages its own egress)' {
+        $subnets[1].PSObject.Properties.Name | Should -Not -Contain 'defaultOutboundAccess'
+    }
+}

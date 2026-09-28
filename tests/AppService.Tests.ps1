@@ -27,6 +27,12 @@ Describe 'App Service site configuration (F8)' {
     }
 }
 
+Describe 'App Service client affinity (PSRule Azure.AppService.ARRAffinity)' {
+    It 'disables ARR client affinity for the stateless site' {
+        $site.properties.clientAffinityEnabled | Should -Be $false
+    }
+}
+
 Describe 'App Service plan resilience parameters (F8)' {
     It 'exposes zone redundancy and instance count, defaulting to in-place-safe values' {
         $template.parameters.zoneRedundant.defaultValue | Should -BeFalse

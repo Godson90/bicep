@@ -98,6 +98,7 @@ resource vnet 'Microsoft.Network/virtualNetworks@2025-09-01' = {
         privateEndpointNetworkPolicies: subnet.privateEndpointNetworkPolicies
         privateLinkServiceNetworkPolicies: subnet.privateLinkServiceNetworkPolicies
         serviceEndpoints: subnet.?serviceEndpoints
+        defaultOutboundAccess: subnet.?defaultOutboundAccess
       }
     }]
   }

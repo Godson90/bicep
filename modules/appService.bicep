@@ -65,6 +65,7 @@ resource appServiceApp 'Microsoft.Web/sites@2025-03-01' = {
     serverFarmId: appServiceplan.id
     httpsOnly: true
     publicNetworkAccess: 'Disabled'
+    clientAffinityEnabled: false
     virtualNetworkSubnetId: empty(vnetIntegrationSubnetId) ? null : vnetIntegrationSubnetId
     siteConfig: {
       ftpsState: 'Disabled'

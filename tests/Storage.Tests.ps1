@@ -1,6 +1,7 @@
 BeforeAll {
     Import-Module (Join-Path $PSScriptRoot 'Bicep.TestHelpers.psm1') -Force
     $template = Get-BicepTemplate -RelativePath 'modules/storage.bicep'
+    $storageAccount = Get-TemplateResource -Template $template -Type 'Microsoft.Storage/storageAccounts' | Select-Object -First 1
     $blobService = Get-TemplateResource -Template $template -Type 'Microsoft.Storage/storageAccounts/blobServices' | Select-Object -First 1
     $diagnostics = Get-TemplateResource -Template $template -Type 'Microsoft.Insights/diagnosticSettings'
 }
@@ -17,6 +18,12 @@ Describe 'Blob data protection (F7)' {
     It 'keeps the restore window shorter than soft delete retention' {
         $blobService.properties.restorePolicy.days | Should -Be "[sub(parameters('blobSoftDeleteRetentionDays'), 1)]"
         $template.parameters.blobSoftDeleteRetentionDays.defaultValue | Should -Be 14
+    }
+}
+
+Describe 'Storage account network firewall (PSRule Azure.Storage.Firewall)' {
+    It 'explicitly denies traffic by default at the storage firewall' {
+        $storageAccount.properties.networkAcls.defaultAction | Should -Be 'Deny'
     }
 }
 

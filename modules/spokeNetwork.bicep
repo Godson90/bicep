@@ -205,6 +205,7 @@ module vnet 'vnet.bicep' = {
         nsgId: privateEndpointNsg.id
         privateEndpointNetworkPolicies: 'NetworkSecurityGroupEnabled'
         privateLinkServiceNetworkPolicies: 'Enabled'
+        defaultOutboundAccess: false
       }
       {
         name: appServiceIntegrationSubnetName
@@ -222,6 +223,7 @@ module vnet 'vnet.bicep' = {
         udrId: virtualMachineRouteTable.id
         privateEndpointNetworkPolicies: 'Disabled'
         privateLinkServiceNetworkPolicies: 'Enabled'
+        defaultOutboundAccess: false
       }
     ]
     privateEndpointSubnetName: privateEndpointSubnetName

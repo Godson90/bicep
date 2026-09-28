@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "1285785393718674415"
+      "templateHash": "12767604648985929445"
     }
   },
   "parameters": {
@@ -336,7 +336,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "15600056854351402859"
+              "templateHash": "9702234785125363662"
             }
           },
           "parameters": {
@@ -428,7 +428,11 @@
                 "defaultToOAuthAuthentication": true,
                 "minimumTlsVersion": "TLS1_2",
                 "publicNetworkAccess": "Disabled",
-                "supportsHttpsTrafficOnly": true
+                "supportsHttpsTrafficOnly": true,
+                "networkAcls": {
+                  "defaultAction": "Deny",
+                  "bypass": "AzureServices"
+                }
               }
             },
             {
@@ -1156,7 +1160,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "657447410654842125"
+              "templateHash": "10959172580449450590"
             }
           },
           "parameters": {
@@ -1404,7 +1408,8 @@
                         "addressPrefix": "[parameters('privateEndpointSubnetAddressPrefix')]",
                         "nsgId": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('privateEndpointNsgName'))]",
                         "privateEndpointNetworkPolicies": "NetworkSecurityGroupEnabled",
-                        "privateLinkServiceNetworkPolicies": "Enabled"
+                        "privateLinkServiceNetworkPolicies": "Enabled",
+                        "defaultOutboundAccess": false
                       },
                       {
                         "name": "[parameters('appServiceIntegrationSubnetName')]",
@@ -1421,7 +1426,8 @@
                         "nsgId": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('virtualMachineNsgName'))]",
                         "udrId": "[resourceId('Microsoft.Network/routeTables', variables('virtualMachineRouteTableName'))]",
                         "privateEndpointNetworkPolicies": "Disabled",
-                        "privateLinkServiceNetworkPolicies": "Enabled"
+                        "privateLinkServiceNetworkPolicies": "Enabled",
+                        "defaultOutboundAccess": false
                       }
                     ]
                   },
@@ -1451,7 +1457,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "8053519961240106143"
+                      "templateHash": "3296179848460953708"
                     }
                   },
                   "parameters": {
@@ -1589,7 +1595,8 @@
                                 "routeTable": "[if(contains(parameters('subnets')[copyIndex('subnets')], 'udrId'), createObject('id', parameters('subnets')[copyIndex('subnets')].udrId), null())]",
                                 "privateEndpointNetworkPolicies": "[parameters('subnets')[copyIndex('subnets')].privateEndpointNetworkPolicies]",
                                 "privateLinkServiceNetworkPolicies": "[parameters('subnets')[copyIndex('subnets')].privateLinkServiceNetworkPolicies]",
-                                "serviceEndpoints": "[tryGet(parameters('subnets')[copyIndex('subnets')], 'serviceEndpoints')]"
+                                "serviceEndpoints": "[tryGet(parameters('subnets')[copyIndex('subnets')], 'serviceEndpoints')]",
+                                "defaultOutboundAccess": "[tryGet(parameters('subnets')[copyIndex('subnets')], 'defaultOutboundAccess')]"
                               }
                             }
                           }
@@ -1746,7 +1753,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "18169017120905256794"
+              "templateHash": "4332298851141515752"
             }
           },
           "parameters": {
@@ -1844,6 +1851,7 @@
                 "serverFarmId": "[resourceId('Microsoft.Web/serverfarms', variables('appServicePlanName'))]",
                 "httpsOnly": true,
                 "publicNetworkAccess": "Disabled",
+                "clientAffinityEnabled": false,
                 "virtualNetworkSubnetId": "[if(empty(parameters('vnetIntegrationSubnetId')), null(), parameters('vnetIntegrationSubnetId'))]",
                 "siteConfig": {
                   "ftpsState": "Disabled",
