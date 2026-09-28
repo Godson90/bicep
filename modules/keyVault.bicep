@@ -20,6 +20,9 @@ param softDeleteRetentionInDays int = 90
 @description('Enable purge protection. Keep enabled for production workloads.')
 param enablePurgeProtection bool = true
 
+@description('Allow Azure Resource Manager to retrieve secrets during deployments, required for az.getSecret() in .bicepparam files. Keep false for vaults that never back deployment parameters.')
+param enabledForTemplateDeployment bool = false
+
 // RBAC-based vault with public access disabled; clients use its private endpoint.
 resource keyVault 'Microsoft.KeyVault/vaults@2025-05-01' = {
   name: keyVaultName
@@ -30,13 +33,14 @@ resource keyVault 'Microsoft.KeyVault/vaults@2025-05-01' = {
     enableSoftDelete: true
     softDeleteRetentionInDays: softDeleteRetentionInDays
     enablePurgeProtection: enablePurgeProtection
+    enabledForTemplateDeployment: enabledForTemplateDeployment
     publicNetworkAccess: 'Disabled'
     sku: {
       family: 'A'
       name: 'standard'
     }
     networkAcls: {
-      bypass: 'None'
+      bypass: enabledForTemplateDeployment ? 'AzureServices' : 'None'
       defaultAction: 'Deny'
     }
   }

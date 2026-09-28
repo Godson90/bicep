@@ -1,0 +1,80 @@
+name: deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'main.bicep'
+      - 'modules/**'
+      - 'params/**'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        type: choice
+        options: [dev, prod]
+        default: dev
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-${{ inputs.environment || 'dev' }}
+  cancel-in-progress: false
+
+env:
+  BICEP_VERSION: v0.47.16
+  DEPLOYMENT_LOCATION: westus3
+  TARGET_ENV: ${{ inputs.environment || 'dev' }}
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment || 'dev' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Bicep CLI
+        run: |
+          az config set bicep.use_binary_from_path=false
+          az bicep install --version "$BICEP_VERSION"
+
+      - name: Validate
+        run: |
+          az deployment sub validate \
+            --location "$DEPLOYMENT_LOCATION" \
+            --name "gh-${{ github.run_id }}-${{ github.run_attempt }}" \
+            --parameters "params/${TARGET_ENV}.bicepparam" \
+            --output none
+
+      - name: What-if
+        run: |
+          set -o pipefail
+          az deployment sub what-if \
+            --location "$DEPLOYMENT_LOCATION" \
+            --name "gh-${{ github.run_id }}-${{ github.run_attempt }}" \
+            --parameters "params/${TARGET_ENV}.bicepparam" \
+            --exclude-change-types Ignore NoChange 2>&1 \
+            | sed -r 's/\x1B\[[0-9;]*[mK]//g' > whatif.txt
+          {
+            echo "### What-if: ${TARGET_ENV} (subscription scope, rg-defenstack-${TARGET_ENV}-*)"
+            echo '```'
+            head -c 60000 whatif.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Deploy
+        run: |
+          az deployment sub create \
+            --location "$DEPLOYMENT_LOCATION" \
+            --name "gh-${{ github.run_id }}-${{ github.run_attempt }}" \
+            --parameters "params/${TARGET_ENV}.bicepparam" \
+            --output table

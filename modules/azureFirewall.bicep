@@ -28,10 +28,22 @@ param spokeAddressPrefixes array
 @description('Approved outbound FQDNs for App Service traffic. An empty list denies application traffic by default.')
 param allowedOutboundFqdns array = []
 
+@description('Availability zones for the firewall and its public IP, for example [\'1\', \'2\', \'3\']. Zones are fixed at creation, so leave empty when updating an existing non-zonal firewall.')
+param availabilityZones array = []
+
+@description('Threat intelligence mode for the firewall policy.')
+@allowed([
+  'Alert'
+  'Deny'
+  'Off'
+])
+param threatIntelMode string = 'Deny'
+
 // Static Standard public IP used by Azure Firewall for controlled egress.
 resource firewallPublicIp 'Microsoft.Network/publicIPAddresses@2025-01-01' = {
   name: publicIpName
   location: location
+  zones: empty(availabilityZones) ? null : availabilityZones
   sku: {
     name: 'Standard'
   }
@@ -48,14 +60,14 @@ resource firewallPolicy 'Microsoft.Network/firewallPolicies@2025-01-01' = {
     sku: {
       tier: 'Standard'
     }
-    threatIntelMode: 'Alert'
+    threatIntelMode: threatIntelMode
     dnsSettings: {
       enableProxy: true
     }
   }
 }
 
-// DNS proxy access for the spoke VNet.
+// Platform egress for the spoke VNet: DNS proxy and Azure Monitor Agent ingestion.
 resource firewallDnsRuleCollectionGroup 'Microsoft.Network/firewallPolicies/ruleCollectionGroups@2025-01-01' = {
   parent: firewallPolicy
   name: 'dns-egress'
@@ -83,6 +95,31 @@ resource firewallDnsRuleCollectionGroup 'Microsoft.Network/firewallPolicies/rule
             ]
             destinationPorts: [
               '53'
+            ]
+          }
+        ]
+      }
+      {
+        name: 'azure-monitor'
+        priority: 110
+        ruleCollectionType: 'FirewallPolicyFilterRuleCollection'
+        action: {
+          type: 'Allow'
+        }
+        rules: [
+          {
+            ruleType: 'NetworkRule'
+            name: 'azure-monitor-agent'
+            ipProtocols: [
+              'TCP'
+            ]
+            sourceAddresses: spokeAddressPrefixes
+            destinationAddresses: [
+              'AzureMonitor'
+              'AzureResourceManager'
+            ]
+            destinationPorts: [
+              '443'
             ]
           }
         ]
@@ -128,7 +165,12 @@ resource firewallApplicationRuleCollectionGroup 'Microsoft.Network/firewallPolic
 resource firewall 'Microsoft.Network/azureFirewalls@2025-01-01' = {
   name: firewallName
   location: location
+  zones: empty(availabilityZones) ? null : availabilityZones
   properties: {
+    sku: {
+      name: 'AZFW_VNet'
+      tier: 'Standard'
+    }
     firewallPolicy: {
       id: firewallPolicy.id
     }
@@ -154,6 +196,7 @@ resource firewallDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-p
   name: 'firewall-diagnostics'
   properties: {
     workspaceId: logAnalyticsWorkspaceId
+    logAnalyticsDestinationType: 'Dedicated'
     logs: [
       {
         categoryGroup: 'allLogs'
