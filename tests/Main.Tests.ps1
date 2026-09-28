@@ -35,7 +35,7 @@ Describe 'Spoke CIDR single source of truth (F5)' {
 
 Describe 'Firewall threat intelligence wiring (F9)' {
     It 'uses Deny in prod and Alert elsewhere' {
-        (Get-ModuleDeployment -Template $main -Name 'azure-firewall').properties.parameters.threatIntelMode.value |
-            Should -Be "[if(equals(parameters('environmentType'), 'prod'), 'Deny', 'Alert')]"
+        (Get-ModuleDeployment -Template $main -Name 'azure-firewall').properties.parameters.threatIntelMode |
+            Should -Be "[if(equals(parameters('environmentType'), 'prod'), createObject('value', 'Deny'), createObject('value', 'Alert'))]"
     }
 }
