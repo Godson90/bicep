@@ -10,7 +10,7 @@
 ## 2. Prerequisites
 - GitHub CLI signed in with admin rights on `Godson90/bicep`: `gh auth status`.
 - Entra role able to create app registrations: `Application Developer`, or `Cloud Application Administrator`.
-- Azure role able to create role assignments on the target resource group: `Owner`, or `Role Based Access Control Administrator` + `Contributor`.
+- Azure role able to create role assignments and a custom role definition at subscription scope: `Owner`, or `Role Based Access Control Administrator` + `Contributor`.
 - Azure CLI 2.90 or later and PowerShell 5.1 or 7.
 
 ## 3. Parameters
@@ -18,8 +18,8 @@
 |---|---|---|---|
 | `-GitHubRepository` | none | `Godson90/bicep` | Federated credential subject |
 | `-EnvironmentName` | none | `dev` now; `prod` in Phase 1 | One identity per environment limits blast radius |
-| `-ResourceGroupName` | none | `defenStack` (dev) | Role assignment scope |
-| `-DelegatableRoleDefinitionIds` | Storage Blob Data Contributor | extended per phase | Roles the pipeline may assign; all others are blocked by the ABAC condition |
+| `-ResourceGroupNames` | none | `rg-defenstack-prod-global`, `rg-defenstack-prod-wus3`, `rg-defenstack-prod-eus` | Resource groups the identity may deploy resources into; the identity separately gets the custom `DefenStack Subscription Deployment Operator` role at subscription scope so it can run subscription-scope deployments (see ADR-009) |
+| `-DelegatableRoleDefinitionIds` | Storage Blob Data Contributor | extended per phase | Roles the pipeline may assign; `Owner`, `User Access Administrator`, `Role Based Access Control Administrator` and `Contributor` are always refused, and all other roles are blocked by the ABAC condition |
 | `-GrantLockManagement` | off | on for prod | Needed only where `CanNotDelete` locks are deployed |
 
 ## 4. Step-by-step setup
@@ -39,23 +39,23 @@
    az login
    az account set --subscription <subscription-id>
    .\scripts\New-GitHubDeploymentIdentity.ps1 `
-     -ResourceGroupName defenStack `
+     -ResourceGroupNames 'rg-defenstack-dev-global','rg-defenstack-dev-wus3' `
      -GitHubRepository Godson90/bicep `
      -EnvironmentName dev `
      -WhatIf
    ```
 
-   Expected: `What if:` lines for the app registration, service principal, federated credential, `Contributor`, and `Role Based Access Control Administrator`. No changes are made.
+   Expected: `What if:` lines for the app registration, service principal, federated credential, the custom `DefenStack Subscription Deployment Operator` role and its assignment at subscription scope, then `Contributor` and `Role Based Access Control Administrator` on each of the two resource groups. No changes are made.
 
-3. **Create the identity:** run the same command without `-WhatIf`. Expected: the output object with the four `AZURE_*` values, plus four `gh variable set …` commands.
+3. **Create the identity:** run the same command without `-WhatIf`. Expected: the output object with the three `AZURE_*` values, plus three `gh variable set …` commands.
 
-4. **Set the GitHub environment variables:** run the four printed `gh variable set` commands. They are identifiers, not secrets. Verify:
+4. **Set the GitHub environment variables:** run the three printed `gh variable set` commands. They are identifiers, not secrets. Verify:
 
    ```powershell
    gh variable list --env dev --repo Godson90/bicep
    ```
 
-   Expected: all four variables are listed.
+   Expected: all three variables are listed. If the environment previously held an `AZURE_RESOURCE_GROUP` variable from before Phase 1, delete it — it is no longer read by either workflow.
 
 5. **Re-run CI on the Phase 0 PR:**
 
@@ -96,7 +96,8 @@
 | Check | Command | Expected result |
 |---|---|---|
 | Federated credential | `az ad app federated-credential list --id <AZURE_CLIENT_ID> --query "[].subject" -o tsv` | `repo:Godson90/bicep:environment:dev` |
-| Role assignments | `az role assignment list --assignee <AZURE_CLIENT_ID> --scope /subscriptions/<sub>/resourceGroups/defenStack --query "[].{role:roleDefinitionName,condition:condition!=null}" -o table` | `Contributor` (condition False) and `Role Based Access Control Administrator` (condition True) |
+| Subscription-scope role | `az role assignment list --assignee <AZURE_CLIENT_ID> --scope /subscriptions/<sub> --query "[].roleDefinitionName" -o tsv` | `DefenStack Subscription Deployment Operator` only |
+| Resource group role assignments | `az role assignment list --assignee <AZURE_CLIENT_ID> --scope /subscriptions/<sub>/resourceGroups/rg-defenstack-dev-global --query "[].{role:roleDefinitionName,condition:condition!=null}" -o table` (repeat for `rg-defenstack-dev-wus3`) | `Contributor` (condition False) and `Role Based Access Control Administrator` (condition True) on each resource group |
 | No secrets | `az ad app credential list --id <AZURE_CLIENT_ID>` | `[]` |
 | CI gate | `gh pr checks <pr-number>` | `validate` pass, `what-if` pass |
 
@@ -170,9 +171,10 @@ Rules already fixed in code rather than excluded or suppressed —
 | Symptom / error text | Cause | Fix |
 |---|---|---|
 | `AADSTS70021: No matching federated identity record found` | Job not running in the `dev` environment, or repo name/case mismatch | Confirm `environment: dev` in the job and that the subject equals `repo:Godson90/bicep:environment:dev` |
+| `AuthorizationFailed … Microsoft.Resources/deployments/write … /subscriptions/<id>` | The subscription-scope `DefenStack Subscription Deployment Operator` role is missing or not yet propagated (ADR-009) | Confirm the role assignment at `/subscriptions/<sub>` (runbook 00b §3); wait for replication and re-run |
 | `AuthorizationFailed … roleAssignments/write` with condition | Template assigns a role not in `-DelegatableRoleDefinitionIds` | Re-run the script with the role's GUID added. If an unconditioned or differently-conditioned `Role Based Access Control Administrator` assignment already exists at the scope, the script now stops with an error naming the mismatch; run `az role assignment delete --ids <id>` to delete that assignment, then re-run the script so it can create the correctly constrained one |
 | `AuthorizationFailed … locks/write` | Prod lock deployed without `-GrantLockManagement` | Re-run the script with `-GrantLockManagement` |
+| `ResourceGroupNotFound` | A resource group named in `-ResourceGroupNames`, or referenced by `resourceGroup(name)` in the templates, was not pre-created | Create the resource group first (runbook 01), then re-run |
 | What-if job skipped | PR is from a fork | Expected; forks never receive Azure tokens |
-| Validate fails `params/prod.bicepparam not found` | Prod is not available until Phase 1 | Deploy dev only |
 
-**Security note:** the `what-if` job (`bicep-ci.yml`, same-repo pull requests) and the `deploy` job (`deploy.yml`) both run in the single **dev** GitHub environment and both authenticate as the dev deployment identity. Any collaborator who can push a branch can therefore run **arbitrary workflow YAML** authenticated as that identity — not just a read-only `what-if` — by opening a same-repo pull request, or by pushing to `main` (the `deploy` job also runs on `workflow_dispatch`, but only when `github.ref == 'refs/heads/main'`). That identity is scoped to `Contributor` plus a condition-constrained `Role Based Access Control Administrator` on the dev resource group only (the ABAC condition limits assignable roles to `Storage Blob Data Contributor`), so the blast radius stops at `defenStack`, but within that boundary the workflow code has full control. This exposure is accepted for dev in `docs/decisions/ADR-007-dev-environment-pipeline-exposure.md`; dev must not hold real data while it stands. The prod identity (Phase 1) is bound to its own `prod` environment, which has required reviewers and a `main`-only branch policy, so a pushed branch alone cannot authenticate as prod.
+**Security note:** the `what-if` job (`bicep-ci.yml`, same-repo pull requests) and the `deploy` job (`deploy.yml`) both run in the single **dev** GitHub environment and both authenticate as the dev deployment identity. Any collaborator who can push a branch can therefore run **arbitrary workflow YAML** authenticated as that identity — not just a read-only `what-if` — by opening a same-repo pull request, or by pushing to `main` (the `deploy` job also runs on `workflow_dispatch`, but only when `github.ref == 'refs/heads/main'`). That identity holds the custom `DefenStack Subscription Deployment Operator` role at subscription scope (deployment operations and read only, no resource rights — ADR-009), plus `Contributor` and a condition-constrained `Role Based Access Control Administrator` on the dev resource groups only (the ABAC condition limits assignable roles to `Storage Blob Data Contributor`). So a same-repo PR or a push to `main` can run arbitrary workflow code authenticated as the dev identity, but that code's blast radius on actual resources stops at `rg-defenstack-dev-global` and `rg-defenstack-dev-wus3`; within that boundary the workflow code has full control. This exposure is accepted for dev in `docs/decisions/ADR-007-dev-environment-pipeline-exposure.md`; dev must not hold real data while it stands. The prod identity is bound to its own `prod` environment, which has required reviewers and a `main`-only branch policy, so a pushed branch alone cannot authenticate as prod.
