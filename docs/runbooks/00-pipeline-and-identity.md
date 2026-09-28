@@ -111,6 +111,8 @@
 ## 8. Operations
 
 ### PSRule baseline
+`bicep-ci.yml` pins `PSRule.Rules.Azure` to `1.47.0` (`Install-Module -Name PSRule.Rules.Azure -RequiredVersion 1.47.0 -Scope CurrentUser -Force`) so CI results are reproducible and do not silently change when a new module version ships. Bumping the pinned version is a deliberate PR: re-run the baseline capture below against the new version, resolve any newly failing rules the same way as the table below, and update the pinned version and this baseline together.
+
 Baseline captured locally by running, from the repository root:
 
 ```powershell
@@ -155,4 +157,4 @@ Rules processed: 175, failed: 0, errored: 0
 | What-if job skipped | PR is from a fork | Expected; forks never receive Azure tokens |
 | Validate fails `params/prod.bicepparam not found` | Prod is not available until Phase 1 | Deploy dev only |
 
-**Security note:** any collaborator who can push a branch can run the `what-if` job with the **dev** identity. That identity can only modify the dev resource group. The prod identity (Phase 1) is bound to the `prod` environment, which has required reviewers and a `main`-only branch policy.
+**Security note:** the `what-if` job (`bicep-ci.yml`, same-repo pull requests) and the `deploy` job (`deploy.yml`) both run in the single **dev** GitHub environment and both authenticate as the dev deployment identity. Any collaborator who can push a branch can therefore run **arbitrary workflow YAML** authenticated as that identity — not just a read-only `what-if` — by opening a same-repo pull request, or by pushing to `main` (the `deploy` job also runs on `workflow_dispatch`, but only when `github.ref == 'refs/heads/main'`). That identity is scoped to `Contributor` plus a condition-constrained `Role Based Access Control Administrator` on the dev resource group only (the ABAC condition limits assignable roles to `Storage Blob Data Contributor`), so the blast radius stops at `defenStack`, but within that boundary the workflow code has full control. This exposure is accepted for dev in `docs/decisions/ADR-007-dev-environment-pipeline-exposure.md`; dev must not hold real data while it stands. The prod identity (Phase 1) is bound to its own `prod` environment, which has required reviewers and a `main`-only branch policy, so a pushed branch alone cannot authenticate as prod.
