@@ -270,6 +270,59 @@ az role assignment delete --ids $oldId
 Usage | where TimeGenerated > ago(7d) | summarize GB = sum(Quantity) / 1000
 ```
 
+### PSRule baseline fixes (Task 11)
+**Change:** three properties were made explicit to satisfy PSRule for Azure rules
+found while building the CI baseline (`docs/runbooks/00-pipeline-and-identity.md` §8).
+None of these change effective behavior versus what was already deployed; they make an
+implicit default explicit, except where noted.
+
+1. **Storage account network firewall default** (`Azure.Storage.Firewall`,
+   AZR-000202): `modules/storage.bicep` now sets `networkAcls.defaultAction: 'Deny'`
+   (with `bypass: 'AzureServices'`) at the top level of the storage account, alongside
+   the existing `publicNetworkAccess: 'Disabled'`.
+
+   **Expected what-if:** `~ Modify` on `<storage-account>`:
+   `properties.networkAcls.defaultAction` goes `(not set)` → `Deny`.
+
+   **Manual steps:** none. `publicNetworkAccess` was already `Disabled`, so no client
+   that could previously reach the account loses access.
+
+2. **Subnet default outbound access** (`Azure.VNET.PrivateSubnet`, AZR-000447):
+   `modules/vnet.bicep` and `modules/spokeNetwork.bicep` now set
+   `defaultOutboundAccess: false` on the `private-endpoints` and `virtual-machines`
+   subnets. The `appservice-integration` subnet is unchanged (delegation manages its
+   own egress).
+
+   **Expected what-if:** `~ Modify` on the spoke VNet: the `private-endpoints` and
+   `virtual-machines` subnets' `properties.defaultOutboundAccess` goes `(not set)` →
+   `false`.
+
+   **Manual steps:** none for the `private-endpoints` subnet (no compute attaches
+   there). **If a VM NIC already exists in the `virtual-machines` subnet when this
+   change lands** (`enableVirtualMachine=true` was previously deployed), Azure only
+   applies a `defaultOutboundAccess` change to existing NICs on their next IP
+   allocation. **Stop (deallocate) the VM and start it again — a reboot is not
+   enough** — immediately after this deployment, then confirm with the §6 validation
+   command below. Both spoke subnets already route `0.0.0.0/0` through the firewall
+   via their route tables, so no traffic path changes; this only removes each
+   subnet's fallback default-outbound-access path if the route table were ever
+   removed.
+
+3. **App Service client affinity** (`Azure.AppService.ARRAffinity`, AZR-000083):
+   `modules/appService.bicep` now sets `clientAffinityEnabled: false` at the top level
+   of the site resource (a sibling of `serverFarmId` and `siteConfig`, not a
+   `siteConfig` property).
+
+   **Expected what-if:** `~ Modify` on `<app-service-name>`:
+   `properties.clientAffinityEnabled` goes `(not set)` → `false`.
+
+   **Manual steps (required before deploying):** confirm the application does not
+   rely on Application Request Routing (ARR) sticky sessions to keep a client pinned
+   to one instance. Any session state must already live outside the process (for
+   example in Key Vault-backed config, the storage account, or a distributed cache) —
+   disabling client affinity means requests from the same client can land on any
+   instance.
+
 ## 6. Validation
 | Check | Command | Expected result |
 |---|---|---|
@@ -290,6 +343,9 @@ Usage | where TimeGenerated > ago(7d) | summarize GB = sum(Quantity) / 1000
 | App still reads/writes | Application smoke test against `def-blob` | Success; `StorageBlobLogs` shows `AuthenticationType == "OAuth"` |
 | Basic auth off | `az resource show -g defenStack --namespace Microsoft.Web --parent sites/<app-service-name> --resource-type basicPublishingCredentialsPolicies -n scm --query properties.allow -o tsv` | `false` (repeat with `-n ftp`) |
 | Site config | `az webapp config show -g defenStack -n <app-service-name> --query "{alwaysOn:alwaysOn,health:healthCheckPath,scmTls:scmMinTlsVersion,debug:remoteDebuggingEnabled}" -o table` | `True`, `/`, `1.2`, `False` |
+| Storage firewall default | `az storage account show -g defenStack -n <storage-account> --query networkRuleSet.defaultAction -o tsv` | `Deny` |
+| Subnet default outbound access off | `az network vnet subnet show -g defenStack --vnet-name <spoke-vnet> -n private-endpoints --query defaultOutboundAccess -o tsv` | `false` (repeat with `-n virtual-machines`) |
+| App Service client affinity off | `az webapp show -g defenStack -n <app-service-name> --query clientAffinityEnabled -o tsv` | `false` |
 
 ## 7. Rollback
 General rollback: redeploy the last good commit from `main` with the same commands in §4. Per-fix exceptions are listed below.
@@ -298,6 +354,11 @@ General rollback: redeploy the last good commit from `main` with the same comman
 - **F4:** set `enabledForTemplateDeployment: false` in `main.bicep` and redeploy, or run `az keyvault update -n <vault> --enabled-for-template-deployment false`.
 - **F7:** point-in-time restore must be disabled **before** change feed or versioning (Azure rejects the reverse order). Set `restorePolicy.enabled: false`, deploy, then disable the others.
 - **F11:** redeploy the previous commit (recreates the account-scope assignment), then delete the container-scope assignment with `az role assignment delete --ids <id>`.
+- **PSRule baseline fixes (Task 11):** redeploy the previous commit. The storage
+  firewall default and the App Service client affinity setting revert immediately.
+  `defaultOutboundAccess` also reverts to unset, but if a VM NIC exists in the
+  `virtual-machines` subnet, it needs the same stop (deallocate) and start cycle
+  described in §5 before the reverted setting takes effect on that NIC.
 
 ## 8. Operations
 See the per-fix notes in §5.
