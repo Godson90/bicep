@@ -1,0 +1,66 @@
+name: deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'main.bicep'
+      - 'modules/**'
+      - 'params/**'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment (prod is added in Phase 1)
+        type: choice
+        options: [dev]
+        default: dev
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-${{ inputs.environment || 'dev' }}
+  cancel-in-progress: false
+
+env:
+  BICEP_VERSION: v0.47.16
+  TARGET_ENV: ${{ inputs.environment || 'dev' }}
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment || 'dev' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Bicep CLI
+        run: az bicep install --version "$BICEP_VERSION"
+
+      - name: Validate
+        run: |
+          az deployment group validate \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --parameters "params/${TARGET_ENV}.bicepparam" \
+            --output none
+
+      - name: What-if
+        run: |
+          az deployment group what-if \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --parameters "params/${TARGET_ENV}.bicepparam" \
+            --exclude-change-types Ignore NoChange | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Deploy
+        run: |
+          az deployment group create \
+            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+            --name "gh-${{ github.run_id }}-${{ github.run_attempt }}" \
+            --parameters "params/${TARGET_ENV}.bicepparam" \
+            --output table

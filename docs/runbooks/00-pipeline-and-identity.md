@@ -23,7 +23,90 @@
 | `-GrantLockManagement` | off | on for prod | Needed only where `CanNotDelete` locks are deployed |
 
 ## 4. Step-by-step setup
-(completed in Task 12)
+1. **Create the GitHub environment `dev`:**
+
+   ```powershell
+   gh api --method PUT repos/Godson90/bicep/environments/dev
+   ```
+
+   Expected: a JSON response containing `"name": "dev"`.
+
+2. **Preview the identity changes:**
+
+   ```powershell
+   az login
+   az account set --subscription <subscription-id>
+   .\scripts\New-GitHubDeploymentIdentity.ps1 `
+     -ResourceGroupName defenStack `
+     -GitHubRepository Godson90/bicep `
+     -EnvironmentName dev `
+     -WhatIf
+   ```
+
+   Expected: `What if:` lines for the app registration, service principal, federated credential, `Contributor`, and `Role Based Access Control Administrator`. No changes are made.
+
+3. **Create the identity:** run the same command without `-WhatIf`. Expected: the output object with the four `AZURE_*` values, plus four `gh variable set …` commands.
+
+4. **Set the GitHub environment variables:** run the four printed `gh variable set` commands. They are identifiers, not secrets. Verify:
+
+   ```powershell
+   gh variable list --env dev --repo Godson90/bicep
+   ```
+
+   Expected: all four variables are listed.
+
+5. **Re-run CI on the Phase 0 PR:**
+
+   ```powershell
+   gh run rerun --failed <run-id>
+   ```
+
+   Expected: the `what-if` job signs in and posts a "What-if: dev" comment on the PR.
+
+6. **Protect `main`:** this requires a public repo or a paid plan for private repos. Create `protection.json`:
+
+   ```json
+   {
+     "required_status_checks": { "strict": true, "contexts": ["validate"] },
+     "enforce_admins": false,
+     "required_pull_request_reviews": { "required_approving_review_count": 0 },
+     "restrictions": null
+   }
+   ```
+
+   Apply it and remove the file:
+
+   ```powershell
+   gh api --method PUT repos/Godson90/bicep/branches/main/protection --input protection.json
+   Remove-Item protection.json
+   ```
+
+## 5. Manual and post-deployment steps
+- After merging to `main`, the `deploy` workflow runs automatically for changes under `main.bicep`, `modules/` or `params/`. To deploy manually:
+
+  ```powershell
+  gh workflow run deploy -f environment=dev
+  ```
+
+- The first merged deployment is the Phase 0 rollout. Complete `docs/runbooks/00a-apply-phase0-fixes.md` §5 manual steps (the F11 role cleanup and F4 verification) after it finishes.
+
+## 6. Validation
+| Check | Command | Expected result |
+|---|---|---|
+| Federated credential | `az ad app federated-credential list --id <AZURE_CLIENT_ID> --query "[].subject" -o tsv` | `repo:Godson90/bicep:environment:dev` |
+| Role assignments | `az role assignment list --assignee <AZURE_CLIENT_ID> --scope /subscriptions/<sub>/resourceGroups/defenStack --query "[].{role:roleDefinitionName,condition:condition!=null}" -o table` | `Contributor` (condition False) and `Role Based Access Control Administrator` (condition True) |
+| No secrets | `az ad app credential list --id <AZURE_CLIENT_ID>` | `[]` |
+| CI gate | `gh pr checks <pr-number>` | `validate` pass, `what-if` pass |
+
+## 7. Rollback
+- Disable the pipeline: `gh workflow disable deploy`.
+- Remove access:
+
+  ```powershell
+  $sp = az ad sp list --filter "appId eq '<AZURE_CLIENT_ID>'" --query "[0].id" -o tsv
+  az role assignment list --assignee $sp --all --query "[].id" -o tsv | ForEach-Object { az role assignment delete --ids $_ }
+  az ad app delete --id <AZURE_CLIENT_ID>
+  ```
 
 ## 8. Operations
 
@@ -62,3 +145,14 @@ Rules processed: 175, failed: 0, errored: 0
 | `Azure.AppService.WebProbePath` (AZR-000080) | (c) Accepted risk | `docs/decisions/ADR-006-appservice-health-probe-path.md` |
 | `Azure.AppService.ARRAffinity` (AZR-000083) | (b) Fixed now | `modules/appService.bicep` — added `clientAffinityEnabled: false`; test in `tests/AppService.Tests.ps1` |
 | `Azure.Resource.UseTags` (AZR-000166) | (c) Accepted risk | `docs/decisions/ADR-002-no-tagging-convention-yet.md` |
+
+## 9. Troubleshooting
+| Symptom / error text | Cause | Fix |
+|---|---|---|
+| `AADSTS70021: No matching federated identity record found` | Job not running in the `dev` environment, or repo name/case mismatch | Confirm `environment: dev` in the job and that the subject equals `repo:Godson90/bicep:environment:dev` |
+| `AuthorizationFailed … roleAssignments/write` with condition | Template assigns a role not in `-DelegatableRoleDefinitionIds` | Re-run the script with the role's GUID added (this updates nothing already assigned; delete and recreate the RBAC Administrator assignment to change its condition) |
+| `AuthorizationFailed … locks/write` | Prod lock deployed without `-GrantLockManagement` | Re-run the script with `-GrantLockManagement` |
+| What-if job skipped | PR is from a fork | Expected; forks never receive Azure tokens |
+| Validate fails `params/prod.bicepparam not found` | Prod is not available until Phase 1 | Deploy dev only |
+
+**Security note:** any collaborator who can push a branch can run the `what-if` job with the **dev** identity. That identity can only modify the dev resource group. The prod identity (Phase 1) is bound to the `prod` environment, which has required reviewers and a `main`-only branch policy.
