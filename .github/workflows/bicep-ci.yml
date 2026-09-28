@@ -21,6 +21,7 @@ jobs:
 
       - name: Install Bicep CLI
         run: |
+          az config set bicep.use_binary_from_path=false
           az bicep install --version "$BICEP_VERSION"
           echo "$HOME/.azure/bin" >> "$GITHUB_PATH"
 
@@ -31,7 +32,7 @@ jobs:
       - name: PSRule for Azure
         shell: pwsh
         run: |
-          Install-Module -Name PSRule.Rules.Azure -Scope CurrentUser -Force
+          Install-Module -Name PSRule.Rules.Azure -RequiredVersion 1.47.0 -Scope CurrentUser -Force
           New-Item -ItemType Directory -Path reports -Force | Out-Null
           Assert-PSRule -InputPath params/ -Module PSRule.Rules.Azure -Format File -Outcome Fail, Error -OutputFormat Sarif -OutputPath reports/ps-rule.sarif
 
@@ -65,6 +66,7 @@ jobs:
       - name: What-if against dev
         run: |
           set -o pipefail
+          az config set bicep.use_binary_from_path=false
           az bicep install --version "$BICEP_VERSION"
           az deployment group what-if \
             --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \

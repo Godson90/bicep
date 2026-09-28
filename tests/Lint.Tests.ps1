@@ -1,8 +1,14 @@
 BeforeDiscovery {
     $repoRoot = Split-Path -Parent $PSScriptRoot
+    # Match against each file's path relative to $repoRoot, not FullName: the repository can be
+    # checked out under a directory that itself contains a path segment such as '.claude' (e.g. a
+    # worktree under '<repo>\.claude\worktrees\<name>'), which would otherwise make every file look
+    # excluded.
     $bicepFiles = Get-ChildItem -Path $repoRoot -Recurse -Filter '*.bicep' |
-        Where-Object { $_.FullName -notmatch '[\\/]\.git[\\/]' } |
-        ForEach-Object { @{ Name = $_.FullName.Substring($repoRoot.Length + 1); FullName = $_.FullName } }
+        ForEach-Object { @{ Name = $_.FullName.Substring($repoRoot.Length + 1); FullName = $_.FullName } } |
+        Where-Object { $_.Name -notmatch '[\\/]\.git[\\/]' } |
+        Where-Object { $_.Name -notmatch '[\\/]\.claude[\\/]' } |
+        Where-Object { $_.Name -notmatch '[\\/]\.superpowers[\\/]' }
 }
 
 BeforeAll {
