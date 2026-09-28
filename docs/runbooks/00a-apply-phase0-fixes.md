@@ -17,6 +17,13 @@ Applies the Phase 0 defect fixes to the existing `defenStack` resource group (de
   az account set --subscription <subscription-id>
   az account show --query "{subscription:id,tenant:tenantId}" -o table
   ```
+- Only if deploying the VM: register host encryption once per subscription, then wait for `Registered`:
+
+  ```powershell
+  az feature register --namespace Microsoft.Compute --name EncryptionAtHost
+  az feature show --namespace Microsoft.Compute --name EncryptionAtHost --query properties.state -o tsv
+  az provider register --namespace Microsoft.Compute
+  ```
 
 ## 3. Parameters
 | Name | Default | Prod value | Rationale |
@@ -111,6 +118,15 @@ Until Task 11 creates `params/dev.bicepparam`, use `--template-file main.bicep -
 
 **Manual step - update saved queries:** after deployment, new firewall logs land in `AZFW*` tables. Any saved query or workbook that reads `AzureDiagnostics | where Category == "AzureFirewallNetworkRule"` must be rewritten to use `AZFWNetworkRule`. Old data stays in `AzureDiagnostics` until its retention expires.
 
+### F3 - VM monitoring via Azure Monitor Agent
+**Change:** the VM diagnostic setting no longer requests `allLogs`. Compute VMs expose no log categories, so that request made VM deployments fail. Guest telemetry now flows through the Azure Monitor Agent extension and a data collection rule (`<vm>-dcr`) associated with the VM.
+
+**Expected what-if:** no change while `enableVirtualMachine=false`. With the VM enabled:
+- `+ Create` for the extension, the DCR and the DCR association.
+- `~ Modify` for the diagnostic setting.
+
+**Manual steps:** none.
+
 ## 6. Validation
 | Check | Command | Expected result |
 |---|---|---|
@@ -121,6 +137,8 @@ Until Task 11 creates `params/dev.bicepparam`, use `--template-file main.bicep -
 | Threat intel mode | `az network firewall policy show -g defenStack -n <firewall-policy> --query threatIntelMode -o tsv` | `Alert` (dev) |
 | Azure Monitor rule | `az network firewall policy rule-collection-group show -g defenStack --policy-name <firewall-policy> -n dns-egress --query "ruleCollections[].name" -o tsv` | `dns` and `azure-monitor` |
 | Dedicated tables | In Log Analytics: `AZFWNetworkRule \| take 5` (after 15 minutes of traffic) | Rows returned |
+| (VM enabled only) agent healthy | `az vm extension show -g defenStack --vm-name <vm> -n AzureMonitorLinuxAgent --query provisioningState -o tsv` | `Succeeded` |
+| (VM enabled only) data arriving | Log Analytics: `Heartbeat \| where Computer == "<vm>" \| take 1` after 10 minutes | One row |
 
 ## 7. Rollback
 General rollback: redeploy the last good commit from `main` with the same commands in §4. Per-fix exceptions are listed below.
@@ -135,3 +153,4 @@ See the per-fix notes in §5.
 |---|---|---|
 | `AnotherOperationInProgress` on firewall policy | Two rule collection groups updated concurrently | Re-run the deployment; groups are serialised by `parent` dependency on retry |
 | `Firewall zones cannot be changed` | `availabilityZones` passed for an existing non-zonal firewall | Leave `availabilityZones` empty for in-place updates; zones arrive with Phase 1 greenfield |
+| No `Heartbeat` rows | Firewall blocking agent egress | Check `AZFWNetworkRule \| where DestinationPort == 443 and Action == "Deny"`; confirm the `azure-monitor` collection exists |

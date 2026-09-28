@@ -184,7 +184,7 @@ For Linux, replace the password parameter with `virtualMachineAdminSshPublicKey`
 
 ### Virtual machine module
 
-The VM module is disabled by default through `enableVirtualMachine=false`. When enabled, it creates a private-only VM in the dedicated `virtual-machines` subnet with no public IP, a NIC-level deny-by-default NSG, a system-assigned managed identity, Premium managed OS disk, trusted launch, secure boot, vTPM, and boot/Log Analytics diagnostics.
+The VM module is disabled by default through `enableVirtualMachine=false`. When enabled, it creates a private-only VM in the dedicated `virtual-machines` subnet with no public IP, a NIC-level deny-by-default NSG, a system-assigned managed identity, Premium managed OS disk, trusted launch, secure boot, vTPM, boot diagnostics, platform metrics, and the Azure Monitor Agent with a data collection rule that sends syslog (Linux) or System/Application events (Windows) plus CPU, memory, and disk counters to the Log Analytics workspace. The firewall's `AzureMonitor` service-tag rule allows the agent's egress.
 
 - Set `virtualMachineOsType=Linux` and provide `virtualMachineAdminSshPublicKey` for SSH-only administration.
 - Set `virtualMachineOsType=Windows` and provide `virtualMachineAdminPassword` through a secure parameter mechanism. Do not place passwords in source control or generated templates.

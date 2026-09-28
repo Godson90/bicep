@@ -64,6 +64,66 @@ var managementInboundRules = empty(managementSourceCidrs) ? [] : [
   }
 ]
 
+var dataCollectionRuleName = '${vmName}-dcr'
+var azureMonitorAgentName = osType == 'Linux' ? 'AzureMonitorLinuxAgent' : 'AzureMonitorWindowsAgent'
+var performanceCounterSource = {
+  performanceCounters: [
+    {
+      name: 'perf'
+      streams: [
+        'Microsoft-Perf'
+      ]
+      samplingFrequencyInSeconds: 60
+      counterSpecifiers: osType == 'Linux' ? [
+        'Processor(*)\\% Processor Time'
+        'Memory(*)\\% Used Memory'
+        'Logical Disk(*)\\% Used Space'
+      ] : [
+        '\\Processor Information(_Total)\\% Processor Time'
+        '\\Memory\\% Committed Bytes In Use'
+        '\\LogicalDisk(_Total)\\% Free Space'
+      ]
+    }
+  ]
+}
+var osLogSource = osType == 'Linux' ? {
+  syslog: [
+    {
+      name: 'syslog'
+      streams: [
+        'Microsoft-Syslog'
+      ]
+      facilityNames: [
+        'auth'
+        'authpriv'
+        'daemon'
+        'kern'
+        'syslog'
+      ]
+      logLevels: [
+        'Warning'
+        'Error'
+        'Critical'
+        'Alert'
+        'Emergency'
+      ]
+    }
+  ]
+} : {
+  windowsEventLogs: [
+    {
+      name: 'windows-events'
+      streams: [
+        'Microsoft-Event'
+      ]
+      xPathQueries: [
+        'System!*[System[(Level=1 or Level=2 or Level=3)]]'
+        'Application!*[System[(Level=1 or Level=2 or Level=3)]]'
+      ]
+    }
+  ]
+}
+
 // NIC-level NSG keeps the VM boundary explicit without changing shared subnet policy.
 resource networkSecurityGroup 'Microsoft.Network/networkSecurityGroups@2024-07-01' = {
   name: networkSecurityGroupName
@@ -190,17 +250,12 @@ resource virtualMachine 'Microsoft.Compute/virtualMachines@2026-04-01' = {
   }
 }
 
+// Platform metrics only; Compute VMs expose no diagnostic log categories. Guest logs use the DCR below.
 resource virtualMachineDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {
   scope: virtualMachine
   name: 'vm-diagnostics'
   properties: {
     workspaceId: logAnalyticsWorkspaceId
-    logs: [
-      {
-        categoryGroup: 'allLogs'
-        enabled: true
-      }
-    ]
     metrics: [
       {
         category: 'AllMetrics'
@@ -210,6 +265,61 @@ resource virtualMachineDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-0
   }
 }
 
+// Azure Monitor Agent authenticates with the VM's system-assigned identity.
+resource azureMonitorAgent 'Microsoft.Compute/virtualMachines/extensions@2026-04-01' = {
+  parent: virtualMachine
+  name: azureMonitorAgentName
+  location: location
+  properties: {
+    publisher: 'Microsoft.Azure.Monitor'
+    type: azureMonitorAgentName
+    typeHandlerVersion: '1.0'
+    autoUpgradeMinorVersion: true
+    enableAutomaticUpgrade: true
+  }
+}
+
+// Guest OS logs and performance counters routed to the central workspace.
+resource dataCollectionRule 'Microsoft.Insights/dataCollectionRules@2023-03-11' = {
+  name: dataCollectionRuleName
+  location: location
+  kind: osType
+  properties: {
+    dataSources: union(performanceCounterSource, osLogSource)
+    destinations: {
+      logAnalytics: [
+        {
+          name: 'workspace'
+          workspaceResourceId: logAnalyticsWorkspaceId
+        }
+      ]
+    }
+    dataFlows: [
+      {
+        streams: osType == 'Linux' ? [
+          'Microsoft-Syslog'
+          'Microsoft-Perf'
+        ] : [
+          'Microsoft-Event'
+          'Microsoft-Perf'
+        ]
+        destinations: [
+          'workspace'
+        ]
+      }
+    ]
+  }
+}
+
+resource dataCollectionRuleAssociation 'Microsoft.Insights/dataCollectionRuleAssociations@2023-03-11' = {
+  name: '${vmName}-dcra'
+  scope: virtualMachine
+  properties: {
+    dataCollectionRuleId: dataCollectionRule.id
+  }
+}
+
 output id string = virtualMachine.id
 output name string = virtualMachine.name
 output networkInterfaceId string = networkInterface.id
+output dataCollectionRuleId string = dataCollectionRule.id

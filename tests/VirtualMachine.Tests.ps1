@@ -9,3 +9,34 @@ Describe 'VM NIC NSG management access (F1)' {
         @($template.parameters.managementSourceCidrs.defaultValue).Count | Should -Be 0
     }
 }
+
+Describe 'VM monitoring (F3)' {
+    BeforeAll {
+        $diagnostics = Get-TemplateResource -Template $template -Type 'Microsoft.Insights/diagnosticSettings' | Select-Object -First 1
+        $dcr = Get-TemplateResource -Template $template -Type 'Microsoft.Insights/dataCollectionRules' | Select-Object -First 1
+        $association = Get-TemplateResource -Template $template -Type 'Microsoft.Insights/dataCollectionRuleAssociations' | Select-Object -First 1
+        $agent = Get-TemplateResource -Template $template -Type 'Microsoft.Compute/virtualMachines/extensions' | Select-Object -First 1
+    }
+
+    It 'sends only metrics through the VM diagnostic setting (VMs expose no log categories)' {
+        $diagnostics.properties.PSObject.Properties.Name | Should -Not -Contain 'logs'
+        $diagnostics.properties.metrics[0].category | Should -Be 'AllMetrics'
+    }
+
+    It 'installs the Azure Monitor Agent' {
+        $agent.properties.publisher | Should -Be 'Microsoft.Azure.Monitor'
+        $agent.properties.enableAutomaticUpgrade | Should -BeTrue
+    }
+
+    It 'sends guest logs and performance counters to the workspace through a DCR' {
+        $dcr.properties.destinations.logAnalytics[0].workspaceResourceId | Should -Be "[parameters('logAnalyticsWorkspaceId')]"
+    }
+
+    It 'associates the DCR with the VM' {
+        $association.scope | Should -Match 'virtualMachines'
+    }
+
+    It 'outputs the DCR ID' {
+        $template.outputs.PSObject.Properties.Name | Should -Contain 'dataCollectionRuleId'
+    }
+}

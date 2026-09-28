@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "17154678323920115399"
+      "templateHash": "15645473366284174175"
     }
   },
   "parameters": {
@@ -1855,7 +1855,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "9353558045237080710"
+              "templateHash": "7159512017881724760"
             }
           },
           "parameters": {
@@ -1942,7 +1942,22 @@
             "windowsImageSku": "2022-datacenter-g2",
             "networkInterfaceName": "[format('{0}-nic', parameters('vmName'))]",
             "networkSecurityGroupName": "[format('{0}-nsg', parameters('vmName'))]",
-            "managementInboundRules": "[if(empty(parameters('managementSourceCidrs')), createArray(), createArray(createObject('name', 'allow-management-ssh-rdp', 'properties', createObject('priority', 100, 'access', 'Allow', 'direction', 'Inbound', 'protocol', 'Tcp', 'sourceAddressPrefixes', parameters('managementSourceCidrs'), 'sourcePortRange', '*', 'destinationAddressPrefix', '*', 'destinationPortRanges', createArray('22', '3389')))))]"
+            "managementInboundRules": "[if(empty(parameters('managementSourceCidrs')), createArray(), createArray(createObject('name', 'allow-management-ssh-rdp', 'properties', createObject('priority', 100, 'access', 'Allow', 'direction', 'Inbound', 'protocol', 'Tcp', 'sourceAddressPrefixes', parameters('managementSourceCidrs'), 'sourcePortRange', '*', 'destinationAddressPrefix', '*', 'destinationPortRanges', createArray('22', '3389')))))]",
+            "dataCollectionRuleName": "[format('{0}-dcr', parameters('vmName'))]",
+            "azureMonitorAgentName": "[if(equals(parameters('osType'), 'Linux'), 'AzureMonitorLinuxAgent', 'AzureMonitorWindowsAgent')]",
+            "performanceCounterSource": {
+              "performanceCounters": [
+                {
+                  "name": "perf",
+                  "streams": [
+                    "Microsoft-Perf"
+                  ],
+                  "samplingFrequencyInSeconds": 60,
+                  "counterSpecifiers": "[if(equals(parameters('osType'), 'Linux'), createArray('Processor(*)\\% Processor Time', 'Memory(*)\\% Used Memory', 'Logical Disk(*)\\% Used Space'), createArray('\\Processor Information(_Total)\\% Processor Time', '\\Memory\\% Committed Bytes In Use', '\\LogicalDisk(_Total)\\% Free Space'))]"
+                }
+              ]
+            },
+            "osLogSource": "[if(equals(parameters('osType'), 'Linux'), createObject('syslog', createArray(createObject('name', 'syslog', 'streams', createArray('Microsoft-Syslog'), 'facilityNames', createArray('auth', 'authpriv', 'daemon', 'kern', 'syslog'), 'logLevels', createArray('Warning', 'Error', 'Critical', 'Alert', 'Emergency')))), createObject('windowsEventLogs', createArray(createObject('name', 'windows-events', 'streams', createArray('Microsoft-Event'), 'xPathQueries', createArray('System!*[System[(Level=1 or Level=2 or Level=3)]]', 'Application!*[System[(Level=1 or Level=2 or Level=3)]]')))))]"
           },
           "resources": [
             {
@@ -2038,12 +2053,6 @@
               "name": "vm-diagnostics",
               "properties": {
                 "workspaceId": "[parameters('logAnalyticsWorkspaceId')]",
-                "logs": [
-                  {
-                    "categoryGroup": "allLogs",
-                    "enabled": true
-                  }
-                ],
                 "metrics": [
                   {
                     "category": "AllMetrics",
@@ -2052,6 +2061,61 @@
                 ]
               },
               "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Compute/virtualMachines/extensions",
+              "apiVersion": "2026-04-01",
+              "name": "[format('{0}/{1}', parameters('vmName'), variables('azureMonitorAgentName'))]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "publisher": "Microsoft.Azure.Monitor",
+                "type": "[variables('azureMonitorAgentName')]",
+                "typeHandlerVersion": "1.0",
+                "autoUpgradeMinorVersion": true,
+                "enableAutomaticUpgrade": true
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Insights/dataCollectionRules",
+              "apiVersion": "2023-03-11",
+              "name": "[variables('dataCollectionRuleName')]",
+              "location": "[parameters('location')]",
+              "kind": "[parameters('osType')]",
+              "properties": {
+                "dataSources": "[union(variables('performanceCounterSource'), variables('osLogSource'))]",
+                "destinations": {
+                  "logAnalytics": [
+                    {
+                      "name": "workspace",
+                      "workspaceResourceId": "[parameters('logAnalyticsWorkspaceId')]"
+                    }
+                  ]
+                },
+                "dataFlows": [
+                  {
+                    "streams": "[if(equals(parameters('osType'), 'Linux'), createArray('Microsoft-Syslog', 'Microsoft-Perf'), createArray('Microsoft-Event', 'Microsoft-Perf'))]",
+                    "destinations": [
+                      "workspace"
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "type": "Microsoft.Insights/dataCollectionRuleAssociations",
+              "apiVersion": "2023-03-11",
+              "scope": "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]",
+              "name": "[format('{0}-dcra', parameters('vmName'))]",
+              "properties": {
+                "dataCollectionRuleId": "[resourceId('Microsoft.Insights/dataCollectionRules', variables('dataCollectionRuleName'))]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Insights/dataCollectionRules', variables('dataCollectionRuleName'))]",
                 "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
               ]
             }
@@ -2068,6 +2132,10 @@
             "networkInterfaceId": {
               "type": "string",
               "value": "[resourceId('Microsoft.Network/networkInterfaces', variables('networkInterfaceName'))]"
+            },
+            "dataCollectionRuleId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Insights/dataCollectionRules', variables('dataCollectionRuleName'))]"
             }
           }
         }
