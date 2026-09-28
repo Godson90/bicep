@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "3466055864744525851"
+      "templateHash": "16098462169148709321"
     }
   },
   "parameters": {
@@ -248,7 +248,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "16848760813146021458"
+              "templateHash": "438712949318441171"
             }
           },
           "parameters": {
@@ -274,6 +274,20 @@
               "metadata": {
                 "description": "Number of days to retain workspace data. 90 days matches the retention included with Microsoft Sentinel."
               }
+            },
+            "replicationLocation": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Region that holds the workspace replica for regional failover. Empty disables replication."
+              }
+            },
+            "enableDeleteLock": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "Apply a CanNotDelete lock to the workspace."
+              }
             }
           },
           "resources": [
@@ -286,8 +300,22 @@
                 "retentionInDays": "[parameters('retentionInDays')]",
                 "sku": {
                   "name": "PerGB2018"
-                }
+                },
+                "replication": "[if(empty(parameters('replicationLocation')), null(), createObject('enabled', true(), 'location', parameters('replicationLocation')))]"
               }
+            },
+            {
+              "condition": "[parameters('enableDeleteLock')]",
+              "type": "Microsoft.Authorization/locks",
+              "apiVersion": "2020-05-01",
+              "scope": "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('workspaceName'))]",
+              "name": "[format('{0}-lck', parameters('workspaceName'))]",
+              "properties": {
+                "level": "CanNotDelete"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('workspaceName'))]"
+              ]
             }
           ],
           "outputs": {

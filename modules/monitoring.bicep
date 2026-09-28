@@ -11,6 +11,12 @@ param workspaceName string
 @maxValue(730)
 param retentionInDays int = 90
 
+@description('Region that holds the workspace replica for regional failover. Empty disables replication.')
+param replicationLocation string = ''
+
+@description('Apply a CanNotDelete lock to the workspace.')
+param enableDeleteLock bool = false
+
 // Central workspace for platform, network, storage, and application diagnostics.
 resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2026-03-01' = {
   name: workspaceName
@@ -20,6 +26,18 @@ resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2026-03
     sku: {
       name: 'PerGB2018'
     }
+    replication: empty(replicationLocation) ? null : {
+      enabled: true
+      location: replicationLocation
+    }
+  }
+}
+
+resource workspaceLock 'Microsoft.Authorization/locks@2020-05-01' = if (enableDeleteLock) {
+  scope: logAnalyticsWorkspace
+  name: '${workspaceName}-lck'
+  properties: {
+    level: 'CanNotDelete'
   }
 }
 
