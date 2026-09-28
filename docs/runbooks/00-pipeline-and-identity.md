@@ -144,7 +144,7 @@ every target:
 
 | Rule | Classification | Resolving phase / ADR |
 |---|---|---|
-| `Azure.Storage.UseReplication` (AZR-000195) | (a) Later phase | Phase 5 — storage account moves to GZRS |
+| `Azure.Storage.UseReplication` (AZR-000195) | (a) Later phase | Phase 5 — storage moves to RA-GZRS |
 | `Azure.NSG.LateralTraversal` (AZR-000139) | (a) Later phase | Phase 3 — Bastion/VPN/jump-host admin access redesign adds lateral-movement outbound rules |
 | `Azure.Resource.UseTags` (AZR-000166) | (c) Accepted risk | `docs/decisions/ADR-002-no-tagging-convention-yet.md` |
 | `Azure.NSG.DenyAllInbound` (AZR-000138) | (c) Accepted risk | `docs/decisions/ADR-004-nsg-default-deny-inbound.md` |

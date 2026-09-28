@@ -12,9 +12,11 @@ configuration:
   AZURE_BICEP_PARAMS_FILE_EXPANSION: true
 
 rule:
-  # Each exclusion must name the phase that resolves it or the ADR that accepts it.
+  # Exclusions apply to every environment and target. Each must name the phase that resolves it or
+  # the ADR that accepts it. Gaps that apply only to some targets (dev, the East US warm standby)
+  # are suppressed per target in .ps-rule/Suppression.Rule.yaml instead.
   exclude:
-    # Phase 5: storage account moves to GZRS.
+    # Phase 5: storage moves to RA-GZRS.
     - Azure.Storage.UseReplication
     # Phase 3: NSG lateral-movement (SSH/RDP) outbound rules land with the Bastion/VPN/jump-host admin access redesign.
     - Azure.NSG.LateralTraversal
