@@ -22,8 +22,8 @@ Describe 'Log Analytics resilience (Phase 1)' {
 
     It 'replicates the workspace only when a replication region is supplied' {
         $template.parameters.replicationLocation.defaultValue | Should -BeExactly ''
-        $workspace.properties.replication | Should -Match "if\(empty\(parameters\('replicationLocation'\)\), null\(\)"
-        $workspace.properties.replication | Should -Match "'location', parameters\('replicationLocation'\)"
+        $workspace.properties.replication.enabled | Should -Be "[not(empty(parameters('replicationLocation')))]"
+        $workspace.properties.replication.location | Should -Be "[if(empty(parameters('replicationLocation')), null(), parameters('replicationLocation'))]"
     }
 
     It 'locks the workspace only when deletion protection is requested' {

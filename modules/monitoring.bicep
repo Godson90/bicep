@@ -11,7 +11,7 @@ param workspaceName string
 @maxValue(730)
 param retentionInDays int = 90
 
-@description('Region that holds the workspace replica for regional failover. Empty disables replication.')
+@description('Region that holds the workspace replica for regional failover. Empty disables replication (sends enabled: false).')
 param replicationLocation string = ''
 
 @description('Apply a CanNotDelete lock to the workspace.')
@@ -26,9 +26,9 @@ resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2026-03
     sku: {
       name: 'PerGB2018'
     }
-    replication: empty(replicationLocation) ? null : {
-      enabled: true
-      location: replicationLocation
+    replication: {
+      enabled: !empty(replicationLocation)
+      location: empty(replicationLocation) ? null : replicationLocation
     }
   }
 }

@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "16098462169148709321"
+      "templateHash": "6850059749262466089"
     }
   },
   "parameters": {
@@ -248,7 +248,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "438712949318441171"
+              "templateHash": "11037180356623621409"
             }
           },
           "parameters": {
@@ -279,7 +279,7 @@
               "type": "string",
               "defaultValue": "",
               "metadata": {
-                "description": "Region that holds the workspace replica for regional failover. Empty disables replication."
+                "description": "Region that holds the workspace replica for regional failover. Empty disables replication (sends enabled: false)."
               }
             },
             "enableDeleteLock": {
@@ -301,7 +301,10 @@
                 "sku": {
                   "name": "PerGB2018"
                 },
-                "replication": "[if(empty(parameters('replicationLocation')), null(), createObject('enabled', true(), 'location', parameters('replicationLocation')))]"
+                "replication": {
+                  "enabled": "[not(empty(parameters('replicationLocation')))]",
+                  "location": "[if(empty(parameters('replicationLocation')), null(), parameters('replicationLocation'))]"
+                }
               }
             },
             {
