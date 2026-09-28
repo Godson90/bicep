@@ -5,7 +5,7 @@ This deployment creates a private spoke VNet, a dedicated hub VNet, Azure Firewa
 ### Documentation
 
 - Design: `docs/superpowers/specs/2026-09-25-secure-connectivity-design.md`
-- Runbooks: `docs/runbooks/` - start with `00-pipeline-and-identity.md` and `00a-apply-phase0-fixes.md`
+- Runbooks: `docs/runbooks/` - start with `00-pipeline-and-identity.md`, `00b-configure-pipeline-credentials.md` (pipeline Azure login via OIDC), and `00a-apply-phase0-fixes.md`
 - Runbook structure (mandatory for every change): `docs/runbooks/_template.md`
 
 ### Module layout

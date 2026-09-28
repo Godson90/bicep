@@ -23,6 +23,8 @@
 | `-GrantLockManagement` | off | on for prod | Needed only where `CanNotDelete` locks are deployed |
 
 ## 4. Step-by-step setup
+> For the full operator procedure, including the Azure portal and GitHub web UI paths (no `gh` CLI needed), verification and troubleshooting of the pipeline login, follow [00b - Configure secure pipeline credentials](00b-configure-pipeline-credentials.md). The steps below are the CLI summary.
+
 1. **Create the GitHub environment `dev`:**
 
    ```powershell
