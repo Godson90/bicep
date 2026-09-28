@@ -45,3 +45,10 @@ Describe 'Key Vault wiring (F4)' {
         (Get-ModuleDeployment -Template $main -Name 'key-vault').properties.parameters.enabledForTemplateDeployment.value | Should -BeTrue
     }
 }
+
+Describe 'Storage RBAC wiring (F11)' {
+    It 'passes the container name from the storage module output' {
+        (Get-ModuleDeployment -Template $main -Name 'network-integration').properties.parameters.storageContainerName.value |
+            Should -Match "outputs.blobContainerName"
+    }
+}

@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "7355929491228391055"
+      "templateHash": "3471265596867305835"
     }
   },
   "parameters": {
@@ -334,7 +334,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "8894804016957478489"
+              "templateHash": "15600056854351402859"
             }
           },
           "parameters": {
@@ -480,6 +480,10 @@
             "name": {
               "type": "string",
               "value": "[parameters('storageAccountName')]"
+            },
+            "blobContainerName": {
+              "type": "string",
+              "value": "def-blob"
             }
           }
         }
@@ -2239,6 +2243,9 @@
           "storageAccountId": {
             "value": "[reference(resourceId('Microsoft.Resources/deployments', 'storage'), '2025-04-01').outputs.id.value]"
           },
+          "storageContainerName": {
+            "value": "[reference(resourceId('Microsoft.Resources/deployments', 'storage'), '2025-04-01').outputs.blobContainerName.value]"
+          },
           "appServicePrincipalId": {
             "value": "[reference(resourceId('Microsoft.Resources/deployments', 'app-service'), '2025-04-01').outputs.appServicePrincipalId.value]"
           },
@@ -2253,7 +2260,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "5826650360439729031"
+              "templateHash": "13063555936045870584"
             }
           },
           "parameters": {
@@ -2297,6 +2304,14 @@
               "type": "string",
               "metadata": {
                 "description": "Storage account resource ID. Creates an explicit deployment dependency."
+              }
+            },
+            "storageContainerName": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 63,
+              "metadata": {
+                "description": "Blob container that receives the application identity role assignment."
               }
             },
             "appServicePrincipalId": {
@@ -2353,8 +2368,8 @@
             {
               "type": "Microsoft.Authorization/roleAssignments",
               "apiVersion": "2022-04-01",
-              "scope": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
-              "name": "[guid(parameters('storageAccountId'), parameters('appServiceName'), 'Storage Blob Data Contributor')]",
+              "scope": "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', parameters('storageContainerName'))]",
+              "name": "[guid(parameters('storageAccountId'), parameters('storageContainerName'), parameters('appServiceName'), 'Storage Blob Data Contributor')]",
               "properties": {
                 "principalId": "[parameters('appServicePrincipalId')]",
                 "principalType": "ServicePrincipal",

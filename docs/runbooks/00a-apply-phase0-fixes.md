@@ -212,6 +212,28 @@ az storage blob restore `
   --blob-range def-blob/ def-blob/~
 ```
 
+### F11 - Container-scoped storage role assignment
+**Change:** the App Service identity's `Storage Blob Data Contributor` assignment moves from the whole storage account to the `def-blob` container.
+
+**Expected what-if:** `+ Create` for a new role assignment at `…/blobServices/default/containers/def-blob`. ARM does **not** delete the old account-scope assignment, because it is a different resource.
+
+**Manual step (required) - remove the old account-scope assignment after deployment:**
+
+```powershell
+$storageId = az storage account show -g defenStack -n <storage-account> --query id -o tsv
+$principalId = az webapp identity show -g defenStack -n <app-service-name> --query principalId -o tsv
+
+# List assignments exactly at account scope (inherited/container assignments are not included).
+az role assignment list --scope $storageId --assignee $principalId --role "Storage Blob Data Contributor" --query "[?scope=='$storageId'].{id:id,scope:scope}" -o table
+```
+
+Confirm that exactly one row is shown and that its scope ends in the storage account name, not `/containers/def-blob`. Then delete it:
+
+```powershell
+$oldId = az role assignment list --scope $storageId --assignee $principalId --role "Storage Blob Data Contributor" --query "[?scope=='$storageId'].id" -o tsv
+az role assignment delete --ids $oldId
+```
+
 ## 6. Validation
 | Check | Command | Expected result |
 |---|---|---|
@@ -227,6 +249,8 @@ az storage blob restore `
 | Template deployment enabled | `az keyvault show -n <key-vault-name> --query "{tmpl:properties.enabledForTemplateDeployment,public:properties.publicNetworkAccess}" -o table` | `tmpl` True, `public` Disabled |
 | Data protection on | `az storage account blob-service-properties show -g defenStack -n <storage-account> --query "{ver:isVersioningEnabled,soft:deleteRetentionPolicy.days,pitr:restorePolicy.days}" -o table` | `ver` True, `soft` 14, `pitr` 13 |
 | Blob logs arriving | Log Analytics: `StorageBlobLogs \| take 5` after blob activity | Rows returned |
+| Only container-scoped access | `az role assignment list --assignee <app-principal-id> --all --query "[?roleDefinitionName=='Storage Blob Data Contributor'].scope" -o tsv` | Exactly one scope ending `/containers/def-blob` |
+| App still reads/writes | Application smoke test against `def-blob` | Success; `StorageBlobLogs` shows `AuthenticationType == "OAuth"` |
 
 ## 7. Rollback
 General rollback: redeploy the last good commit from `main` with the same commands in §4. Per-fix exceptions are listed below.
@@ -234,6 +258,7 @@ General rollback: redeploy the last good commit from `main` with the same comman
 - **F1/F2:** redeploy the previous commit. ARM re-points the subnet to the App Service NSG and route table; the new NSG and route table remain and can be deleted afterwards with `az network nsg delete` / `az network route-table delete`.
 - **F4:** set `enabledForTemplateDeployment: false` in `main.bicep` and redeploy, or run `az keyvault update -n <vault> --enabled-for-template-deployment false`.
 - **F7:** point-in-time restore must be disabled **before** change feed or versioning (Azure rejects the reverse order). Set `restorePolicy.enabled: false`, deploy, then disable the others.
+- **F11:** redeploy the previous commit (recreates the account-scope assignment), then delete the container-scope assignment with `az role assignment delete --ids <id>`.
 
 ## 8. Operations
 See the per-fix notes in §5.
@@ -244,3 +269,4 @@ See the per-fix notes in §5.
 | `AnotherOperationInProgress` on firewall policy | Two rule collection groups updated concurrently | Re-run the deployment; groups are serialised by `parent` dependency on retry |
 | `Firewall zones cannot be changed` | `availabilityZones` passed for an existing non-zonal firewall | Leave `availabilityZones` empty for in-place updates; zones arrive with Phase 1 greenfield |
 | No `Heartbeat` rows | Firewall blocking agent egress | Check `AZFWNetworkRule \| where DestinationPort == 443 and Action == "Deny"`; confirm the `azure-monitor` collection exists |
+| App gets `AuthorizationPermissionMismatch` on another container | Access is now limited to `def-blob` | Add a container-scoped assignment for the extra container through Bicep; do not widen to account scope |

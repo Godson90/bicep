@@ -101,3 +101,4 @@ resource blobDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-previ
 
 output id string = storageAccount.id
 output name string = storageAccount.name
+output blobContainerName string = storageAccount::service::blob.name

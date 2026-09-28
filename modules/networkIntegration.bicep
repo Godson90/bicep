@@ -22,6 +22,11 @@ param storageAccountName string
 @description('Storage account resource ID. Creates an explicit deployment dependency.')
 param storageAccountId string
 
+@description('Blob container that receives the application identity role assignment.')
+@minLength(3)
+@maxLength(63)
+param storageContainerName string
+
 @description('App Service managed identity principal ID.')
 param appServicePrincipalId string
 
@@ -43,6 +48,14 @@ resource spokeVnet 'Microsoft.Network/virtualNetworks@2025-09-01' existing = {
 
 resource storageAccount 'Microsoft.Storage/storageAccounts@2026-04-01' existing = {
   name: storageAccountName
+
+  resource blobService 'blobServices' existing = {
+    name: 'default'
+
+    resource container 'containers' existing = {
+      name: storageContainerName
+    }
+  }
 }
 
 // Hub-side peering for centralized firewall service chaining.
@@ -75,10 +88,10 @@ resource spokeToHubPeering 'Microsoft.Network/virtualNetworks/virtualNetworkPeer
   }
 }
 
-// Least-privilege data-plane access for the App Service managed identity.
+// Least-privilege data-plane access for the App Service managed identity, limited to the application container.
 resource storageBlobDataContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(storageAccountId, appServiceName, 'Storage Blob Data Contributor')
-  scope: storageAccount
+  name: guid(storageAccountId, storageContainerName, appServiceName, 'Storage Blob Data Contributor')
+  scope: storageAccount::blobService::container
   properties: {
     principalId: appServicePrincipalId
     principalType: 'ServicePrincipal'

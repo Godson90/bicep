@@ -232,6 +232,7 @@ module networkIntegration 'modules/networkIntegration.bicep' = {
     spokeVnetId: spokeNetwork.outputs.id
     storageAccountName: storageAccountName
     storageAccountId: storage.outputs.id
+    storageContainerName: storage.outputs.blobContainerName
     appServicePrincipalId: appService.outputs.appServicePrincipalId
     appServiceName: appServiceAppName
   }
