@@ -536,7 +536,7 @@ This removes unrelated resources in the resource group as well. Do not use it fo
 
 ### Security notes
 
-- The storage account denies public network access, blob public access, shared-key access, and TLS versions below 1.2.
+- The storage account denies public network access, blob public access, shared-key access, and TLS versions below 1.2. Blob versioning, change feed, 14-day blob and container soft delete, and 13-day point-in-time restore are enabled, and blob read/write/delete logs go to Log Analytics (`StorageBlobLogs`).
 - The App Service uses a system-assigned managed identity, HTTPS-only access, TLS 1.2, HTTP/2, disabled FTPS, VNet integration, and a private endpoint.
 - Diagnostics are sent to the Log Analytics workspace created by the deployment.
 - Do not place plaintext secrets in source-controlled Bicep parameter files, outputs, command history, or generated ARM templates. Secure references such as `az.getSecret()` in a local, ignored `.bicepparam` file are supported; use managed identity and Key Vault references for application secrets.

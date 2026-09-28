@@ -37,6 +37,7 @@ Applies the Phase 0 defect fixes to the existing `defenStack` resource group (de
 | `threatIntelMode` (firewall module) | `Deny` | `Deny` (main passes `Alert` for dev/test) | Block known-malicious IPs/FQDNs in prod |
 | `availabilityZones` (firewall module) | `[]` | `['1','2','3']` in Phase 1 greenfield | Zones cannot be added to an existing firewall/PIP in place |
 | `enabledForTemplateDeployment` (Key Vault) | `false` (module) | `true` (composed stack) | Required for `az.getSecret()` Key Vault references |
+| `blobSoftDeleteRetentionDays` (storage) | `14` | `14` or higher per data retention policy | Recovery window; PITR = value − 1 |
 
 ## 4. Step-by-step deployment
 1. Run the local test suite and confirm every test passes:
@@ -192,6 +193,25 @@ Until Task 11 creates `params/dev.bicepparam`, use `--template-file main.bicep -
 ### F12 - Key Vault private endpoint output
 **Change:** `privateConnectivity` now outputs `keyVaultPrivateEndpointId`, which later alerting phases use. No Azure change.
 
+### F6/F7 - Blob data protection and audit logs
+**Change:** versioning, change feed, blob and container soft delete (14 days) and point-in-time restore (13 days) are enabled. A new `blob-diagnostics` setting sends `StorageRead/StorageWrite/StorageDelete` to Log Analytics.
+
+**Expected what-if:**
+- `~ Modify` on `blobServices/default` (data protection properties).
+- `+ Create` for diagnostic setting `blob-diagnostics`.
+
+**Cost:** versions and soft-deleted data are billed as stored capacity, and change feed and logs add small ingestion costs. Review `docs/cost.md` after one week.
+
+**Restore procedure (point in time), run from an approved private path:**
+
+```powershell
+az storage blob restore `
+  --account-name <storage-account> `
+  --resource-group defenStack `
+  --time-to-restore (Get-Date).ToUniversalTime().AddHours(-2).ToString('yyyy-MM-ddTHH:mm:ssZ') `
+  --blob-range def-blob/ def-blob/~
+```
+
 ## 6. Validation
 | Check | Command | Expected result |
 |---|---|---|
@@ -205,12 +225,15 @@ Until Task 11 creates `params/dev.bicepparam`, use `--template-file main.bicep -
 | (VM enabled only) agent healthy | `az vm extension show -g defenStack --vm-name <vm> -n AzureMonitorLinuxAgent --query provisioningState -o tsv` | `Succeeded` |
 | (VM enabled only) data arriving | Log Analytics: `Heartbeat \| where Computer == "<vm>" \| take 1` after 10 minutes | One row |
 | Template deployment enabled | `az keyvault show -n <key-vault-name> --query "{tmpl:properties.enabledForTemplateDeployment,public:properties.publicNetworkAccess}" -o table` | `tmpl` True, `public` Disabled |
+| Data protection on | `az storage account blob-service-properties show -g defenStack -n <storage-account> --query "{ver:isVersioningEnabled,soft:deleteRetentionPolicy.days,pitr:restorePolicy.days}" -o table` | `ver` True, `soft` 14, `pitr` 13 |
+| Blob logs arriving | Log Analytics: `StorageBlobLogs \| take 5` after blob activity | Rows returned |
 
 ## 7. Rollback
 General rollback: redeploy the last good commit from `main` with the same commands in §4. Per-fix exceptions are listed below.
 
 - **F1/F2:** redeploy the previous commit. ARM re-points the subnet to the App Service NSG and route table; the new NSG and route table remain and can be deleted afterwards with `az network nsg delete` / `az network route-table delete`.
 - **F4:** set `enabledForTemplateDeployment: false` in `main.bicep` and redeploy, or run `az keyvault update -n <vault> --enabled-for-template-deployment false`.
+- **F7:** point-in-time restore must be disabled **before** change feed or versioning (Azure rejects the reverse order). Set `restorePolicy.enabled: false`, deploy, then disable the others.
 
 ## 8. Operations
 See the per-fix notes in §5.

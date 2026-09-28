@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "7959641766230310548"
+      "templateHash": "7355929491228391055"
     }
   },
   "parameters": {
@@ -334,7 +334,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "9114129942937769395"
+              "templateHash": "8894804016957478489"
             }
           },
           "parameters": {
@@ -363,6 +363,15 @@
               "metadata": {
                 "description": "Log Analytics workspace resource ID for storage diagnostics."
               }
+            },
+            "blobSoftDeleteRetentionDays": {
+              "type": "int",
+              "defaultValue": 14,
+              "minValue": 7,
+              "maxValue": 365,
+              "metadata": {
+                "description": "Days that deleted blobs and containers are recoverable. Point-in-time restore covers one day less."
+              }
             }
           },
           "resources": [
@@ -378,6 +387,25 @@
               "type": "Microsoft.Storage/storageAccounts/blobServices",
               "apiVersion": "2026-04-01",
               "name": "[format('{0}/{1}', parameters('storageAccountName'), 'default')]",
+              "properties": {
+                "isVersioningEnabled": true,
+                "changeFeed": {
+                  "enabled": true,
+                  "retentionInDays": "[parameters('blobSoftDeleteRetentionDays')]"
+                },
+                "deleteRetentionPolicy": {
+                  "enabled": true,
+                  "days": "[parameters('blobSoftDeleteRetentionDays')]"
+                },
+                "containerDeleteRetentionPolicy": {
+                  "enabled": true,
+                  "days": "[parameters('blobSoftDeleteRetentionDays')]"
+                },
+                "restorePolicy": {
+                  "enabled": true,
+                  "days": "[sub(parameters('blobSoftDeleteRetentionDays'), 1)]"
+                }
+              },
               "dependsOn": [
                 "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]"
               ]
@@ -417,6 +445,30 @@
               },
               "dependsOn": [
                 "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Insights/diagnosticSettings",
+              "apiVersion": "2021-05-01-preview",
+              "scope": "[resourceId('Microsoft.Storage/storageAccounts/blobServices', parameters('storageAccountName'), 'default')]",
+              "name": "blob-diagnostics",
+              "properties": {
+                "workspaceId": "[parameters('logAnalyticsWorkspaceId')]",
+                "logs": [
+                  {
+                    "categoryGroup": "allLogs",
+                    "enabled": true
+                  }
+                ],
+                "metrics": [
+                  {
+                    "category": "Transaction",
+                    "enabled": true
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Storage/storageAccounts/blobServices', parameters('storageAccountName'), 'default')]"
               ]
             }
           ],
