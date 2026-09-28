@@ -36,6 +36,32 @@ measure the actual impact after a week of dev traffic.
 collection above gives real ingestion/capacity numbers to plug into the calculator,
 rather than guessing.
 
+## Phase 1 delta
+Phase 1 moves from one resource group in one region to a subscription-scope,
+multi-region layout (`docs/architecture/overview.md`). It changes both resource
+**counts** (a second region for prod) and **SKUs** (zone redundancy, GRS, a bigger
+App Service plan). As with every phase, **fill in the actual dollar estimate from the
+Pricing Calculator; do not invent prices.**
+
+| Environment | Cost driver | What changed / why it costs more |
+|---|---|---|
+| Dev | Azure Firewall Standard ×1 | Unchanged instance count, but now zonal (`availabilityZones: ['1','2','3']`) — zone redundancy itself doesn't add an hourly charge, but cross-zone traffic between the firewall and zonal dependents adds inter-zone data processing charges that a non-zonal deployment didn't incur |
+| Dev | App Service Plan ×1 (S1-equivalent, 1 instance, non-zonal) | Same shape as Phase 0; no change from Phase 1 |
+| Prod | Azure Firewall Standard ×2 | One per region (`rg-defenstack-prod-wus3`, `rg-defenstack-prod-eus`) instead of one total — the warm-standby region's firewall is deployed, not scaled up, so it's billed continuously even while idle (`ADR-008`) |
+| Prod | App Service Plan: P2V3 ×3 (WUS3, zone-redundant) + P2V3 ×1 (EUS) | Primary region moves to a 3-instance, zone-redundant Premium v3 plan; the secondary region adds a fourth, single-instance Premium v3 plan that did not exist in Phase 0 |
+| Prod | Storage account GRS ×2 | One GRS account per region (was one LRS account total in Phase 0) — GRS itself also costs more per GB than LRS, independent of the region count |
+| Prod | Key Vault ×2 | One per region (was one total) |
+| Prod | Private endpoints ×6 | Three per region (blob, sites, vault) × two regions (was three total) |
+| Prod | Log Analytics workspace replication | The single workspace now replicates to East US (`replication.enabled: true`); replication is charged per GB replicated, in addition to the existing ingestion/retention charges |
+| Prod | Cross-region replication traffic | Storage GRS replication and workspace replication both move data WUS3 → EUS, which is billed as network egress between regions |
+| Both, after migration | `defenStack`'s firewall and App Service plan retired | Runbook 01a tears down the Phase 0 resource group once dev's inventory (§3) shows nothing to migrate; this removes one firewall and one plan from the bill entirely |
+
+**Estimate:** fill in from the Pricing Calculator, built from the actual SKUs above per
+region, once dev's Phase 1 stack has run for a representative period. Prod's estimate
+should be built before the first prod deploy (runbook 01 §4), since the warm-standby
+region is billed from the moment it's deployed, not from the moment of an actual
+failover.
+
 ## Dominant future cost drivers
 From `docs/superpowers/specs/2026-09-25-secure-connectivity-design.md` §6, the
 resources expected to dominate spend in later phases (not present in Phase 0):
