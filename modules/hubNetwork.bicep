@@ -12,6 +12,9 @@ param addressSpace array
 @description('Address prefix for the exact-case AzureFirewallSubnet. It must be at least /26 and contained in addressSpace.')
 param firewallSubnetAddressPrefix string
 
+@description('Apply a CanNotDelete lock to the hub VNet.')
+param enableDeleteLock bool = false
+
 var firewallSubnetName = 'AzureFirewallSubnet'
 
 // Dedicated hub network hosting the centralized firewall.
@@ -30,6 +33,14 @@ resource hubVnet 'Microsoft.Network/virtualNetworks@2025-09-01' = {
         }
       }
     ]
+  }
+}
+
+resource hubVnetLock 'Microsoft.Authorization/locks@2020-05-01' = if (enableDeleteLock) {
+  scope: hubVnet
+  name: '${vnetName}-lck'
+  properties: {
+    level: 'CanNotDelete'
   }
 }
 

@@ -27,3 +27,12 @@ Describe 'Private connectivity outputs (F12)' {
         $privateConnectivity.outputs.PSObject.Properties.Name | Should -Contain 'keyVaultPrivateEndpointId'
     }
 }
+
+Describe 'Key Vault deletion protection (Phase 2)' {
+    It 'locks the vault only when requested' {
+        $template.parameters.enableDeleteLock.defaultValue | Should -BeExactly $false
+        $lock = Get-TemplateResource -Template $template -Type 'Microsoft.Authorization/locks' | Select-Object -First 1
+        $lock.condition | Should -Be "[parameters('enableDeleteLock')]"
+        $lock.properties.level | Should -Be 'CanNotDelete'
+    }
+}

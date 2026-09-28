@@ -106,6 +106,7 @@ module keyVault 'keyVault.bicep' = {
     logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
     enablePurgeProtection: true
     enabledForTemplateDeployment: true
+    enableDeleteLock: isProd
   }
 }
 
@@ -116,6 +117,7 @@ module hubNetwork 'hubNetwork.bicep' = {
     vnetName: names.hubVnet
     addressSpace: addressPlan.hubAddressSpace
     firewallSubnetAddressPrefix: addressPlan.firewallSubnetPrefix
+    enableDeleteLock: isProd
   }
 }
 
@@ -129,9 +131,15 @@ module azureFirewall 'azureFirewall.bicep' = {
     firewallSubnetId: hubNetwork.outputs.firewallSubnetId
     logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
     spokeAddressPrefixes: addressPlan.spokeAddressSpace
+    managementAddressPrefixes: [
+      addressPlan.managementSubnetPrefix
+    ]
     allowedOutboundFqdns: allowedOutboundFqdns
     threatIntelMode: isProd ? 'Deny' : 'Alert'
     availabilityZones: availabilityZones
+    firewallTier: 'Premium'
+    idpsMode: isProd ? 'Deny' : 'Alert'
+    enableDeleteLock: isProd
   }
 }
 

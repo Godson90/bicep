@@ -25,11 +25,21 @@ param logAnalyticsWorkspaceId string
 @description('Spoke CIDR ranges permitted to use the firewall DNS proxy and application rules.')
 param spokeAddressPrefixes array
 
+@description('Management subnet CIDR ranges permitted to reach OS update endpoints.')
+param managementAddressPrefixes array
+
 @description('Approved outbound FQDNs for App Service traffic. An empty list denies application traffic by default.')
 param allowedOutboundFqdns array = []
 
 @description('Availability zones for the firewall and its public IP, for example [\'1\', \'2\', \'3\']. Zones are fixed at creation, so leave empty when updating an existing non-zonal firewall.')
 param availabilityZones array = []
+
+@description('Firewall and policy tier. Premium adds IDPS (and TLS inspection, deferred by ADR-011).')
+@allowed([
+  'Standard'
+  'Premium'
+])
+param firewallTier string = 'Premium'
 
 @description('Threat intelligence mode for the firewall policy.')
 @allowed([
@@ -38,6 +48,19 @@ param availabilityZones array = []
   'Off'
 ])
 param threatIntelMode string = 'Deny'
+
+@description('IDPS mode for Premium policies: Alert logs signature hits, Deny also blocks them. Ignored for Standard.')
+@allowed([
+  'Alert'
+  'Deny'
+  'Off'
+])
+param idpsMode string = 'Deny'
+
+@description('Apply CanNotDelete locks to the firewall, its policy, and its public IP.')
+param enableDeleteLock bool = false
+
+var isPremium = firewallTier == 'Premium'
 
 // Static Standard public IP used by Azure Firewall for controlled egress.
 resource firewallPublicIp 'Microsoft.Network/publicIPAddresses@2025-01-01' = {
@@ -52,116 +75,37 @@ resource firewallPublicIp 'Microsoft.Network/publicIPAddresses@2025-01-01' = {
   }
 }
 
-// Central policy containing DNS and explicitly approved outbound rules.
+// Regional policy: threat intelligence, IDPS (Premium) and the DNS proxy. Rules come from firewallPolicyRules.bicep.
 resource firewallPolicy 'Microsoft.Network/firewallPolicies@2025-01-01' = {
   name: firewallPolicyName
   location: location
   properties: {
     sku: {
-      tier: 'Standard'
+      tier: firewallTier
     }
     threatIntelMode: threatIntelMode
+    intrusionDetection: isPremium ? {
+      mode: idpsMode
+    } : null
     dnsSettings: {
       enableProxy: true
     }
   }
 }
 
-// Platform egress for the spoke VNet: DNS proxy and Azure Monitor Agent ingestion.
-resource firewallDnsRuleCollectionGroup 'Microsoft.Network/firewallPolicies/ruleCollectionGroups@2025-01-01' = {
-  parent: firewallPolicy
-  name: 'dns-egress'
-  properties: {
-    priority: 100
-    ruleCollections: [
-      {
-        name: 'dns'
-        priority: 100
-        ruleCollectionType: 'FirewallPolicyFilterRuleCollection'
-        action: {
-          type: 'Allow'
-        }
-        rules: [
-          {
-            ruleType: 'NetworkRule'
-            name: 'azure-dns'
-            ipProtocols: [
-              'UDP'
-              'TCP'
-            ]
-            sourceAddresses: spokeAddressPrefixes
-            destinationAddresses: [
-              '168.63.129.16'
-            ]
-            destinationPorts: [
-              '53'
-            ]
-          }
-        ]
-      }
-      {
-        name: 'azure-monitor'
-        priority: 110
-        ruleCollectionType: 'FirewallPolicyFilterRuleCollection'
-        action: {
-          type: 'Allow'
-        }
-        rules: [
-          {
-            ruleType: 'NetworkRule'
-            name: 'azure-monitor-agent'
-            ipProtocols: [
-              'TCP'
-            ]
-            sourceAddresses: spokeAddressPrefixes
-            destinationAddresses: [
-              'AzureMonitor'
-              'AzureResourceManager'
-            ]
-            destinationPorts: [
-              '443'
-            ]
-          }
-        ]
-      }
-    ]
+// Baseline rule collection groups shared by every regional policy (ADR-010).
+module policyRules 'firewallPolicyRules.bicep' = {
+  // One firewall per resource group, so a fixed deployment name is unique (policy names can exceed the 64-character limit).
+  name: 'firewall-policy-rules'
+  params: {
+    firewallPolicyName: firewallPolicy.name
+    spokeAddressPrefixes: spokeAddressPrefixes
+    managementAddressPrefixes: managementAddressPrefixes
+    allowedOutboundFqdns: allowedOutboundFqdns
   }
 }
 
-// Optional allowlist; no application rule group is deployed when the allowlist is empty.
-resource firewallApplicationRuleCollectionGroup 'Microsoft.Network/firewallPolicies/ruleCollectionGroups@2025-01-01' = if (!empty(allowedOutboundFqdns)) {
-  parent: firewallPolicy
-  name: 'approved-https-egress'
-  properties: {
-    priority: 200
-    ruleCollections: [
-      {
-        name: 'approved-https'
-        priority: 200
-        ruleCollectionType: 'FirewallPolicyFilterRuleCollection'
-        action: {
-          type: 'Allow'
-        }
-        rules: [
-          {
-            ruleType: 'ApplicationRule'
-            name: 'approved-fqdns'
-            sourceAddresses: spokeAddressPrefixes
-            protocols: [
-              {
-                protocolType: 'Https'
-                port: 443
-              }
-            ]
-            targetFqdns: allowedOutboundFqdns
-          }
-        ]
-      }
-    ]
-  }
-}
-
-// Standard Azure Firewall attached only to the dedicated hub subnet.
+// Firewall attached only to the dedicated hub subnet; applied after every rule collection group exists.
 resource firewall 'Microsoft.Network/azureFirewalls@2025-01-01' = {
   name: firewallName
   location: location
@@ -169,7 +113,7 @@ resource firewall 'Microsoft.Network/azureFirewalls@2025-01-01' = {
   properties: {
     sku: {
       name: 'AZFW_VNet'
-      tier: 'Standard'
+      tier: firewallTier
     }
     firewallPolicy: {
       id: firewallPolicy.id
@@ -188,6 +132,9 @@ resource firewall 'Microsoft.Network/azureFirewalls@2025-01-01' = {
       }
     ]
   }
+  dependsOn: [
+    policyRules
+  ]
 }
 
 // Firewall activity and metrics sent to the central workspace.
@@ -209,6 +156,30 @@ resource firewallDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-p
         enabled: true
       }
     ]
+  }
+}
+
+resource firewallLock 'Microsoft.Authorization/locks@2020-05-01' = if (enableDeleteLock) {
+  scope: firewall
+  name: '${firewallName}-lck'
+  properties: {
+    level: 'CanNotDelete'
+  }
+}
+
+resource firewallPolicyLock 'Microsoft.Authorization/locks@2020-05-01' = if (enableDeleteLock) {
+  scope: firewallPolicy
+  name: '${firewallPolicyName}-lck'
+  properties: {
+    level: 'CanNotDelete'
+  }
+}
+
+resource firewallPublicIpLock 'Microsoft.Authorization/locks@2020-05-01' = if (enableDeleteLock) {
+  scope: firewallPublicIp
+  name: '${publicIpName}-lck'
+  properties: {
+    level: 'CanNotDelete'
   }
 }
 

@@ -94,3 +94,22 @@ Describe 'Region stamp outputs' {
         }
     }
 }
+
+Describe 'Region stamp firewall security (Phase 2)' {
+    It 'deploys Azure Firewall Premium in every stamp' {
+        (Get-StampModuleParameters 'azure-firewall').firewallTier.value | Should -Be 'Premium'
+    }
+
+    It 'runs IDPS in Deny in prod and Alert in dev' {
+        (Get-StampModuleParameters 'azure-firewall').idpsMode |
+            Should -Be "[if(variables('isProd'), createObject('value', 'Deny'), createObject('value', 'Alert'))]"
+    }
+
+    It 'limits OS update egress to the management subnet' {
+        @((Get-StampModuleParameters 'azure-firewall').managementAddressPrefixes.value) | Should -Be @("[parameters('addressPlan').managementSubnetPrefix]")
+    }
+
+    It 'locks the hub VNet, Key Vault and firewall resources in prod only (<_>)' -ForEach 'hub-network', 'key-vault', 'azure-firewall' {
+        (Get-StampModuleParameters $_).enableDeleteLock.value | Should -Be "[variables('isProd')]"
+    }
+}
