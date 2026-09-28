@@ -9,3 +9,26 @@ Describe 'Management access wiring (F1)' {
         $deployment.properties.parameters.managementSourceCidrs.value | Should -Be "[parameters('managementSourceCidrs')]"
     }
 }
+
+Describe 'Spoke CIDR single source of truth (F5)' {
+    It 'firewall spoke source ranges come from spokeVnetAddressSpace' {
+        (Get-ModuleDeployment -Template $main -Name 'azure-firewall').properties.parameters.spokeAddressPrefixes.value |
+            Should -Be "[parameters('spokeVnetAddressSpace')]"
+    }
+
+    It 'spoke VNet address space comes from spokeVnetAddressSpace' {
+        (Get-ModuleDeployment -Template $main -Name 'spoke-network').properties.parameters.vnetAddressSpace.value |
+            Should -Be "[parameters('spokeVnetAddressSpace')]"
+    }
+
+    It 'private endpoint sources are derived from the App Service and management subnet prefixes' {
+        $value = (Get-ModuleDeployment -Template $main -Name 'spoke-network').properties.parameters.approvedPrivateEndpointSourceCidrs.value
+        $value | Should -Match 'appServiceIntegrationSubnetAddressPrefix'
+        $value | Should -Match 'virtualMachineSubnetAddressPrefix'
+        $value | Should -Match 'additionalPrivateEndpointSourceCidrs'
+    }
+
+    It 'no longer exposes approvedPrivateEndpointSourceCidrs' {
+        $main.parameters.PSObject.Properties.Name | Should -Not -Contain 'approvedPrivateEndpointSourceCidrs'
+    }
+}

@@ -22,6 +22,11 @@ Applies the Phase 0 defect fixes to the existing `defenStack` resource group (de
 | Name | Default | Prod value | Rationale |
 |---|---|---|---|
 | `managementSourceCidrs` | `[]` | `[]` until Phase 3 (then AzureBastionSubnet + P2S pool) | Only named admin sources may reach SSH/RDP; empty = deny all |
+| `spokeVnetAddressSpace` | `['10.0.0.0/16']` | same | Single source for spoke VNet and firewall source ranges |
+| `privateEndpointSubnetAddressPrefix` | `10.0.1.0/24` | same | Must stay inside `spokeVnetAddressSpace` |
+| `appServiceIntegrationSubnetAddressPrefix` | `10.0.2.0/24` | same | Also an approved PE source |
+| `virtualMachineSubnetAddressPrefix` | `10.0.3.0/24` | same | Also an approved PE source (jump host reaches Key Vault/Storage) |
+| `additionalPrivateEndpointSourceCidrs` | `[]` | `[]` | Replaces removed `approvedPrivateEndpointSourceCidrs` |
 
 ## 4. Step-by-step deployment
 1. Run the local test suite and confirm every test passes:
@@ -80,12 +85,22 @@ Until Task 11 creates `params/dev.bicepparam`, use `--template-file main.bicep -
 
 **Manual steps:** none.
 
+### F5 - Spoke CIDRs defined once
+**Change:** the firewall source ranges and the private endpoint NSG sources are derived from the spoke address parameters instead of repeated literals. The management subnet (`10.0.3.0/24`) is now an approved private endpoint source, so the future jump host can reach Key Vault and Storage.
+
+**Breaking parameter change:** `approvedPrivateEndpointSourceCidrs` no longer exists. If you passed it before, pass only the *extra* ranges through `additionalPrivateEndpointSourceCidrs`.
+
+**Expected what-if:** `~ Modify` on `<spoke>-private-endpoints-nsg` rule `allow-approved-https`: `sourceAddressPrefixes` gains `10.0.3.0/24`. No firewall policy change with default values.
+
+**Manual steps:** none.
+
 ## 6. Validation
 | Check | Command | Expected result |
 |---|---|---|
 | Management subnet has its own NSG | `az network vnet subnet show -g defenStack --vnet-name <spoke-vnet> -n virtual-machines --query "{nsg:networkSecurityGroup.id,rt:routeTable.id}" -o json` | `nsg` ends `-virtual-machines-nsg`; `rt` ends `-virtual-machines-egress-rt` |
 | BGP propagation disabled | `az network route-table list -g defenStack --query "[].{name:name,bgpOff:disableBgpRoutePropagation}" -o table` | `bgpOff` = `True` for both spoke route tables |
 | No admin inbound yet | `az network nsg rule list -g defenStack --nsg-name <spoke-vnet>-virtual-machines-nsg -o table` | Only `deny-unsolicited-inbound` (4096) |
+| PE NSG sources | `az network nsg rule show -g defenStack --nsg-name <spoke-vnet>-private-endpoints-nsg -n allow-approved-https --query sourceAddressPrefixes -o tsv` | `10.0.2.0/24` and `10.0.3.0/24` |
 
 ## 7. Rollback
 General rollback: redeploy the last good commit from `main` with the same commands in §4. Per-fix exceptions are listed below.

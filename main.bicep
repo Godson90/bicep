@@ -76,10 +76,22 @@ param virtualMachineAdminPassword string = ''
 @description('Approved outbound HTTPS destinations. An empty list keeps application traffic denied by the firewall.')
 param allowedOutboundFqdns array = []
 
-@description('CIDR ranges allowed to reach private endpoints over HTTPS.')
-param approvedPrivateEndpointSourceCidrs array = [
-  '10.0.2.0/24'
+@description('Spoke VNet address space. Also used as the firewall source range for spoke egress rules.')
+param spokeVnetAddressSpace array = [
+  '10.0.0.0/16'
 ]
+
+@description('Private endpoint subnet prefix inside spokeVnetAddressSpace.')
+param privateEndpointSubnetAddressPrefix string = '10.0.1.0/24'
+
+@description('App Service integration subnet prefix inside spokeVnetAddressSpace.')
+param appServiceIntegrationSubnetAddressPrefix string = '10.0.2.0/24'
+
+@description('Management VM subnet prefix inside spokeVnetAddressSpace.')
+param virtualMachineSubnetAddressPrefix string = '10.0.3.0/24'
+
+@description('Extra CIDR ranges, beyond the App Service integration and management subnets, allowed to reach private endpoints over HTTPS.')
+param additionalPrivateEndpointSourceCidrs array = []
 
 @description('CIDR ranges allowed to administer management VMs over SSH/RDP, such as AzureBastionSubnet or the P2S client pool. Empty denies all administrative inbound traffic.')
 param managementSourceCidrs array = []
@@ -152,9 +164,7 @@ module azureFirewall 'modules/azureFirewall.bicep' = {
     publicIpName: firewallPublicIpName
     firewallSubnetId: hubNetwork.outputs.firewallSubnetId
     logAnalyticsWorkspaceId: monitoring.outputs.id
-    spokeAddressPrefixes: [
-      '10.0.0.0/16'
-    ]
+    spokeAddressPrefixes: spokeVnetAddressSpace
     allowedOutboundFqdns: allowedOutboundFqdns
   }
 }
@@ -167,7 +177,14 @@ module spokeNetwork 'modules/spokeNetwork.bicep' = {
     vnetName: spokeVnetName
     firewallPrivateIp: azureFirewall.outputs.privateIp
     logAnalyticsWorkspaceId: monitoring.outputs.id
-    approvedPrivateEndpointSourceCidrs: approvedPrivateEndpointSourceCidrs
+    vnetAddressSpace: spokeVnetAddressSpace
+    privateEndpointSubnetAddressPrefix: privateEndpointSubnetAddressPrefix
+    appServiceIntegrationSubnetAddressPrefix: appServiceIntegrationSubnetAddressPrefix
+    virtualMachineSubnetAddressPrefix: virtualMachineSubnetAddressPrefix
+    approvedPrivateEndpointSourceCidrs: concat([
+      appServiceIntegrationSubnetAddressPrefix
+      virtualMachineSubnetAddressPrefix
+    ], additionalPrivateEndpointSourceCidrs)
     privateEndpointSubnetName: privateEndpointSubnetName
     appServiceIntegrationSubnetName: appServiceIntegrationSubnetName
     enableDeleteLock: environmentType == 'prod'

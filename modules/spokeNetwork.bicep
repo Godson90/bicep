@@ -17,10 +17,8 @@ param firewallPrivateIp string
 @description('Log Analytics workspace resource ID for VNet diagnostics.')
 param logAnalyticsWorkspaceId string
 
-@description('CIDR ranges allowed to reach private endpoints over HTTPS.')
-param approvedPrivateEndpointSourceCidrs array = [
-  '10.0.2.0/24'
-]
+@description('CIDR ranges allowed to reach private endpoints over HTTPS. The caller derives these from subnet prefixes so they cannot drift.')
+param approvedPrivateEndpointSourceCidrs array
 
 @description('Private endpoint subnet name.')
 param privateEndpointSubnetName string = 'private-endpoints'

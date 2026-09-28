@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "15578516980464027645"
+      "templateHash": "8063536590992544016"
     }
   },
   "parameters": {
@@ -154,13 +154,41 @@
         "description": "Approved outbound HTTPS destinations. An empty list keeps application traffic denied by the firewall."
       }
     },
-    "approvedPrivateEndpointSourceCidrs": {
+    "spokeVnetAddressSpace": {
       "type": "array",
       "defaultValue": [
-        "10.0.2.0/24"
+        "10.0.0.0/16"
       ],
       "metadata": {
-        "description": "CIDR ranges allowed to reach private endpoints over HTTPS."
+        "description": "Spoke VNet address space. Also used as the firewall source range for spoke egress rules."
+      }
+    },
+    "privateEndpointSubnetAddressPrefix": {
+      "type": "string",
+      "defaultValue": "10.0.1.0/24",
+      "metadata": {
+        "description": "Private endpoint subnet prefix inside spokeVnetAddressSpace."
+      }
+    },
+    "appServiceIntegrationSubnetAddressPrefix": {
+      "type": "string",
+      "defaultValue": "10.0.2.0/24",
+      "metadata": {
+        "description": "App Service integration subnet prefix inside spokeVnetAddressSpace."
+      }
+    },
+    "virtualMachineSubnetAddressPrefix": {
+      "type": "string",
+      "defaultValue": "10.0.3.0/24",
+      "metadata": {
+        "description": "Management VM subnet prefix inside spokeVnetAddressSpace."
+      }
+    },
+    "additionalPrivateEndpointSourceCidrs": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Extra CIDR ranges, beyond the App Service integration and management subnets, allowed to reach private endpoints over HTTPS."
       }
     },
     "managementSourceCidrs": {
@@ -694,9 +722,7 @@
             "value": "[reference(resourceId('Microsoft.Resources/deployments', 'monitoring'), '2025-04-01').outputs.id.value]"
           },
           "spokeAddressPrefixes": {
-            "value": [
-              "10.0.0.0/16"
-            ]
+            "value": "[parameters('spokeVnetAddressSpace')]"
           },
           "allowedOutboundFqdns": {
             "value": "[parameters('allowedOutboundFqdns')]"
@@ -974,8 +1000,20 @@
           "logAnalyticsWorkspaceId": {
             "value": "[reference(resourceId('Microsoft.Resources/deployments', 'monitoring'), '2025-04-01').outputs.id.value]"
           },
+          "vnetAddressSpace": {
+            "value": "[parameters('spokeVnetAddressSpace')]"
+          },
+          "privateEndpointSubnetAddressPrefix": {
+            "value": "[parameters('privateEndpointSubnetAddressPrefix')]"
+          },
+          "appServiceIntegrationSubnetAddressPrefix": {
+            "value": "[parameters('appServiceIntegrationSubnetAddressPrefix')]"
+          },
+          "virtualMachineSubnetAddressPrefix": {
+            "value": "[parameters('virtualMachineSubnetAddressPrefix')]"
+          },
           "approvedPrivateEndpointSourceCidrs": {
-            "value": "[parameters('approvedPrivateEndpointSourceCidrs')]"
+            "value": "[concat(createArray(parameters('appServiceIntegrationSubnetAddressPrefix'), parameters('virtualMachineSubnetAddressPrefix')), parameters('additionalPrivateEndpointSourceCidrs'))]"
           },
           "privateEndpointSubnetName": {
             "value": "[variables('privateEndpointSubnetName')]"
@@ -998,7 +1036,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "13242082806388651772"
+              "templateHash": "657447410654842125"
             }
           },
           "parameters": {
@@ -1039,11 +1077,8 @@
             },
             "approvedPrivateEndpointSourceCidrs": {
               "type": "array",
-              "defaultValue": [
-                "10.0.2.0/24"
-              ],
               "metadata": {
-                "description": "CIDR ranges allowed to reach private endpoints over HTTPS."
+                "description": "CIDR ranges allowed to reach private endpoints over HTTPS. The caller derives these from subnet prefixes so they cannot drift."
               }
             },
             "privateEndpointSubnetName": {
