@@ -40,3 +40,39 @@ Describe 'Deploy workflow gating' {
         $create | Should -BeGreaterThan $whatIf
     }
 }
+
+Describe 'Deploy workflow plan/apply split (Phase 2)' {
+    BeforeAll {
+        $planStart = $deploy.IndexOf('  plan:')
+        $applyStart = $deploy.IndexOf('  apply:')
+        $planJob = $deploy.Substring($planStart, $applyStart - $planStart)
+        $applyJob = $deploy.Substring($applyStart)
+    }
+
+    It 'has a plan job before an apply job' {
+        $planStart | Should -BeGreaterThan -1
+        $applyStart | Should -BeGreaterThan $planStart
+    }
+
+    It 'runs validate and what-if in the plan job, in the ungated <env>-plan environment' {
+        $planJob | Should -Match "environment: \$\{\{ inputs\.environment \|\| 'dev' \}\}-plan"
+        $planJob | Should -Match 'az deployment sub validate'
+        $planJob | Should -Match 'az deployment sub what-if'
+        $planJob | Should -Not -Match 'az deployment sub create'
+    }
+
+    It 'creates only in the apply job, which waits for plan and runs in the reviewer-gated <env> environment' {
+        $applyJob | Should -Match 'needs: plan'
+        $applyJob | Should -Match "environment: \$\{\{ inputs\.environment \|\| 'dev' \}\}\s"
+        $applyJob | Should -Match 'az deployment sub create'
+        $applyJob | Should -Not -Match 'az deployment sub what-if'
+    }
+
+    It 'runs both jobs from main only' {
+        ([regex]::Matches($deploy, "if: github\.ref == 'refs/heads/main'")).Count | Should -Be 2
+    }
+
+    It 'runs the PR what-if in dev-plan' {
+        $ci | Should -Match 'environment: dev-plan'
+    }
+}

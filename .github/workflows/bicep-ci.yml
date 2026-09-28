@@ -50,7 +50,7 @@ jobs:
     if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository
     needs: validate
     runs-on: ubuntu-latest
-    environment: dev
+    environment: dev-plan
     permissions:
       contents: read
       id-token: write

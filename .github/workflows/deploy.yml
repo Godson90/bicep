@@ -29,10 +29,11 @@ env:
   TARGET_ENV: ${{ inputs.environment || 'dev' }}
 
 jobs:
-  deploy:
+  # Validate and what-if without approval, so reviewers can read the change before approving apply.
+  plan:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment || 'dev' }}
+    environment: ${{ inputs.environment || 'dev' }}-plan
     steps:
       - uses: actions/checkout@v4
 
@@ -70,6 +71,32 @@ jobs:
             head -c 60000 whatif.txt
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the what-if for reviewers
+        uses: actions/upload-artifact@v4
+        with:
+          name: whatif-${{ inputs.environment || 'dev' }}
+          path: whatif.txt
+
+  # Gated by the target environment's required reviewers (prod); reviewers read the plan job summary first.
+  apply:
+    needs: plan
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment || 'dev' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Bicep CLI
+        run: |
+          az config set bicep.use_binary_from_path=false
+          az bicep install --version "$BICEP_VERSION"
 
       - name: Deploy
         run: |

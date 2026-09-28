@@ -7,6 +7,7 @@ BeforeAll {
     # arguments, first match wins) to the value to return; every call is recorded in $global:AzCalls.
     function Set-AzShadow([System.Collections.Specialized.OrderedDictionary]$Responses) {
         $global:AzCalls = [System.Collections.Generic.List[string]]::new()
+        $global:FederatedCredentialPayloads = [System.Collections.Generic.List[string]]::new()
         $global:AzResponses = $Responses
         function global:az {
             $joined = $args -join ' '
@@ -15,6 +16,10 @@ BeforeAll {
             if ($joined -like 'role definition create*') {
                 $file = ($args | Where-Object { $_ -like '@*' }) -replace '^@', ''
                 $global:RoleDefinitionPayload = Get-Content $file -Raw
+            }
+            if ($joined -like 'ad app federated-credential create*') {
+                $file = ($args | Where-Object { $_ -like '@*' }) -replace '^@', ''
+                $global:FederatedCredentialPayloads.Add((Get-Content $file -Raw))
             }
             foreach ($pattern in $global:AzResponses.Keys) {
                 if ($joined -like $pattern) { return $global:AzResponses[$pattern] }
@@ -120,6 +125,7 @@ Describe 'New-GitHubDeploymentIdentity.ps1' {
         $responses = New-BaseResponses
         $responses['*ad app list*'] = 'cccccccc-3333-3333-3333-333333333333'
         $responses['*ad sp list*'] = 'dddddddd-4444-4444-4444-444444444444'
+        $responses['*federated-credential list*github-dev-plan*'] = 'repo:Godson90/bicep:environment:dev-plan'
         $responses['*federated-credential list*'] = 'repo:Godson90/bicep:environment:dev'
         $responses['*role definition list*'] = 'existing-custom-role'
         $responses['*role assignment list*condition*'] = ''
@@ -139,6 +145,7 @@ Describe 'New-GitHubDeploymentIdentity.ps1' {
             $responses = New-BaseResponses
             $responses['*ad app list*'] = 'cccccccc-3333-3333-3333-333333333333'
             $responses['*ad sp list*'] = 'dddddddd-4444-4444-4444-444444444444'
+            $responses['*federated-credential list*github-dev-plan*'] = 'repo:Godson90/bicep:environment:dev-plan'
             $responses['*federated-credential list*'] = 'repo:Godson90/bicep:environment:dev'
             $responses['*role definition list*'] = 'existing-custom-role'
             Set-AzShadow $responses
@@ -182,6 +189,7 @@ Describe 'New-GitHubDeploymentIdentity.ps1' {
             $responses = New-BaseResponses
             $responses['*ad app list*'] = 'cccccccc-3333-3333-3333-333333333333'
             $responses['*ad sp list*'] = 'dddddddd-4444-4444-4444-444444444444'
+            $responses['*federated-credential list*github-dev-plan*'] = 'repo:Godson90/bicep:environment:dev-plan'
             $responses['*federated-credential list*'] = 'repo:Godson90/bicep:environment:dev'
             $responses['*role definition list*'] = ''
             Set-AzShadow $responses
@@ -214,8 +222,47 @@ Describe 'New-GitHubDeploymentIdentity.ps1' {
             @($script:roleDefinitionPayload.AssignableScopes) | Should -Be @('/subscriptions/22222222-2222-2222-2222-222222222222')
         }
     }
+
+    Context 'federated credentials for the plan and apply environments (Phase 2)' {
+        It 'creates github-<env> and github-<env>-plan with their exact environment subjects' {
+            $responses = New-BaseResponses
+            $responses['*ad app list*'] = 'cccccccc-3333-3333-3333-333333333333'
+            $responses['*ad sp list*'] = 'dddddddd-4444-4444-4444-444444444444'
+            $responses['*role definition list*'] = 'existing-custom-role'
+            Set-AzShadow $responses
+            try {
+                & $scriptPath -ResourceGroupNames $resourceGroups -GitHubRepository 'Godson90/bicep' -EnvironmentName 'prod' -Confirm:$false | Out-Null
+            }
+            finally {
+                Remove-AzShadow
+            }
+            $credentials = @($global:FederatedCredentialPayloads | ForEach-Object { $_ | ConvertFrom-Json })
+            $credentials.Count | Should -Be 2
+            ($credentials | Where-Object { $_.name -eq 'github-prod' }).subject | Should -BeExactly 'repo:Godson90/bicep:environment:prod'
+            ($credentials | Where-Object { $_.name -eq 'github-prod-plan' }).subject | Should -BeExactly 'repo:Godson90/bicep:environment:prod-plan'
+            foreach ($credential in $credentials) {
+                $credential.issuer | Should -BeExactly 'https://token.actions.githubusercontent.com'
+                @($credential.audiences) | Should -Be @('api://AzureADTokenExchange')
+            }
+        }
+
+        It 'refuses an existing credential whose subject differs only in case' {
+            $responses = New-BaseResponses
+            $responses['*ad app list*'] = 'cccccccc-3333-3333-3333-333333333333'
+            $responses['*ad sp list*'] = 'dddddddd-4444-4444-4444-444444444444'
+            $responses['*federated-credential list*'] = 'repo:godson90/bicep:environment:dev'
+            Set-AzShadow $responses
+            try {
+                { & $scriptPath -ResourceGroupNames $resourceGroups -GitHubRepository 'Godson90/bicep' -EnvironmentName 'dev' -WhatIf } |
+                    Should -Throw -ExpectedMessage "*expected 'repo:Godson90/bicep:environment:dev'*"
+            }
+            finally {
+                Remove-AzShadow
+            }
+        }
+    }
 }
 
 AfterAll {
-    Remove-Variable -Name AzCalls -Scope Global -ErrorAction SilentlyContinue
+    Remove-Variable -Name AzCalls, FederatedCredentialPayloads, RoleDefinitionPayload -Scope Global -ErrorAction SilentlyContinue
 }

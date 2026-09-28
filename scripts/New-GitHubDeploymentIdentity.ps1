@@ -68,11 +68,11 @@ if ([string]::IsNullOrWhiteSpace($DisplayName)) {
 
 $subscriptionScope = "/subscriptions/$SubscriptionId"
 $resourceGroupScopes = @($ResourceGroupNames | ForEach-Object { "$subscriptionScope/resourceGroups/$_" })
-$credentialName = "github-$EnvironmentName"
-$subject = "repo:${GitHubRepository}:environment:$EnvironmentName"
+# The deploy workflow's plan job runs in '<env>-plan' (no reviewers) and its apply job in '<env>' (reviewers in prod).
+$credentialEnvironments = @($EnvironmentName, "$EnvironmentName-plan")
 
 Write-Host "Application: $DisplayName"
-Write-Host "Federated subject: $subject"
+Write-Host "Federated subjects: $(($credentialEnvironments | ForEach-Object { "repo:${GitHubRepository}:environment:$_" }) -join ', ')"
 Write-Host "Resource group scopes: $($resourceGroupScopes -join ', ')"
 
 # 1. Application registration (idempotent by exact display name match).
@@ -109,34 +109,50 @@ if ([string]::IsNullOrWhiteSpace($servicePrincipalId)) {
     }
 }
 
-# 3. Federated credential bound to the GitHub environment; an existing one must have the same subject.
-$existingSubject = $null
-if ($appId -ne '<new-application-id>') {
-    $existingSubject = az ad app federated-credential list --id $appId --query "[?name=='$credentialName'].subject" --output tsv
-}
-if (-not [string]::IsNullOrWhiteSpace($existingSubject)) {
-    if ($existingSubject -ne $subject) {
-        throw "Federated credential '$credentialName' exists with subject '$existingSubject', expected '$subject'. Delete it (az ad app federated-credential delete --id $appId --federated-credential-id $credentialName) and re-run."
-    }
-    Write-Host "Federated credential '$credentialName' already present."
-}
-elseif ($PSCmdlet.ShouldProcess($subject, 'Create federated credential')) {
-    $credentialFile = New-TemporaryFile
-    try {
-        @{
-            name        = $credentialName
-            issuer      = 'https://token.actions.githubusercontent.com'
-            subject     = $subject
-            audiences   = @('api://AzureADTokenExchange')
-            description = "GitHub Actions environment '$EnvironmentName' for $GitHubRepository"
-        } | ConvertTo-Json | Set-Content -Path $credentialFile -Encoding ASCII
+# 3. Federated credentials bound to the GitHub environments; an existing one must have exactly the same subject.
+function Set-FederatedCredential {
+    param(
+        [string]$GitHubEnvironment
+    )
 
-        az ad app federated-credential create --id $appId --parameters "@$credentialFile" --output none
-        if ($LASTEXITCODE -ne 0) { throw 'Failed to create the federated credential.' }
+    $credentialName = "github-$GitHubEnvironment"
+    $subject = "repo:${GitHubRepository}:environment:$GitHubEnvironment"
+
+    $existingSubject = $null
+    if ($appId -ne '<new-application-id>') {
+        $existingSubject = az ad app federated-credential list --id $appId --query "[?name=='$credentialName'].subject" --output tsv
     }
-    finally {
-        Remove-Item $credentialFile -Force
+    if (-not [string]::IsNullOrWhiteSpace($existingSubject)) {
+        # Entra matches subjects case-sensitively, so compare case-sensitively too.
+        if ($existingSubject -cne $subject) {
+            throw "Federated credential '$credentialName' exists with subject '$existingSubject', expected '$subject'. Delete it (az ad app federated-credential delete --id $appId --federated-credential-id $credentialName) and re-run."
+        }
+        Write-Host "Federated credential '$credentialName' already present."
+        return
     }
+
+    if ($PSCmdlet.ShouldProcess($subject, 'Create federated credential')) {
+        $credentialFile = New-TemporaryFile
+        try {
+            @{
+                name        = $credentialName
+                issuer      = 'https://token.actions.githubusercontent.com'
+                subject     = $subject
+                audiences   = @('api://AzureADTokenExchange')
+                description = "GitHub Actions environment '$GitHubEnvironment' for $GitHubRepository"
+            } | ConvertTo-Json | Set-Content -Path $credentialFile -Encoding ASCII
+
+            az ad app federated-credential create --id $appId --parameters "@$credentialFile" --output none
+            if ($LASTEXITCODE -ne 0) { throw "Failed to create the federated credential '$credentialName'." }
+        }
+        finally {
+            Remove-Item $credentialFile -Force
+        }
+    }
+}
+
+foreach ($credentialEnvironment in $credentialEnvironments) {
+    Set-FederatedCredential -GitHubEnvironment $credentialEnvironment
 }
 
 function Set-RoleAssignment {
@@ -268,9 +284,11 @@ $result = [pscustomobject]@{
 }
 
 Write-Host ''
-Write-Host "Create these variables on the GitHub environment '$EnvironmentName' (Settings > Environments), or run:"
-foreach ($property in $result.PSObject.Properties) {
-    Write-Host "gh variable set $($property.Name) --env $EnvironmentName --repo $GitHubRepository --body '$($property.Value)'"
+Write-Host "Create these variables on both GitHub environments '$($credentialEnvironments -join "' and '")' (Settings > Environments), or run:"
+foreach ($credentialEnvironment in $credentialEnvironments) {
+    foreach ($property in $result.PSObject.Properties) {
+        Write-Host "gh variable set $($property.Name) --env $credentialEnvironment --repo $GitHubRepository --body '$($property.Value)'"
+    }
 }
 
 $result
