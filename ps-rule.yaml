@@ -14,24 +14,12 @@ configuration:
 rule:
   # Each exclusion must name the phase that resolves it or the ADR that accepts it.
   exclude:
-    # Phase 1: multi-region Log Analytics workspace replication arrives with regionStamp.bicep.
-    - Azure.Log.Replication
     # Phase 5: storage account moves to GZRS.
     - Azure.Storage.UseReplication
-    # Phase 1: availability zones cannot be added to an existing non-zonal public IP in place.
-    - Azure.PublicIP.AvailabilityZone
-    # Phase 1: availability zones cannot be added to an existing non-zonal firewall in place.
-    - Azure.Firewall.AvailabilityZone
     # Phase 3: NSG lateral-movement (SSH/RDP) outbound rules land with the Bastion/VPN/jump-host admin access redesign.
     - Azure.NSG.LateralTraversal
-    # Phase 1: App Service Plan moves to a zone-redundant SKU with >=3 instances.
-    - Azure.AppService.PlanInstanceCount
-    # Phase 1: App Service Plan zone redundancy is set at plan creation only.
-    - Azure.AppService.AvailabilityZone
     # ADR-002: no organization-wide tagging convention exists yet.
     - Azure.Resource.UseTags
-    # ADR-003: dev intentionally uses threatIntelMode Alert; prod already uses Deny.
-    - Azure.Firewall.PolicyMode
     # ADR-004: zero-trust default-deny-all-inbound is the intended design for these NSGs.
     - Azure.NSG.DenyAllInbound
     # ADR-005: the VNet DNS proxy points at Azure Firewall's single private IP by design.

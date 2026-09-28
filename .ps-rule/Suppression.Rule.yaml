@@ -1,0 +1,39 @@
+---
+# Synopsis: Dev and the East US warm standby run one App Service instance without zone redundancy (ADR-008).
+apiVersion: github.com/microsoft/PSRule/v1
+kind: SuppressionGroup
+metadata:
+  name: DefenStack.SingleInstanceAppServicePlans
+spec:
+  rule:
+    - Azure.AppService.AvailabilityZone
+    - Azure.AppService.PlanInstanceCount
+  if:
+    name: '.'
+    in:
+      - asp-defenstack-dev-wus3
+      - asp-defenstack-prod-eus
+---
+# Synopsis: The dev workspace is single-region; only prod replicates to the secondary region (ADR-008).
+apiVersion: github.com/microsoft/PSRule/v1
+kind: SuppressionGroup
+metadata:
+  name: DefenStack.DevWorkspaceReplication
+spec:
+  rule:
+    - Azure.Log.Replication
+  if:
+    name: '.'
+    equals: log-defenstack-dev
+---
+# Synopsis: Dev firewall policy runs threat intelligence in Alert mode; prod runs Deny (ADR-003).
+apiVersion: github.com/microsoft/PSRule/v1
+kind: SuppressionGroup
+metadata:
+  name: DefenStack.DevFirewallAlertMode
+spec:
+  rule:
+    - Azure.Firewall.PolicyMode
+  if:
+    name: '.'
+    equals: afwp-defenstack-dev-wus3
