@@ -2,6 +2,12 @@
 
 This deployment creates a private spoke VNet, a dedicated hub VNet, Azure Firewall Standard, a Log Analytics workspace, private endpoints, private DNS links, subnet NSGs, and reciprocal hub/spoke peering. Storage and App Service public network access are disabled.
 
+### Documentation
+
+- Design: `docs/superpowers/specs/2026-09-25-secure-connectivity-design.md`
+- Runbooks: `docs/runbooks/` - start with `00-pipeline-and-identity.md` and `00a-apply-phase0-fixes.md`
+- Runbook structure (mandatory for every change): `docs/runbooks/_template.md`
+
 ### Module layout
 
 `main.bicep` is intentionally limited to deployment parameters, module composition, and the application hostname output. Resource ownership is split into focused modules:
@@ -223,48 +229,30 @@ Azure Firewall has ongoing hourly and data-processing charges. Regional VNet pee
 
 ### Validate and build
 
-```powershell
-bicep lint main.bicep
-bicep lint modules/azureFirewall.bicep
-bicep lint modules/monitoring.bicep
-bicep lint modules/storage.bicep
-bicep lint modules/hubNetwork.bicep
-bicep lint modules/spokeNetwork.bicep
-bicep lint modules/privateConnectivity.bicep
-bicep lint modules/networkIntegration.bicep
-bicep lint modules/virtualMachine.bicep
-bicep lint modules/keyVault.bicep
-bicep lint modules/appService.bicep
-bicep lint modules/vnet.bicep
+Run all local checks: lint every Bicep file, compile, template assertions, and verify `main.json` is current:
 
-bicep build main.bicep
-bicep build modules/azureFirewall.bicep --stdout
-bicep build modules/monitoring.bicep --stdout
-bicep build modules/storage.bicep --stdout
-bicep build modules/hubNetwork.bicep --stdout
-bicep build modules/spokeNetwork.bicep --stdout
-bicep build modules/privateConnectivity.bicep --stdout
-bicep build modules/networkIntegration.bicep --stdout
-bicep build modules/virtualMachine.bicep --stdout
-bicep build modules/keyVault.bicep --stdout
-bicep build modules/appService.bicep --stdout
-bicep build modules/vnet.bicep --stdout
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tests/Invoke-Tests.ps1
 ```
+
+After changing any `.bicep` file, regenerate the committed ARM template:
+
+```powershell
+bicep build main.bicep
+```
+
+CI (`.github/workflows/bicep-ci.yml`) runs the same tests plus PSRule for Azure on every pull request.
 
 ### Validate against Azure
 
 ```powershell
 az deployment group validate `
 	--resource-group <resource-group> `
-	--template-file main.bicep `
-	--parameters environmentType=dev `
-							 allowedOutboundFqdns='["management.azure.com","*.azurewebsites.net"]'
+	--parameters params/dev.bicepparam
 
 az deployment group what-if `
 	--resource-group <resource-group> `
-	--template-file main.bicep `
-	--parameters environmentType=dev `
-							 allowedOutboundFqdns='["management.azure.com","*.azurewebsites.net"]'
+	--parameters params/dev.bicepparam
 ```
 
 Use `environmentType=prod` for the Premium V3 App Service plan and production deletion protection behavior. Review the what-if output before deployment, especially the firewall subnet size, route-table association, reciprocal peerings, private endpoint placement, DNS links, and disabled public network access. Do not copy the example FQDNs into production without confirming the application's actual dependencies.

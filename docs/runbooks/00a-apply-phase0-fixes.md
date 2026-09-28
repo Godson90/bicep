@@ -361,7 +361,11 @@ General rollback: redeploy the last good commit from `main` with the same comman
   described in §5 before the reverted setting takes effect on that NIC.
 
 ## 8. Operations
-See the per-fix notes in §5.
+- Firewall saved queries: use `AZFW*` tables (F9).
+- Blob restore: see F6/F7 in §5.
+- Key Vault deployment references: result of the F4 verification is recorded in the execution record; if it failed, see ADR-001.
+- Storage access for new containers: add container-scoped role assignments in Bicep (F11).
+- Health check path must track the application's health endpoint (F8).
 
 ## 9. Troubleshooting
 | Symptom / error text | Cause | Fix |
@@ -372,3 +376,9 @@ See the per-fix notes in §5.
 | App gets `AuthorizationPermissionMismatch` on another container | Access is now limited to `def-blob` | Add a container-scoped assignment for the extra container through Bicep; do not widen to account scope |
 | Instances marked unhealthy after deploy | App returns non-2xx on `healthCheckPath` | Set `healthCheckPath` to a real health endpoint and redeploy |
 | `401` from publish profile deploy | Basic auth disabled by F8 | Use `az webapp deploy` with Entra ID credentials |
+
+## Execution record
+| Date (UTC) | Environment | Deployment name | Operator | Result | Notes |
+|---|---|---|---|---|---|
+
+_No executions yet — the first dev run is pending (see "Deferred live steps" in the Phase 0 PR)._
