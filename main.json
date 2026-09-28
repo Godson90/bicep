@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "6349500973089506134"
+      "templateHash": "7959641766230310548"
     }
   },
   "parameters": {
@@ -460,6 +460,9 @@
           },
           "enablePurgeProtection": {
             "value": true
+          },
+          "enabledForTemplateDeployment": {
+            "value": true
           }
         },
         "template": {
@@ -469,7 +472,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "8612719118367838209"
+              "templateHash": "10068724592814895181"
             }
           },
           "parameters": {
@@ -515,6 +518,13 @@
               "metadata": {
                 "description": "Enable purge protection. Keep enabled for production workloads."
               }
+            },
+            "enabledForTemplateDeployment": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "Allow Azure Resource Manager to retrieve secrets during deployments, required for az.getSecret() in .bicepparam files. Keep false for vaults that never back deployment parameters."
+              }
             }
           },
           "resources": [
@@ -529,6 +539,7 @@
                 "enableSoftDelete": true,
                 "softDeleteRetentionInDays": "[parameters('softDeleteRetentionInDays')]",
                 "enablePurgeProtection": "[parameters('enablePurgeProtection')]",
+                "enabledForTemplateDeployment": "[parameters('enabledForTemplateDeployment')]",
                 "publicNetworkAccess": "Disabled",
                 "sku": {
                   "family": "A",
@@ -2359,7 +2370,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "5380841957638665573"
+              "templateHash": "8425003992988143847"
             }
           },
           "parameters": {
@@ -2671,6 +2682,10 @@
             "appServicePrivateEndpointId": {
               "type": "string",
               "value": "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-pe', parameters('appServiceName')))]"
+            },
+            "keyVaultPrivateEndpointId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-pe', parameters('keyVaultName')))]"
             }
           }
         }

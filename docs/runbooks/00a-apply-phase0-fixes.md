@@ -36,6 +36,7 @@ Applies the Phase 0 defect fixes to the existing `defenStack` resource group (de
 | `additionalPrivateEndpointSourceCidrs` | `[]` | `[]` | Replaces removed `approvedPrivateEndpointSourceCidrs` |
 | `threatIntelMode` (firewall module) | `Deny` | `Deny` (main passes `Alert` for dev/test) | Block known-malicious IPs/FQDNs in prod |
 | `availabilityZones` (firewall module) | `[]` | `['1','2','3']` in Phase 1 greenfield | Zones cannot be added to an existing firewall/PIP in place |
+| `enabledForTemplateDeployment` (Key Vault) | `false` (module) | `true` (composed stack) | Required for `az.getSecret()` Key Vault references |
 
 ## 4. Step-by-step deployment
 1. Run the local test suite and confirm every test passes:
@@ -127,6 +128,70 @@ Until Task 11 creates `params/dev.bicepparam`, use `--template-file main.bicep -
 
 **Manual steps:** none.
 
+### F4 - Key Vault template deployment access
+**Change:** the vault now allows Resource Manager to read secrets for deployments. Without this, the README's `az.getSecret()` flow cannot resolve.
+
+**Expected what-if:** `~ Modify` on the Key Vault, where `enabledForTemplateDeployment` goes to `true`.
+
+**Manual verification (required once per environment):** confirm that ARM can resolve a reference while `publicNetworkAccess` is `Disabled`.
+
+1. From an approved network path, create a test secret. Until Phase 3 adds Bastion/VPN there is no private path, so temporarily add your IP:
+
+   ```powershell
+   $vault = '<key-vault-name>'
+   $myIp = (Invoke-RestMethod https://api.ipify.org)
+   az keyvault update -n $vault --public-network-access Enabled --default-action Deny
+   az keyvault network-rule add -n $vault --ip-address "$myIp/32"
+   az keyvault secret set --vault-name $vault -n phase0-reference-test --value "not-a-real-secret"
+   az keyvault network-rule remove -n $vault --ip-address "$myIp/32"
+   az keyvault update -n $vault --public-network-access Disabled
+   ```
+
+   Confirm public access is `Disabled` again before continuing:
+
+   ```powershell
+   az keyvault show -n $vault --query properties.publicNetworkAccess -o tsv
+   ```
+
+2. Create `verify.local.bicepparam` (git-ignored) that references the secret, alongside a scratch template `verify.bicep` containing:
+
+   ```bicep
+   @secure()
+   param probe string
+   output length int = length(probe)
+   ```
+
+   `verify.local.bicepparam`:
+
+   ```bicep
+   using './verify.bicep'
+   param probe = az.getSecret('<subscription-id>', 'defenStack', '<key-vault-name>', 'phase0-reference-test')
+   ```
+
+   `length()` on a secure value is allowed and does not reveal the secret.
+
+3. Run:
+
+   ```powershell
+   az deployment group create -g defenStack --parameters verify.local.bicepparam --query properties.outputs
+   ```
+
+   **Expected:** `length.value` = `17`. Record the result in the PR.
+
+4. Clean up:
+
+   ```powershell
+   az deployment group delete -g defenStack -n verify
+   Remove-Item verify.bicep, verify.local.bicepparam
+   ```
+
+   Delete the test secret during the next private-path session (Phase 3), or now while the temporary IP rule is in place.
+
+5. **If step 3 fails with `ForbiddenByFirewall` or `KeyVaultParameterReferenceSecretRetrieveFailed`:** ARM cannot reach the private vault. Record this in `docs/decisions/ADR-001-keyvault-deployment-references.md` and switch the secret flow to pipeline-side retrieval: the GitHub runner reads the secret over the private path (Phase 3) and passes it with `--parameters` from an environment variable. Do **not** enable public access as a workaround.
+
+### F12 - Key Vault private endpoint output
+**Change:** `privateConnectivity` now outputs `keyVaultPrivateEndpointId`, which later alerting phases use. No Azure change.
+
 ## 6. Validation
 | Check | Command | Expected result |
 |---|---|---|
@@ -139,11 +204,13 @@ Until Task 11 creates `params/dev.bicepparam`, use `--template-file main.bicep -
 | Dedicated tables | In Log Analytics: `AZFWNetworkRule \| take 5` (after 15 minutes of traffic) | Rows returned |
 | (VM enabled only) agent healthy | `az vm extension show -g defenStack --vm-name <vm> -n AzureMonitorLinuxAgent --query provisioningState -o tsv` | `Succeeded` |
 | (VM enabled only) data arriving | Log Analytics: `Heartbeat \| where Computer == "<vm>" \| take 1` after 10 minutes | One row |
+| Template deployment enabled | `az keyvault show -n <key-vault-name> --query "{tmpl:properties.enabledForTemplateDeployment,public:properties.publicNetworkAccess}" -o table` | `tmpl` True, `public` Disabled |
 
 ## 7. Rollback
 General rollback: redeploy the last good commit from `main` with the same commands in §4. Per-fix exceptions are listed below.
 
 - **F1/F2:** redeploy the previous commit. ARM re-points the subnet to the App Service NSG and route table; the new NSG and route table remain and can be deleted afterwards with `az network nsg delete` / `az network route-table delete`.
+- **F4:** set `enabledForTemplateDeployment: false` in `main.bicep` and redeploy, or run `az keyvault update -n <vault> --enabled-for-template-deployment false`.
 
 ## 8. Operations
 See the per-fix notes in §5.

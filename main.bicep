@@ -140,6 +140,7 @@ module keyVault 'modules/keyVault.bicep' = {
     keyVaultName: keyVaultName
     logAnalyticsWorkspaceId: monitoring.outputs.id
     enablePurgeProtection: true
+    enabledForTemplateDeployment: true
   }
 }
 

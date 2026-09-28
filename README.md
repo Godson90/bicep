@@ -158,7 +158,7 @@ az keyvault secret set `
 	--value <secret-value>
 ```
 
-3. Use a local, ignored `.bicepparam` file for the follow-up deployment:
+3. Use a local, ignored `*.local.bicepparam` file (matched by `.gitignore`) for the follow-up deployment:
 
 ```bicep
 using './main.bicep'
@@ -178,7 +178,13 @@ param allowedOutboundFqdns = [
 ]
 ```
 
-Deploy the parameter file with `az deployment group create --parameters <file>.bicepparam`. The deployment caller needs permission to read the named secret (`Key Vault Secrets User` is sufficient for read-only use), and the caller must be able to resolve and reach the private Key Vault endpoint. `az.getSecret()` is evaluated by the deployment tooling before ARM deployment; it is not a mechanism for a Bicep file to read a vault created in the same deployment.
+Deploy the parameter file with `az deployment group create --parameters <file>.bicepparam`. `az.getSecret()` compiles to a Key Vault reference that Azure Resource Manager resolves at deployment time, so:
+
+- The vault must have `enabledForTemplateDeployment = true` (the composed stack sets this).
+- The deploying identity needs `Microsoft.KeyVault/vaults/deploy/action` on the vault, which is included in `Contributor` and `Owner`.
+- `az.getSecret()` cannot read a vault created in the same deployment; use the two-phase flow above.
+
+Resolution through a vault with public network access disabled must be confirmed once per environment; see `docs/runbooks/00a-apply-phase0-fixes.md` (F4).
 
 For Linux, replace the password parameter with `virtualMachineAdminSshPublicKey` and retrieve an SSH public key only if it is intentionally stored in Key Vault. Prefer keeping public keys in a non-secret parameter file and storing only private credentials as secrets.
 

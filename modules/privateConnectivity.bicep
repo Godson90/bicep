@@ -246,3 +246,4 @@ resource keyVaultPrivateDnsZoneGroup 'Microsoft.Network/privateEndpoints/private
 
 output storagePrivateEndpointId string = storagePrivateEndpoint.id
 output appServicePrivateEndpointId string = appServicePrivateEndpoint.id
+output keyVaultPrivateEndpointId string = keyVaultPrivateEndpoint.id

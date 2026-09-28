@@ -39,3 +39,9 @@ Describe 'Firewall threat intelligence wiring (F9)' {
             Should -Be "[if(equals(parameters('environmentType'), 'prod'), createObject('value', 'Deny'), createObject('value', 'Alert'))]"
     }
 }
+
+Describe 'Key Vault wiring (F4)' {
+    It 'enables template deployment for the composed stack so az.getSecret() references resolve' {
+        (Get-ModuleDeployment -Template $main -Name 'key-vault').properties.parameters.enabledForTemplateDeployment.value | Should -BeTrue
+    }
+}
