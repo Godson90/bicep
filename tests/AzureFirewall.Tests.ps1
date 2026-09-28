@@ -34,10 +34,12 @@ Describe 'Azure Firewall logging (F9)' {
 }
 
 Describe 'Azure Monitor egress' {
-    It 'allows spoke traffic to the AzureMonitor service tag on 443' {
+    It 'allows spoke traffic to the AzureMonitor and AzureResourceManager service tags on 443' {
         $rules = @($ruleGroups.properties.ruleCollections.rules | Where-Object { $_.ruleType -eq 'NetworkRule' })
         $monitorRule = $rules | Where-Object { @($_.destinationAddresses) -contains 'AzureMonitor' }
         $monitorRule | Should -Not -BeNullOrEmpty
+        @($monitorRule.destinationAddresses) | Should -Contain 'AzureMonitor'
+        @($monitorRule.destinationAddresses) | Should -Contain 'AzureResourceManager'
         @($monitorRule.destinationPorts) | Should -Contain '443'
     }
 }

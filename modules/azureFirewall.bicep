@@ -116,6 +116,7 @@ resource firewallDnsRuleCollectionGroup 'Microsoft.Network/firewallPolicies/rule
             sourceAddresses: spokeAddressPrefixes
             destinationAddresses: [
               'AzureMonitor'
+              'AzureResourceManager'
             ]
             destinationPorts: [
               '443'

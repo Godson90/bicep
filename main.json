@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "12767604648985929445"
+      "templateHash": "3466055864744525851"
     }
   },
   "parameters": {
@@ -534,7 +534,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "10068724592814895181"
+              "templateHash": "9851758554324213786"
             }
           },
           "parameters": {
@@ -608,7 +608,7 @@
                   "name": "standard"
                 },
                 "networkAcls": {
-                  "bypass": "None",
+                  "bypass": "[if(parameters('enabledForTemplateDeployment'), 'AzureServices', 'None')]",
                   "defaultAction": "Deny"
                 }
               }
@@ -809,7 +809,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "3669913730305025370"
+              "templateHash": "11022384830335612400"
             }
           },
           "parameters": {
@@ -965,7 +965,8 @@
                         ],
                         "sourceAddresses": "[parameters('spokeAddressPrefixes')]",
                         "destinationAddresses": [
-                          "AzureMonitor"
+                          "AzureMonitor",
+                          "AzureResourceManager"
                         ],
                         "destinationPorts": [
                           "443"
