@@ -1,3 +1,5 @@
+import { privateDnsZoneSet } from 'types.bicep'
+
 @description('Azure region for private endpoint resources.')
 param location string
 
@@ -17,12 +19,6 @@ param appServiceId string
 @maxLength(60)
 param appServiceName string
 
-@description('Spoke VNet resource ID.')
-param spokeVnetId string
-
-@description('Hub VNet resource ID.')
-param hubVnetId string
-
 @description('Subnet resource ID for private endpoints.')
 param privateEndpointSubnetId string
 
@@ -34,101 +30,8 @@ param keyVaultId string
 @maxLength(24)
 param keyVaultName string
 
-// Private DNS zone for Storage Blob private endpoints.
-resource storagePrivateDnsZone 'Microsoft.Network/privateDnsZones@2024-06-01' = {
-  name: 'privatelink.blob.${environment().suffixes.storage}'
-  location: 'global'
-}
-
-// Private DNS zone for App Service private endpoints.
-resource appServicePrivateDnsZone 'Microsoft.Network/privateDnsZones@2024-06-01' = {
-  name: 'privatelink.azurewebsites.net'
-  location: 'global'
-}
-
-// Private DNS zone for Key Vault private endpoints.
-resource keyVaultPrivateDnsZone 'Microsoft.Network/privateDnsZones@2024-06-01' = {
-  name: 'privatelink.vaultcore.azure.net'
-  location: 'global'
-}
-
-// Link Storage DNS resolution to the spoke VNet.
-resource storagePrivateDnsLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = {
-  parent: storagePrivateDnsZone
-  name: 'storage-link'
-  location: 'global'
-  properties: {
-    registrationEnabled: false
-    virtualNetwork: {
-      id: spokeVnetId
-    }
-  }
-}
-
-// Link Storage DNS resolution to the hub VNet.
-resource storagePrivateDnsHubLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = {
-  parent: storagePrivateDnsZone
-  name: 'hub-storage-link'
-  location: 'global'
-  properties: {
-    registrationEnabled: false
-    virtualNetwork: {
-      id: hubVnetId
-    }
-  }
-}
-
-// Link App Service DNS resolution to the spoke VNet.
-resource appServicePrivateDnsLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = {
-  parent: appServicePrivateDnsZone
-  name: 'appservice-link'
-  location: 'global'
-  properties: {
-    registrationEnabled: false
-    virtualNetwork: {
-      id: spokeVnetId
-    }
-  }
-}
-
-// Link App Service DNS resolution to the hub VNet.
-resource appServicePrivateDnsHubLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = {
-  parent: appServicePrivateDnsZone
-  name: 'hub-appservice-link'
-  location: 'global'
-  properties: {
-    registrationEnabled: false
-    virtualNetwork: {
-      id: hubVnetId
-    }
-  }
-}
-
-// Link Key Vault DNS resolution to the spoke VNet.
-resource keyVaultPrivateDnsLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = {
-  parent: keyVaultPrivateDnsZone
-  name: 'keyvault-link'
-  location: 'global'
-  properties: {
-    registrationEnabled: false
-    virtualNetwork: {
-      id: spokeVnetId
-    }
-  }
-}
-
-// Link Key Vault DNS resolution to the hub VNet.
-resource keyVaultPrivateDnsHubLink 'Microsoft.Network/privateDnsZones/virtualNetworkLinks@2024-06-01' = {
-  parent: keyVaultPrivateDnsZone
-  name: 'hub-keyvault-link'
-  location: 'global'
-  properties: {
-    registrationEnabled: false
-    virtualNetwork: {
-      id: hubVnetId
-    }
-  }
-}
+@description('Resource IDs of the shared private DNS zones created by the global layer.')
+param privateDnsZoneIds privateDnsZoneSet
 
 // Private endpoint for Blob service access.
 resource storagePrivateEndpoint 'Microsoft.Network/privateEndpoints@2024-07-01' = {
@@ -152,7 +55,7 @@ resource storagePrivateEndpoint 'Microsoft.Network/privateEndpoints@2024-07-01' 
   }
 }
 
-// Attach the Storage private DNS zone to its private endpoint.
+// Register the Storage private endpoint in the shared blob zone.
 resource storagePrivateDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-07-01' = {
   parent: storagePrivateEndpoint
   name: 'default'
@@ -161,7 +64,7 @@ resource storagePrivateDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateD
       {
         name: 'blob'
         properties: {
-          privateDnsZoneId: storagePrivateDnsZone.id
+          privateDnsZoneId: privateDnsZoneIds.blob
         }
       }
     ]
@@ -190,7 +93,7 @@ resource appServicePrivateEndpoint 'Microsoft.Network/privateEndpoints@2024-07-0
   }
 }
 
-// Attach the App Service private DNS zone to its private endpoint.
+// Register the App Service private endpoint in the shared sites zone.
 resource appServicePrivateDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-07-01' = {
   parent: appServicePrivateEndpoint
   name: 'default'
@@ -199,7 +102,7 @@ resource appServicePrivateDnsZoneGroup 'Microsoft.Network/privateEndpoints/priva
       {
         name: 'appservice'
         properties: {
-          privateDnsZoneId: appServicePrivateDnsZone.id
+          privateDnsZoneId: privateDnsZoneIds.sites
         }
       }
     ]
@@ -228,7 +131,7 @@ resource keyVaultPrivateEndpoint 'Microsoft.Network/privateEndpoints@2024-07-01'
   }
 }
 
-// Attach the Key Vault private DNS zone to its private endpoint.
+// Register the Key Vault private endpoint in the shared vault zone.
 resource keyVaultPrivateDnsZoneGroup 'Microsoft.Network/privateEndpoints/privateDnsZoneGroups@2024-07-01' = {
   parent: keyVaultPrivateEndpoint
   name: 'default'
@@ -237,7 +140,7 @@ resource keyVaultPrivateDnsZoneGroup 'Microsoft.Network/privateEndpoints/private
       {
         name: 'vault'
         properties: {
-          privateDnsZoneId: keyVaultPrivateDnsZone.id
+          privateDnsZoneId: privateDnsZoneIds.vault
         }
       }
     ]

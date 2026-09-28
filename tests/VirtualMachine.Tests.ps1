@@ -47,3 +47,12 @@ Describe 'VM monitoring (F3)' {
         $dcrText | Should -Match ([regex]::Escape('\\Processor(*)\\% Processor Time'))
     }
 }
+
+Describe 'VM monitoring on Windows (F3)' {
+    It 'installs the Windows agent and collects System and Application events when osType is Windows' {
+        $template.variables.azureMonitorAgentName | Should -Match "'AzureMonitorWindowsAgent'"
+        $template.variables.osLogSource | Should -Match 'windowsEventLogs'
+        $template.variables.osLogSource | Should -Match 'Microsoft-Event'
+        $template.variables.osLogSource | Should -Match 'Application!'
+    }
+}

@@ -71,4 +71,27 @@ function Get-ModuleDeployment {
     $deployment
 }
 
-Export-ModuleMember -Function Get-RepoPath, Get-BicepTemplate, Get-TemplateResource, Get-ModuleDeployment
+function Get-TemplateResourceBySymbol {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)]
+        $Template,
+
+        [Parameter(Mandatory)]
+        [string]$Symbol
+    )
+
+    # Module names in the subscription entry point are expressions, so look them up by symbolic name.
+    if ($Template.resources -is [array]) {
+        throw 'Template has no symbolic resource names; languageVersion 2.0 is required.'
+    }
+
+    $property = $Template.resources.PSObject.Properties[$Symbol]
+    if (-not $property) {
+        throw "Resource with symbolic name '$Symbol' was not found."
+    }
+
+    $property.Value
+}
+
+Export-ModuleMember -Function Get-RepoPath, Get-BicepTemplate, Get-TemplateResource, Get-ModuleDeployment, Get-TemplateResourceBySymbol

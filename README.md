@@ -1,27 +1,35 @@
 ## Secure Azure deployment
 
-This deployment creates a private spoke VNet, a dedicated hub VNet, Azure Firewall Standard, a Log Analytics workspace, private endpoints, private DNS links, subnet NSGs, and reciprocal hub/spoke peering. Storage and App Service public network access are disabled.
+This deployment is a **subscription-scope**, multi-region stack: `main.bicep` (`targetScope = 'subscription'`) fans out to pre-created resource groups, one per environment's global layer and one per deployed region. The environment's Log Analytics workspace and the three shared `privatelink.*` private DNS zones live once in the global resource group (`rg-defenstack-<env>-global`), not per region stamp. Each region stamp creates a private spoke VNet, a dedicated hub VNet, Azure Firewall Standard (zone-redundant), private endpoints, private DNS links to the shared zones, subnet NSGs, and reciprocal hub/spoke peering. Storage and App Service public network access are disabled. Dev deploys one region (West US 3); prod deploys West US 3 as the active primary and East US as a warm standby (`docs/decisions/ADR-008-warm-standby-and-dev-single-region.md`). See `docs/architecture/overview.md` for the full topology, address plan, and naming convention.
 
 ### Documentation
 
 - Design: `docs/superpowers/specs/2026-09-25-secure-connectivity-design.md`
-- Runbooks: `docs/runbooks/` - start with `00-pipeline-and-identity.md`, `00b-configure-pipeline-credentials.md` (pipeline Azure login via OIDC), and `00a-apply-phase0-fixes.md`
+- Architecture: `docs/architecture/overview.md` - topology, traffic flows, address plan, naming convention, and resource inventory
+- Runbooks: `docs/runbooks/` - start with `00-pipeline-and-identity.md`, `00b-configure-pipeline-credentials.md` (pipeline Azure login via OIDC), `00a-apply-phase0-fixes.md`, `01-deploy-stack.md` (deploy dev or prod), and `01a-migrate-from-defenstack.md` (retire the Phase 0 resource group)
 - Runbook structure (mandatory for every change): `docs/runbooks/_template.md`
 
 ### Module layout
 
-`main.bicep` is intentionally limited to deployment parameters, module composition, and the application hostname output. Resource ownership is split into focused modules:
+`main.bicep` is a subscription-scope entry point, limited to deployment parameters, module composition, and the app hostname outputs for both regions. Resource ownership is split into focused modules:
 
-- `modules/monitoring.bicep`: Log Analytics workspace.
+- `modules/global.bicep`: the environment's shared Log Analytics workspace and the three `privatelink.*` private DNS zones, deployed once per environment.
+- `modules/regionStamp.bicep`: one region's full hub/spoke stack (composes every module below), deployed once for the primary region and again for the secondary region when `deploySecondaryRegion = true`.
+- `modules/privateDnsZoneLinks.bicep`: links every deployed region's hub and spoke VNets to a shared private DNS zone.
+- `modules/types.bicep`: shared parameter contracts (`regionAddressPlan`, `privateDnsZoneSet`, `virtualNetworkReference`) used by `main.bicep`, `modules/global.bicep`, and `modules/regionStamp.bicep`.
+
+Each region stamp composes these existing building blocks:
+
+- `modules/monitoring.bicep`: Log Analytics workspace (called from `modules/global.bicep`, not per region).
 - `modules/storage.bicep`: Storage account, blob container, and storage diagnostics.
 - `modules/hubNetwork.bicep`: Hub VNet and `AzureFirewallSubnet`.
 - `modules/azureFirewall.bicep`: Firewall, public IP, policy, DNS proxy, rules, and diagnostics.
 - `modules/spokeNetwork.bicep`: Spoke NSGs, App Service route table, and VNet/subnet associations.
 - `modules/vnet.bicep`: Reusable spoke VNet resource and subnet contract.
 - `modules/appService.bicep`: App Service plan, site, identity, route-all, and diagnostics.
-- `modules/privateConnectivity.bicep`: Private DNS zones, VNet links, private endpoints, and zone groups.
+- `modules/privateConnectivity.bicep`: Private DNS zone groups and private endpoints (the zones themselves live in `modules/global.bicep`).
 - `modules/networkIntegration.bicep`: Reciprocal VNet peerings and storage RBAC.
-- `modules/virtualMachine.bicep`: Optional private Linux or Windows VM, NIC NSG, managed identity, trusted launch, and diagnostics.
+- `modules/virtualMachine.bicep`: Optional private Linux or Windows VM (primary region only), NIC NSG, managed identity, trusted launch, and diagnostics.
 - `modules/keyVault.bicep`: RBAC-enabled private Key Vault with soft delete, purge protection, and diagnostics.
 
 Module outputs carry resource IDs between ownership boundaries so deployment dependencies remain explicit without a resource-heavy entry point.
@@ -164,39 +172,41 @@ az keyvault secret set `
 	--value <secret-value>
 ```
 
-3. Use a local, ignored `*.local.bicepparam` file (matched by `.gitignore`) for the follow-up deployment:
+3. Copy `params/dev.bicepparam` to a local, ignored `params/dev.local.bicepparam` file (matched by `.gitignore`) and add the VM parameters for the follow-up deployment. The Key Vault for the dev primary stamp lives in `rg-defenstack-dev-wus3`:
 
 ```bicep
 using './main.bicep'
 
-param environmentType = 'dev'
+param environmentName = 'dev'
+param deploySecondaryRegion = false
+param primaryAddressPlan = { /* same object as params/dev.bicepparam */ }
+param allowedOutboundFqdns = [
+	'management.azure.com'
+]
 param enableVirtualMachine = true
 param virtualMachineOsType = 'Windows'
 param virtualMachineAdminUsername = 'azureadmin'
 param virtualMachineAdminPassword = az.getSecret(
 	'<subscription-id>',
-	'<resource-group-name>',
+	'rg-defenstack-dev-wus3',
 	'<key-vault-name>',
 	'vm-admin-password'
 )
-param allowedOutboundFqdns = [
-	'management.azure.com'
-]
 ```
 
-Deploy the parameter file with `az deployment group create --parameters <file>.bicepparam`. `az.getSecret()` compiles to a Key Vault reference that Azure Resource Manager resolves at deployment time, so:
+Deploy the parameter file with `az deployment sub create --location westus3 --parameters params/dev.local.bicepparam`. `az.getSecret()` compiles to a Key Vault reference that Azure Resource Manager resolves at deployment time, so:
 
 - The vault must have `enabledForTemplateDeployment = true` (the composed stack sets this).
 - The deploying identity needs `Microsoft.KeyVault/vaults/deploy/action` on the vault, which is included in `Contributor` and `Owner`.
 - `az.getSecret()` cannot read a vault created in the same deployment; use the two-phase flow above.
 
-Resolution through a vault with public network access disabled must be confirmed once per environment; see `docs/runbooks/00a-apply-phase0-fixes.md` (F4).
+Resolution through a vault with public network access disabled must be confirmed once per environment: `modules/keyVault.bicep` sets `networkAcls.bypass: 'AzureServices'` whenever `enabledForTemplateDeployment` is `true`, so Resource Manager can resolve the `az.getSecret()` reference while the vault otherwise stays closed to the public internet.
 
 For Linux, replace the password parameter with `virtualMachineAdminSshPublicKey` and retrieve an SSH public key only if it is intentionally stored in Key Vault. Prefer keeping public keys in a non-secret parameter file and storing only private credentials as secrets.
 
 ### Virtual machine module
 
-The VM module is disabled by default through `enableVirtualMachine=false`. When enabled, it creates a private-only VM in the dedicated `virtual-machines` subnet with no public IP, a NIC-level deny-by-default NSG, a system-assigned managed identity, Premium managed OS disk, trusted launch, secure boot, vTPM, boot diagnostics, platform metrics, and the Azure Monitor Agent with a data collection rule that sends syslog (Linux) or System/Application events (Windows) plus CPU, memory, and disk counters to the Log Analytics workspace. The firewall's `AzureMonitor` service-tag rule allows the agent's egress.
+The VM module is disabled by default through `enableVirtualMachine=false`. When enabled, it creates a private-only VM in the dedicated `management` subnet with no public IP, a NIC-level deny-by-default NSG, a system-assigned managed identity, Premium managed OS disk, trusted launch, secure boot, vTPM, boot diagnostics, platform metrics, and the Azure Monitor Agent with a data collection rule that sends syslog (Linux) or System/Application events (Windows) plus CPU, memory, and disk counters to the Log Analytics workspace. The firewall's `AzureMonitor` service-tag rule allows the agent's egress.
 
 - Set `virtualMachineOsType=Linux` and provide `virtualMachineAdminSshPublicKey` for SSH-only administration.
 - Set `virtualMachineOsType=Windows` and provide `virtualMachineAdminPassword` through a secure parameter mechanism. Do not place passwords in source control or generated templates.
@@ -206,11 +216,11 @@ The VM module is disabled by default through `enableVirtualMachine=false`. When 
 
 ### Prerequisites
 
-- Azure CLI with an authenticated account and a target resource group.
+- Azure CLI with an authenticated account and the operator-created resource groups for the environment (`docs/runbooks/01-deploy-stack.md` §4).
 - Bicep CLI 0.47 or later.
 - A subscription and region that support the selected App Service plan SKU.
 - Network clients that need the storage account or App Service must run in the linked VNet or a connected network with DNS forwarding configured.
-- Non-overlapping spoke and hub address spaces. The default spoke is `10.0.0.0/16`; the default hub is `10.1.0.0/16`.
+- Non-overlapping spoke and hub address spaces. The shipped address plans (`params/*.bicepparam`) use dev `10.20.0.0/16` spoke / `10.21.0.0/16` hub, and prod `10.0.0.0/16` spoke / `10.1.0.0/16` hub (primary) plus `10.10.0.0/16` spoke / `10.11.0.0/16` hub (secondary).
 - Azure RBAC permissions to create VNets, peerings, NSGs, route tables, Azure Firewall resources, role assignments, diagnostics, and private DNS links.
 
 ### Firewall behavior
@@ -222,7 +232,7 @@ The VM module is disabled by default through `enableVirtualMachine=false`. When 
 - No inbound DNAT rules are created. Public exposure must remain disabled unless a separate reviewed design adds explicit rules.
 - `allowedOutboundFqdns` defaults to an empty list, so application HTTPS traffic is denied until administrators provide an approved FQDN allowlist. The default platform egress rules are DNS to Azure's resolver (`168.63.129.16:53`) and HTTPS to the `AzureMonitor` and `AzureResourceManager` service tags for the Azure Monitor Agent (ingestion and its control-plane dependency).
 - Threat intelligence runs in `Deny` mode for `prod` and `Alert` mode for `dev`/`test`. Firewall logs are written to resource-specific tables (`AZFWNetworkRule`, `AZFWApplicationRule`, `AZFWDnsQuery`, `AZFWThreatIntel`, …), not `AzureDiagnostics`.
-- NSGs deny unsolicited inbound traffic on the private endpoint, App Service integration, and management subnets. Private endpoint network security policy is enabled. By default only the App Service integration and management subnets can reach private endpoints over HTTPS; the allowed sources are derived from `appServiceIntegrationSubnetAddressPrefix` and `virtualMachineSubnetAddressPrefix`. Add narrowly scoped administrator/client CIDRs through `additionalPrivateEndpointSourceCidrs` when required. Spoke CIDRs are defined once (`spokeVnetAddressSpace` and the subnet prefix parameters) and reused by the firewall rules.
+- NSGs deny unsolicited inbound traffic on the private endpoint, App Service integration, and management subnets. Private endpoint network security policy is enabled. By default only the App Service integration and management subnets can reach private endpoints over HTTPS; the allowed sources are derived from `appServiceIntegrationSubnetAddressPrefix` and `virtualMachineSubnetAddressPrefix`. Add narrowly scoped administrator/client CIDRs through `additionalPrivateEndpointSourceCidrs` when required. Spoke CIDRs are defined once, in each environment's `primaryAddressPlan` / `secondaryAddressPlan` object in `params/*.bicepparam` (`modules/types.bicep`'s `regionAddressPlan`), and reused by the firewall rules.
 - Forwarded traffic is enabled on the reciprocal peerings for firewall service chaining. Gateway transit and remote gateways remain disabled.
 
 Azure Firewall has ongoing hourly and data-processing charges. Regional VNet peering and Log Analytics ingestion also incur charges. This design intentionally avoids Premium Firewall, global peering, NAT gateways, VPN/ExpressRoute gateways, extra public IPs, and Azure Firewall Manager unless separately approved.
@@ -246,36 +256,51 @@ CI (`.github/workflows/bicep-ci.yml`) runs the same tests plus PSRule for Azure 
 ### Validate against Azure
 
 ```powershell
-az deployment group validate `
-	--resource-group <resource-group> `
+az deployment sub validate `
+	--location westus3 `
 	--parameters params/dev.bicepparam
 
-az deployment group what-if `
-	--resource-group <resource-group> `
+az deployment sub what-if `
+	--location westus3 `
 	--parameters params/dev.bicepparam
 ```
 
-Use `environmentType=prod` for the Premium V3 App Service plan and production deletion protection behavior. Review the what-if output before deployment, especially the firewall subnet size, route-table association, reciprocal peerings, private endpoint placement, DNS links, and disabled public network access. Do not copy the example FQDNs into production without confirming the application's actual dependencies.
+Use `params/prod.bicepparam` for the two-region prod stack (Premium V3, zone-redundant primary). Review the what-if output before deployment, especially the firewall subnet size, route-table association, reciprocal peerings, private endpoint placement, DNS links, and disabled public network access. Do not copy the example FQDNs into production without confirming the application's actual dependencies.
 
-Deploy a Linux VM with an SSH public key supplied from a secure parameter file:
-
-```powershell
-az deployment group create `
-	--resource-group <resource-group> `
-	--template-file main.bicep `
-	--parameters environmentType=dev `
-							 enableVirtualMachine=true `
-							 virtualMachineOsType=Linux `
-							 virtualMachineAdminSshPublicKey="<ssh-public-key>" `
-							 allowedOutboundFqdns='["management.azure.com"]'
-```
-
-For Windows, never pass `virtualMachineAdminPassword` as a command-line argument — it would be visible in shell history and process listings. Use a local, git-ignored `*.local.bicepparam` file with `az.getSecret()`, as described in [Key Vault and deployment secrets](#key-vault-and-deployment-secrets):
+The optional management VM is only ever enabled through a git-ignored `*.local.bicepparam` overlay (matched by `.gitignore`), never in a committed parameter file. Copy `params/dev.bicepparam` to `params/dev.local.bicepparam` and add `enableVirtualMachine = true` plus the VM parameters. For Linux, with an SSH public key:
 
 ```bicep
 using './main.bicep'
 
-param environmentType = 'dev'
+param environmentName = 'dev'
+param deploySecondaryRegion = false
+param primaryAddressPlan = { /* same object as params/dev.bicepparam */ }
+param allowedOutboundFqdns = [
+	'management.azure.com'
+]
+param enableVirtualMachine = true
+param virtualMachineOsType = 'Linux'
+param virtualMachineAdminSshPublicKey = '<ssh-public-key>'
+```
+
+```powershell
+az deployment sub validate `
+	--location westus3 `
+	--parameters params/dev.local.bicepparam
+
+az deployment sub create `
+	--location westus3 `
+	--parameters params/dev.local.bicepparam
+```
+
+For Windows, never pass `virtualMachineAdminPassword` as a command-line argument — it would be visible in shell history and process listings. Use `az.getSecret()` in the same overlay, as described in [Key Vault and deployment secrets](#key-vault-and-deployment-secrets):
+
+```bicep
+using './main.bicep'
+
+param environmentName = 'dev'
+param deploySecondaryRegion = false
+param primaryAddressPlan = { /* same object as params/dev.bicepparam */ }
 param enableVirtualMachine = true
 param virtualMachineOsType = 'Windows'
 param virtualMachineAdminUsername = '<admin-username>'
@@ -285,14 +310,6 @@ param virtualMachineAdminPassword = az.getSecret(
 	'<key-vault-name>',
 	'vm-admin-password'
 )
-```
-
-Validate the VM deployment before creating it:
-
-```powershell
-az deployment group validate `
-	--resource-group <resource-group> `
-	--parameters <file>.local.bicepparam
 ```
 
 ### Azure CLI administrator commands
@@ -305,56 +322,57 @@ az provider show --namespace Microsoft.Network --query registrationState -o tsv
 az account show --query "{subscription:id,tenant:tenantId}" -o table
 ```
 
-Deploy after reviewing what-if:
+Deploy after reviewing what-if (see `docs/runbooks/01-deploy-stack.md` §4 for the full subscription-scope procedure):
 
 ```powershell
-az deployment group create `
-	--resource-group <resource-group> `
-	--template-file main.bicep `
-	--parameters environmentType=dev `
-							 allowedOutboundFqdns='["management.azure.com","*.azurewebsites.net"]'
+az deployment sub create `
+	--location westus3 `
+	--name "manual-$(Get-Date -Format yyyyMMddHHmm)" `
+	--parameters params/dev.bicepparam
 ```
 
-Inspect the hub, firewall, policy, and public IP:
+Inspect the hub, firewall, policy, and public IP, using the dev primary stamp's names as an example (substitute `rg-defenstack-<env>-<regionCode>` and the matching resource names for another stamp):
 
 ```powershell
-az network vnet show -g <resource-group> -n <hub-vnet-name> -o table
-az network vnet subnet show -g <resource-group> --vnet-name <hub-vnet-name> -n AzureFirewallSubnet -o table
-az network firewall show -g <resource-group> -n <firewall-name> `
+az network vnet show -g rg-defenstack-dev-wus3 -n vnet-defenstack-dev-wus3-hub -o table
+az network vnet subnet show -g rg-defenstack-dev-wus3 --vnet-name vnet-defenstack-dev-wus3-hub -n AzureFirewallSubnet -o table
+az network firewall show -g rg-defenstack-dev-wus3 -n afw-defenstack-dev-wus3 `
 	--query "{sku:sku.tier,privateIp:ipConfigurations[0].properties.privateIPAddress,policy:firewallPolicy.id}" -o json
-az network firewall policy show -g <resource-group> -n <firewall-policy-name> -o json
-az network public-ip show -g <resource-group> -n <firewall-public-ip-name> `
+az network firewall policy show -g rg-defenstack-dev-wus3 -n afwp-defenstack-dev-wus3 -o json
+az network public-ip show -g rg-defenstack-dev-wus3 -n pip-afw-defenstack-dev-wus3 `
 	--query "{sku:sku.name,allocation:publicIPAllocationMethod,ip:ipAddress}" -o table
 ```
 
 Inspect subnet NSGs and App Service routing:
 
 ```powershell
-az network vnet subnet list -g <resource-group> --vnet-name <spoke-vnet-name> -o table
-az network nsg list -g <resource-group> -o table
-az network nsg rule list -g <resource-group> --nsg-name <nsg-name> -o table
-az network route-table show -g <resource-group> -n <route-table-name> -o json
-az network route-table route list -g <resource-group> --route-table-name <route-table-name> -o table
+az network vnet subnet list -g rg-defenstack-dev-wus3 --vnet-name vnet-defenstack-dev-wus3-spoke -o table
+az network nsg list -g rg-defenstack-dev-wus3 -o table
+az network nsg rule list -g rg-defenstack-dev-wus3 --nsg-name <nsg-name> -o table
+az network route-table show -g rg-defenstack-dev-wus3 -n <route-table-name> -o json
+az network route-table route list -g rg-defenstack-dev-wus3 --route-table-name <route-table-name> -o table
 ```
 
 Inspect reciprocal peering and DNS links:
 
 ```powershell
-az network vnet peering list -g <resource-group> --vnet-name <hub-vnet-name> -o table
-az network vnet peering list -g <resource-group> --vnet-name <spoke-vnet-name> -o table
-az network vnet peering show -g <resource-group> --vnet-name <hub-vnet-name> -n hub-to-spoke `
+az network vnet peering list -g rg-defenstack-dev-wus3 --vnet-name vnet-defenstack-dev-wus3-hub -o table
+az network vnet peering list -g rg-defenstack-dev-wus3 --vnet-name vnet-defenstack-dev-wus3-spoke -o table
+az network vnet peering show -g rg-defenstack-dev-wus3 --vnet-name vnet-defenstack-dev-wus3-hub -n hub-to-spoke `
 	--query "{state:peeringState,forwarded:allowForwardedTraffic,gatewayTransit:allowGatewayTransit}" -o table
-az network private-dns link vnet list -g <resource-group> --zone-name <private-zone-name> -o table
+az network private-dns link vnet list -g rg-defenstack-dev-global --zone-name privatelink.vaultcore.azure.net -o table
 ```
 
 For an approved test NIC, inspect effective routes and security rules:
 
 ```powershell
-az network nic show-effective-route-table -g <resource-group> -n <nic-name> -o table
-az network nic list-effective-nsg -g <resource-group> -n <nic-name> -o json
+az network nic show-effective-route-table -g rg-defenstack-dev-wus3 -n <nic-name> -o table
+az network nic list-effective-nsg -g rg-defenstack-dev-wus3 -n <nic-name> -o json
 ```
 
 ### Safe teardown
+
+Applies to the legacy `defenStack` resource group (see runbook 01a). For the Phase 1 stacks, see runbook 01 §7.
 
 Use this order when removing the deployment. Replace placeholders before running commands, and run each step from an authenticated administrator session.
 
@@ -378,11 +396,15 @@ Never run teardown commands against a production resource group until the resour
 az resource list --resource-group $resourceGroup `
 	--query "[].{name:name,type:type,id:id}" -o table
 
+git show phase0-foundation-fixes:main.json > $env:TEMP\defenstack-phase0-main.json
+
 az deployment group what-if `
 	--resource-group $resourceGroup `
-	--template-file main.bicep `
+	--template-file $env:TEMP\defenstack-phase0-main.json `
 	--parameters environmentType=dev
 ```
+
+This legacy teardown section applies only to `defenStack`: `main.bicep` on this branch is subscription-scoped and no longer accepts `environmentType` or deploys to a single resource group, so the what-if must run against the last Phase 0 template (`phase0-foundation-fixes:main.json`), not the current `main.bicep`.
 
 Export any required resource IDs, Key Vault secrets, diagnostic settings, and application data before continuing. A what-if of the unchanged template is not a deletion plan; use the explicit commands below or a reviewed resource-group deletion plan.
 

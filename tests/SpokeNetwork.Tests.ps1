@@ -3,7 +3,7 @@ BeforeAll {
     $template = Get-BicepTemplate -RelativePath 'modules/spokeNetwork.bicep'
     $routeTables = Get-TemplateResource -Template $template -Type 'Microsoft.Network/routeTables'
     $vnetModule = Get-TemplateResource -Template $template -Type 'Microsoft.Resources/deployments' | Select-Object -First 1
-    # Subnet order in spokeNetwork.bicep: 0 private-endpoints, 1 appservice-integration, 2 virtual-machines.
+    # Subnet order in spokeNetwork.bicep: 0 private-endpoints, 1 appservice-integration, 2 management.
     $subnets = @($vnetModule.properties.parameters.subnets.value)
 }
 
@@ -41,5 +41,11 @@ Describe 'Subnet default outbound access (PSRule Azure.VNET.PrivateSubnet)' {
 
     It 'leaves the delegated App Service integration subnet unset (delegation manages its own egress)' {
         $subnets[1].PSObject.Properties.Name | Should -Not -Contain 'defaultOutboundAccess'
+    }
+}
+
+Describe 'Management subnet naming (Phase 1)' {
+    It 'names the third subnet management' {
+        $template.parameters.virtualMachineSubnetName.defaultValue | Should -Be 'management'
     }
 }

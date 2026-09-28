@@ -41,3 +41,10 @@ Describe 'App Service plan resilience parameters (F8)' {
         $plan.sku.capacity | Should -Be "[parameters('instanceCount')]"
     }
 }
+
+Describe 'App Service plan naming (Phase 1)' {
+    It 'takes the plan name from the caller so every region stamp has its own plan' {
+        $template.parameters.appServicePlanName.type | Should -Be 'string'
+        $plan.name | Should -Be "[parameters('appServicePlanName')]"
+    }
+}

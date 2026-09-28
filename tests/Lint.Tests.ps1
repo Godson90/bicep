@@ -6,9 +6,7 @@ BeforeDiscovery {
     # excluded.
     $bicepFiles = Get-ChildItem -Path $repoRoot -Recurse -Filter '*.bicep' |
         ForEach-Object { @{ Name = $_.FullName.Substring($repoRoot.Length + 1); FullName = $_.FullName } } |
-        Where-Object { $_.Name -notmatch '[\\/]\.git[\\/]' } |
-        Where-Object { $_.Name -notmatch '[\\/]\.claude[\\/]' } |
-        Where-Object { $_.Name -notmatch '[\\/]\.superpowers[\\/]' }
+        Where-Object { $_.Name -notmatch '(^|[\\/])\.(git|claude|superpowers)([\\/]|$)' }
 }
 
 BeforeAll {

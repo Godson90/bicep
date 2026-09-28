@@ -12,6 +12,7 @@ permissions:
 
 env:
   BICEP_VERSION: v0.47.16
+  DEPLOYMENT_LOCATION: westus3
 
 jobs:
   validate:
@@ -68,13 +69,14 @@ jobs:
           set -o pipefail
           az config set bicep.use_binary_from_path=false
           az bicep install --version "$BICEP_VERSION"
-          az deployment group what-if \
-            --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
+          az deployment sub what-if \
+            --location "$DEPLOYMENT_LOCATION" \
+            --name "pr-${{ github.event.pull_request.number }}-${{ github.run_attempt }}" \
             --parameters params/dev.bicepparam \
             --exclude-change-types Ignore NoChange 2>&1 \
             | sed -r 's/\x1B\[[0-9;]*[mK]//g' > whatif.txt
           {
-            echo "### What-if: dev (\`${{ vars.AZURE_RESOURCE_GROUP }}\`)"
+            echo "### What-if: dev (subscription scope, rg-defenstack-dev-*)"
             echo '```'
             head -c 60000 whatif.txt
             echo '```'
