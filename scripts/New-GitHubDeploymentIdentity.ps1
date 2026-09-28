@@ -56,8 +56,12 @@ Write-Host "Application: $DisplayName"
 Write-Host "Federated subject: $subject"
 Write-Host "Role assignment scope: $scope"
 
-# 1. Application registration (idempotent by display name).
-$appId = az ad app list --display-name $DisplayName --query '[0].appId' --output tsv
+# 1. Application registration (idempotent by exact display name match).
+$appMatches = @(az ad app list --display-name $DisplayName --query "[?displayName=='$DisplayName'].appId" --output tsv | Where-Object { $_ })
+if ($appMatches.Count -gt 1) {
+    throw "Multiple Entra applications are named '$DisplayName'. Resolve the duplicates or pass a unique -DisplayName."
+}
+$appId = if ($appMatches.Count -eq 1) { $appMatches[0] } else { $null }
 if ([string]::IsNullOrWhiteSpace($appId)) {
     if ($PSCmdlet.ShouldProcess($DisplayName, 'Create Entra application registration')) {
         $appId = az ad app create --display-name $DisplayName --sign-in-audience AzureADMyOrg --query appId --output tsv
@@ -120,6 +124,17 @@ function Set-RoleAssignment {
         $existing = az role assignment list --assignee $servicePrincipalId --role $Role --scope $scope --query '[0].id' --output tsv
     }
     if (-not [string]::IsNullOrWhiteSpace($existing)) {
+        if ($Condition) {
+            $existingCondition = az role assignment list --assignee $servicePrincipalId --role $Role --scope $scope --query '[0].condition' --output tsv
+            $normalizedExisting = ($existingCondition -replace '\s+', ' ').Trim()
+            $normalizedDesired = ($Condition -replace '\s+', ' ').Trim()
+            if ([string]::IsNullOrWhiteSpace($normalizedExisting)) {
+                throw "An unconditioned '$Role' assignment already exists at $scope. Delete it (az role assignment delete --ids <id>) and re-run so the constrained assignment can be created."
+            }
+            if ($normalizedExisting -ne $normalizedDesired) {
+                throw "An existing '$Role' assignment at $scope has a different condition than expected. Delete it (az role assignment delete --ids <id>) and re-run so the constrained assignment can be created."
+            }
+        }
         Write-Host "Role '$Role' already assigned at $scope."
         return
     }

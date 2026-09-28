@@ -150,7 +150,7 @@ Rules processed: 175, failed: 0, errored: 0
 | Symptom / error text | Cause | Fix |
 |---|---|---|
 | `AADSTS70021: No matching federated identity record found` | Job not running in the `dev` environment, or repo name/case mismatch | Confirm `environment: dev` in the job and that the subject equals `repo:Godson90/bicep:environment:dev` |
-| `AuthorizationFailed … roleAssignments/write` with condition | Template assigns a role not in `-DelegatableRoleDefinitionIds` | Re-run the script with the role's GUID added (this updates nothing already assigned; delete and recreate the RBAC Administrator assignment to change its condition) |
+| `AuthorizationFailed … roleAssignments/write` with condition | Template assigns a role not in `-DelegatableRoleDefinitionIds` | Re-run the script with the role's GUID added. If an unconditioned or differently-conditioned `Role Based Access Control Administrator` assignment already exists at the scope, the script now stops with an error naming the mismatch; run `az role assignment delete --ids <id>` to delete that assignment, then re-run the script so it can create the correctly constrained one |
 | `AuthorizationFailed … locks/write` | Prod lock deployed without `-GrantLockManagement` | Re-run the script with `-GrantLockManagement` |
 | What-if job skipped | PR is from a fork | Expected; forks never receive Azure tokens |
 | Validate fails `params/prod.bicepparam not found` | Prod is not available until Phase 1 | Deploy dev only |
