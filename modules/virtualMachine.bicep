@@ -34,6 +34,9 @@ param vmSize string = 'Standard_B2s'
 @description('Log Analytics workspace resource ID for VM diagnostics.')
 param logAnalyticsWorkspaceId string
 
+@description('CIDR ranges allowed to reach the VM over SSH (22) and RDP (3389). Must match the management subnet NSG; an empty list denies all administrative inbound traffic.')
+param managementSourceCidrs array = []
+
 var linuxImagePublisher = 'Canonical'
 var linuxImageOffer = '0001-com-ubuntu-server-jammy'
 var linuxImageSku = '22_04-lts-gen2'
@@ -42,13 +45,31 @@ var windowsImageOffer = 'WindowsServer'
 var windowsImageSku = '2022-datacenter-g2'
 var networkInterfaceName = '${vmName}-nic'
 var networkSecurityGroupName = '${vmName}-nsg'
+var managementInboundRules = empty(managementSourceCidrs) ? [] : [
+  {
+    name: 'allow-management-ssh-rdp'
+    properties: {
+      priority: 100
+      access: 'Allow'
+      direction: 'Inbound'
+      protocol: 'Tcp'
+      sourceAddressPrefixes: managementSourceCidrs
+      sourcePortRange: '*'
+      destinationAddressPrefix: '*'
+      destinationPortRanges: [
+        '22'
+        '3389'
+      ]
+    }
+  }
+]
 
 // NIC-level NSG keeps the VM boundary explicit without changing shared subnet policy.
 resource networkSecurityGroup 'Microsoft.Network/networkSecurityGroups@2024-07-01' = {
   name: networkSecurityGroupName
   location: location
   properties: {
-    securityRules: [
+    securityRules: concat(managementInboundRules, [
       {
         name: 'deny-unsolicited-inbound'
         properties: {
@@ -62,7 +83,7 @@ resource networkSecurityGroup 'Microsoft.Network/networkSecurityGroups@2024-07-0
           destinationPortRange: '*'
         }
       }
-    ]
+    ])
   }
 }
 

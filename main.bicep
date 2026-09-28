@@ -81,6 +81,9 @@ param approvedPrivateEndpointSourceCidrs array = [
   '10.0.2.0/24'
 ]
 
+@description('CIDR ranges allowed to administer management VMs over SSH/RDP, such as AzureBastionSubnet or the P2S client pool. Empty denies all administrative inbound traffic.')
+param managementSourceCidrs array = []
+
 @description('CIDR prefix for AzureFirewallSubnet. It must be at least /26 and contained in hubVnetAddressSpace.')
 param firewallSubnetAddressPrefix string = '10.1.0.0/26'
 
@@ -168,6 +171,7 @@ module spokeNetwork 'modules/spokeNetwork.bicep' = {
     privateEndpointSubnetName: privateEndpointSubnetName
     appServiceIntegrationSubnetName: appServiceIntegrationSubnetName
     enableDeleteLock: environmentType == 'prod'
+    managementSourceCidrs: managementSourceCidrs
   }
 }
 
@@ -195,6 +199,7 @@ module virtualMachine 'modules/virtualMachine.bicep' = if (enableVirtualMachine)
     adminSshPublicKey: virtualMachineAdminSshPublicKey
     adminPassword: virtualMachineAdminPassword
     logAnalyticsWorkspaceId: monitoring.outputs.id
+    managementSourceCidrs: managementSourceCidrs
   }
 }
 

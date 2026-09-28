@@ -21,6 +21,7 @@ Applies the Phase 0 defect fixes to the existing `defenStack` resource group (de
 ## 3. Parameters
 | Name | Default | Prod value | Rationale |
 |---|---|---|---|
+| `managementSourceCidrs` | `[]` | `[]` until Phase 3 (then AzureBastionSubnet + P2S pool) | Only named admin sources may reach SSH/RDP; empty = deny all |
 
 ## 4. Step-by-step deployment
 1. Run the local test suite and confirm every test passes:
@@ -69,12 +70,27 @@ Until Task 11 creates `params/dev.bicepparam`, use `--template-file main.bicep -
 
 ## 5. Manual and post-deployment steps
 
+### F1/F2 - Management subnet isolation and forced tunnelling
+**Change:** the `virtual-machines` subnet gets its own NSG (`<spoke>-virtual-machines-nsg`) and its own route table (`<spoke>-virtual-machines-egress-rt`). BGP route propagation is disabled on both spoke route tables so that future VPN gateway routes cannot bypass the firewall.
+
+**Expected what-if:**
+- `+ Create` for the new NSG and the new route table.
+- `~ Modify` on the spoke VNet: the `virtual-machines` subnet's `networkSecurityGroup.id` and `routeTable.id` change.
+- `~ Modify` on `<spoke>-appservice-egress-rt`: `disableBgpRoutePropagation` goes false → true.
+
+**Manual steps:** none.
+
 ## 6. Validation
 | Check | Command | Expected result |
 |---|---|---|
+| Management subnet has its own NSG | `az network vnet subnet show -g defenStack --vnet-name <spoke-vnet> -n virtual-machines --query "{nsg:networkSecurityGroup.id,rt:routeTable.id}" -o json` | `nsg` ends `-virtual-machines-nsg`; `rt` ends `-virtual-machines-egress-rt` |
+| BGP propagation disabled | `az network route-table list -g defenStack --query "[].{name:name,bgpOff:disableBgpRoutePropagation}" -o table` | `bgpOff` = `True` for both spoke route tables |
+| No admin inbound yet | `az network nsg rule list -g defenStack --nsg-name <spoke-vnet>-virtual-machines-nsg -o table` | Only `deny-unsolicited-inbound` (4096) |
 
 ## 7. Rollback
 General rollback: redeploy the last good commit from `main` with the same commands in §4. Per-fix exceptions are listed below.
+
+- **F1/F2:** redeploy the previous commit. ARM re-points the subnet to the App Service NSG and route table; the new NSG and route table remain and can be deleted afterwards with `az network nsg delete` / `az network route-table delete`.
 
 ## 8. Operations
 See the per-fix notes in §5.

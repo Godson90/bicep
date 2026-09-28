@@ -43,9 +43,34 @@ param virtualMachineSubnetAddressPrefix string = '10.0.3.0/24'
 @description('Apply a CanNotDelete lock to the spoke VNet.')
 param enableDeleteLock bool = false
 
+@description('CIDR ranges allowed to reach management VMs over SSH (22) and RDP (3389), such as AzureBastionSubnet or the P2S VPN client pool. An empty list denies all administrative inbound traffic.')
+param managementSourceCidrs array = []
+
 var appServiceRouteTableName = '${vnetName}-appservice-egress-rt'
+var virtualMachineRouteTableName = '${vnetName}-${virtualMachineSubnetName}-egress-rt'
 var privateEndpointNsgName = '${vnetName}-${privateEndpointSubnetName}-nsg'
 var appServiceIntegrationNsgName = '${vnetName}-${appServiceIntegrationSubnetName}-nsg'
+var virtualMachineNsgName = '${vnetName}-${virtualMachineSubnetName}-nsg'
+
+// Administrative inbound is only rendered when approved management sources are supplied.
+var managementInboundRules = empty(managementSourceCidrs) ? [] : [
+  {
+    name: 'allow-management-ssh-rdp'
+    properties: {
+      priority: 100
+      access: 'Allow'
+      direction: 'Inbound'
+      protocol: 'Tcp'
+      sourceAddressPrefixes: managementSourceCidrs
+      sourcePortRange: '*'
+      destinationAddressPrefix: virtualMachineSubnetAddressPrefix
+      destinationPortRanges: [
+        '22'
+        '3389'
+      ]
+    }
+  }
+]
 
 // NSG for the private endpoint subnet; source CIDRs are explicit deployment inputs.
 resource privateEndpointNsg 'Microsoft.Network/networkSecurityGroups@2024-07-01' = {
@@ -111,7 +136,49 @@ resource appServiceRouteTable 'Microsoft.Network/routeTables@2024-07-01' = {
   name: appServiceRouteTableName
   location: location
   properties: {
-    disableBgpRoutePropagation: false
+    disableBgpRoutePropagation: true
+    routes: [
+      {
+        name: 'default-through-firewall'
+        properties: {
+          addressPrefix: '0.0.0.0/0'
+          nextHopType: 'VirtualAppliance'
+          nextHopIpAddress: firewallPrivateIp
+        }
+      }
+    ]
+  }
+}
+
+// Dedicated NSG for the management subnet; denies everything except approved admin sources.
+resource virtualMachineNsg 'Microsoft.Network/networkSecurityGroups@2024-07-01' = {
+  name: virtualMachineNsgName
+  location: location
+  properties: {
+    securityRules: concat(managementInboundRules, [
+      {
+        name: 'deny-unsolicited-inbound'
+        properties: {
+          priority: 4096
+          access: 'Deny'
+          direction: 'Inbound'
+          protocol: '*'
+          sourceAddressPrefix: '*'
+          sourcePortRange: '*'
+          destinationAddressPrefix: '*'
+          destinationPortRange: '*'
+        }
+      }
+    ])
+  }
+}
+
+// Route management subnet egress through Azure Firewall; gateway routes are not propagated.
+resource virtualMachineRouteTable 'Microsoft.Network/routeTables@2024-07-01' = {
+  name: virtualMachineRouteTableName
+  location: location
+  properties: {
+    disableBgpRoutePropagation: true
     routes: [
       {
         name: 'default-through-firewall'
@@ -153,8 +220,8 @@ module vnet 'vnet.bicep' = {
       {
         name: virtualMachineSubnetName
         addressPrefix: virtualMachineSubnetAddressPrefix
-        nsgId: appServiceIntegrationNsg.id
-        udrId: appServiceRouteTable.id
+        nsgId: virtualMachineNsg.id
+        udrId: virtualMachineRouteTable.id
         privateEndpointNetworkPolicies: 'Disabled'
         privateLinkServiceNetworkPolicies: 'Enabled'
       }

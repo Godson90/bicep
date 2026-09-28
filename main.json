@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "14990295552931262895"
+      "templateHash": "15578516980464027645"
     }
   },
   "parameters": {
@@ -161,6 +161,13 @@
       ],
       "metadata": {
         "description": "CIDR ranges allowed to reach private endpoints over HTTPS."
+      }
+    },
+    "managementSourceCidrs": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "CIDR ranges allowed to administer management VMs over SSH/RDP, such as AzureBastionSubnet or the P2S client pool. Empty denies all administrative inbound traffic."
       }
     },
     "firewallSubnetAddressPrefix": {
@@ -978,6 +985,9 @@
           },
           "enableDeleteLock": {
             "value": "[equals(parameters('environmentType'), 'prod')]"
+          },
+          "managementSourceCidrs": {
+            "value": "[parameters('managementSourceCidrs')]"
           }
         },
         "template": {
@@ -988,7 +998,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "16269313485915739109"
+              "templateHash": "13242082806388651772"
             }
           },
           "parameters": {
@@ -1084,12 +1094,22 @@
               "metadata": {
                 "description": "Apply a CanNotDelete lock to the spoke VNet."
               }
+            },
+            "managementSourceCidrs": {
+              "type": "array",
+              "defaultValue": [],
+              "metadata": {
+                "description": "CIDR ranges allowed to reach management VMs over SSH (22) and RDP (3389), such as AzureBastionSubnet or the P2S VPN client pool. An empty list denies all administrative inbound traffic."
+              }
             }
           },
           "variables": {
             "appServiceRouteTableName": "[format('{0}-appservice-egress-rt', parameters('vnetName'))]",
+            "virtualMachineRouteTableName": "[format('{0}-{1}-egress-rt', parameters('vnetName'), parameters('virtualMachineSubnetName'))]",
             "privateEndpointNsgName": "[format('{0}-{1}-nsg', parameters('vnetName'), parameters('privateEndpointSubnetName'))]",
-            "appServiceIntegrationNsgName": "[format('{0}-{1}-nsg', parameters('vnetName'), parameters('appServiceIntegrationSubnetName'))]"
+            "appServiceIntegrationNsgName": "[format('{0}-{1}-nsg', parameters('vnetName'), parameters('appServiceIntegrationSubnetName'))]",
+            "virtualMachineNsgName": "[format('{0}-{1}-nsg', parameters('vnetName'), parameters('virtualMachineSubnetName'))]",
+            "managementInboundRules": "[if(empty(parameters('managementSourceCidrs')), createArray(), createArray(createObject('name', 'allow-management-ssh-rdp', 'properties', createObject('priority', 100, 'access', 'Allow', 'direction', 'Inbound', 'protocol', 'Tcp', 'sourceAddressPrefixes', parameters('managementSourceCidrs'), 'sourcePortRange', '*', 'destinationAddressPrefix', parameters('virtualMachineSubnetAddressPrefix'), 'destinationPortRanges', createArray('22', '3389')))))]"
           },
           "resources": {
             "privateEndpointNsg": {
@@ -1157,7 +1177,35 @@
               "name": "[variables('appServiceRouteTableName')]",
               "location": "[parameters('location')]",
               "properties": {
-                "disableBgpRoutePropagation": false,
+                "disableBgpRoutePropagation": true,
+                "routes": [
+                  {
+                    "name": "default-through-firewall",
+                    "properties": {
+                      "addressPrefix": "0.0.0.0/0",
+                      "nextHopType": "VirtualAppliance",
+                      "nextHopIpAddress": "[parameters('firewallPrivateIp')]"
+                    }
+                  }
+                ]
+              }
+            },
+            "virtualMachineNsg": {
+              "type": "Microsoft.Network/networkSecurityGroups",
+              "apiVersion": "2024-07-01",
+              "name": "[variables('virtualMachineNsgName')]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "securityRules": "[concat(variables('managementInboundRules'), createArray(createObject('name', 'deny-unsolicited-inbound', 'properties', createObject('priority', 4096, 'access', 'Deny', 'direction', 'Inbound', 'protocol', '*', 'sourceAddressPrefix', '*', 'sourcePortRange', '*', 'destinationAddressPrefix', '*', 'destinationPortRange', '*'))))]"
+              }
+            },
+            "virtualMachineRouteTable": {
+              "type": "Microsoft.Network/routeTables",
+              "apiVersion": "2024-07-01",
+              "name": "[variables('virtualMachineRouteTableName')]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "disableBgpRoutePropagation": true,
                 "routes": [
                   {
                     "name": "default-through-firewall",
@@ -1215,8 +1263,8 @@
                       {
                         "name": "[parameters('virtualMachineSubnetName')]",
                         "addressPrefix": "[parameters('virtualMachineSubnetAddressPrefix')]",
-                        "nsgId": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('appServiceIntegrationNsgName'))]",
-                        "udrId": "[resourceId('Microsoft.Network/routeTables', variables('appServiceRouteTableName'))]",
+                        "nsgId": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('virtualMachineNsgName'))]",
+                        "udrId": "[resourceId('Microsoft.Network/routeTables', variables('virtualMachineRouteTableName'))]",
                         "privateEndpointNetworkPolicies": "Disabled",
                         "privateLinkServiceNetworkPolicies": "Enabled"
                       }
@@ -1471,7 +1519,9 @@
               "dependsOn": [
                 "appServiceIntegrationNsg",
                 "appServiceRouteTable",
-                "privateEndpointNsg"
+                "privateEndpointNsg",
+                "virtualMachineNsg",
+                "virtualMachineRouteTable"
               ]
             }
           },
@@ -1707,6 +1757,9 @@
           },
           "logAnalyticsWorkspaceId": {
             "value": "[reference(resourceId('Microsoft.Resources/deployments', 'monitoring'), '2025-04-01').outputs.id.value]"
+          },
+          "managementSourceCidrs": {
+            "value": "[parameters('managementSourceCidrs')]"
           }
         },
         "template": {
@@ -1716,7 +1769,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "5401444065318772500"
+              "templateHash": "9353558045237080710"
             }
           },
           "parameters": {
@@ -1785,6 +1838,13 @@
               "metadata": {
                 "description": "Log Analytics workspace resource ID for VM diagnostics."
               }
+            },
+            "managementSourceCidrs": {
+              "type": "array",
+              "defaultValue": [],
+              "metadata": {
+                "description": "CIDR ranges allowed to reach the VM over SSH (22) and RDP (3389). Must match the management subnet NSG; an empty list denies all administrative inbound traffic."
+              }
             }
           },
           "variables": {
@@ -1795,7 +1855,8 @@
             "windowsImageOffer": "WindowsServer",
             "windowsImageSku": "2022-datacenter-g2",
             "networkInterfaceName": "[format('{0}-nic', parameters('vmName'))]",
-            "networkSecurityGroupName": "[format('{0}-nsg', parameters('vmName'))]"
+            "networkSecurityGroupName": "[format('{0}-nsg', parameters('vmName'))]",
+            "managementInboundRules": "[if(empty(parameters('managementSourceCidrs')), createArray(), createArray(createObject('name', 'allow-management-ssh-rdp', 'properties', createObject('priority', 100, 'access', 'Allow', 'direction', 'Inbound', 'protocol', 'Tcp', 'sourceAddressPrefixes', parameters('managementSourceCidrs'), 'sourcePortRange', '*', 'destinationAddressPrefix', '*', 'destinationPortRanges', createArray('22', '3389')))))]"
           },
           "resources": [
             {
@@ -1804,21 +1865,7 @@
               "name": "[variables('networkSecurityGroupName')]",
               "location": "[parameters('location')]",
               "properties": {
-                "securityRules": [
-                  {
-                    "name": "deny-unsolicited-inbound",
-                    "properties": {
-                      "priority": 4096,
-                      "access": "Deny",
-                      "direction": "Inbound",
-                      "protocol": "*",
-                      "sourceAddressPrefix": "*",
-                      "sourcePortRange": "*",
-                      "destinationAddressPrefix": "*",
-                      "destinationPortRange": "*"
-                    }
-                  }
-                ]
+                "securityRules": "[concat(variables('managementInboundRules'), createArray(createObject('name', 'deny-unsolicited-inbound', 'properties', createObject('priority', 4096, 'access', 'Deny', 'direction', 'Inbound', 'protocol', '*', 'sourceAddressPrefix', '*', 'sourcePortRange', '*', 'destinationAddressPrefix', '*', 'destinationPortRange', '*'))))]"
               }
             },
             {
