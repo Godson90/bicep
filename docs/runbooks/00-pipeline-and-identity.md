@@ -10,7 +10,7 @@
 ## 2. Prerequisites
 - GitHub CLI signed in with admin rights on `Godson90/bicep`: `gh auth status`.
 - Entra role able to create app registrations: `Application Developer`, or `Cloud Application Administrator`.
-- Azure role able to create role assignments and a custom role definition at subscription scope: `Owner`, or `Role Based Access Control Administrator` + `Contributor`.
+- Azure role at subscription scope: for the **first** run against a subscription (creates the custom `DefenStack Subscription Deployment Operator` role definition, which needs `Microsoft.Authorization/roleDefinitions/write`), `Owner` or `User Access Administrator` — `Role Based Access Control Administrator` cannot create a role definition. For **later** runs, once that role definition already exists, `Role Based Access Control Administrator` + `Contributor` is sufficient.
 - Azure CLI 2.90 or later and PowerShell 5.1 or 7.
 
 ## 3. Parameters

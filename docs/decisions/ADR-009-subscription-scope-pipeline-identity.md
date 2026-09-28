@@ -29,10 +29,17 @@ other environment's.
   from ADR-007's per-environment isolation, just carried forward to the new
   scope.
 - At subscription scope, the pipeline identity holds only the new custom role
-  **DefenStack Subscription Deployment Operator**: deployment read, write,
-  delete, cancel, validate, whatIf and exportTemplate, deployment operation
-  read, and subscription/resource-group read. It grants no rights over any
-  resource.
+  **DefenStack Subscription Deployment Operator**, limited to exactly the
+  eight actions `az deployment sub validate|what-if|create` needs: deployment
+  read, deployment write, deployment validate, deployment whatIf, deployment
+  operation read, deployment operation-status read, and subscription /
+  resource-group read. It deliberately excludes `deployments/delete`,
+  `deployments/cancel/action` and `deployments/exportTemplate/action` — none
+  of those three is needed to validate, what-if or create a deployment (ARM
+  prunes deployment history itself), and because this role's assignment is at
+  subscription scope, granting them would let the dev identity cancel
+  in-flight prod deployments, delete prod's deployment history, or export
+  prod's templates. It grants no rights over any resource.
 - Resource rights — `Contributor`, plus the existing ABAC-constrained
   `Role Based Access Control Administrator` — are granted **only on that
   environment's own resource groups**, exactly as before, just repeated once
@@ -46,13 +53,21 @@ other environment's.
   broader rights than the operator intended.
 
 ## Consequences
-- The dev identity can create *deployment records* anywhere in the
-  subscription, because `Microsoft.Resources/deployments/write` is a
-  subscription-scope grant and is inherited by the whole subscription. It
-  cannot create, modify or delete any actual resource outside its own resource
-  groups, since every nested resource write still needs `Contributor` (or
-  narrower) rights on that specific resource group, which the identity does
-  not have there.
+- Because the custom role's assignment is at subscription scope, its actions
+  are inherited by every resource group underneath — including the other
+  environment's. So the dev identity can **create and read** deployment
+  records (the deployment's template metadata, non-secure parameters,
+  outputs and errors) in any resource group of the subscription, including
+  prod's. It cannot **cancel or delete** those deployment records, since
+  `deployments/cancel/action` and `deployments/delete` are deliberately not
+  in the role, and it cannot create, modify or delete any actual *resource*
+  outside its own resource groups, since every nested resource write still
+  needs `Contributor` (or narrower) rights on that specific resource group,
+  which the identity does not have there. Consequently, prod's deployment
+  parameters and outputs must never carry sensitive values — they already
+  only carry names and resource IDs, and any secret-shaped value stays a
+  `@secure()` parameter, which Azure Resource Manager omits from what a
+  deployment record exposes.
 - Every resource group a deployment touches must exist before the first
   deploy; `ResourceGroupNotFound` is the expected failure otherwise (see
   runbook 00b §9).

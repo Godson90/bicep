@@ -12,6 +12,10 @@ BeforeAll {
             $joined = $args -join ' '
             $global:AzCalls.Add($joined)
             $global:LASTEXITCODE = 0
+            if ($joined -like 'role definition create*') {
+                $file = ($args | Where-Object { $_ -like '@*' }) -replace '^@', ''
+                $global:RoleDefinitionPayload = Get-Content $file -Raw
+            }
             foreach ($pattern in $global:AzResponses.Keys) {
                 if ($joined -like $pattern) { return $global:AzResponses[$pattern] }
             }
@@ -170,6 +174,43 @@ Describe 'New-GitHubDeploymentIdentity.ps1' {
                 # Literal match: the condition contains [ and ], which -like would treat as wildcards.
                 $call.Contains("--condition $expected --condition-version 2.0") | Should -BeTrue -Because $call
             }
+        }
+    }
+
+    Context 'when creating the subscription deployment role (role definition missing)' {
+        BeforeAll {
+            $responses = New-BaseResponses
+            $responses['*ad app list*'] = 'cccccccc-3333-3333-3333-333333333333'
+            $responses['*ad sp list*'] = 'dddddddd-4444-4444-4444-444444444444'
+            $responses['*federated-credential list*'] = 'repo:Godson90/bicep:environment:dev'
+            $responses['*role definition list*'] = ''
+            Set-AzShadow $responses
+            try {
+                & $scriptPath -ResourceGroupNames $resourceGroups -GitHubRepository 'Godson90/bicep' -EnvironmentName 'dev' -Confirm:$false | Out-Null
+            }
+            finally {
+                Remove-AzShadow
+            }
+            $script:roleDefinitionPayload = $global:RoleDefinitionPayload | ConvertFrom-Json
+        }
+
+        It 'grants exactly the 8 deployment-operation and read-only actions, no wildcard' {
+            $expectedActions = @(
+                'Microsoft.Resources/deployments/read',
+                'Microsoft.Resources/deployments/write',
+                'Microsoft.Resources/deployments/validate/action',
+                'Microsoft.Resources/deployments/whatIf/action',
+                'Microsoft.Resources/deployments/operations/read',
+                'Microsoft.Resources/deployments/operationstatuses/read',
+                'Microsoft.Resources/subscriptions/read',
+                'Microsoft.Resources/subscriptions/resourceGroups/read'
+            )
+            @($script:roleDefinitionPayload.Actions | Sort-Object) | Should -Be @($expectedActions | Sort-Object)
+            $script:roleDefinitionPayload.Actions | Should -Not -Contain '*'
+        }
+
+        It 'is assignable only at the subscription scope' {
+            @($script:roleDefinitionPayload.AssignableScopes) | Should -Be @('/subscriptions/22222222-2222-2222-2222-222222222222')
         }
     }
 }

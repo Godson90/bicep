@@ -227,14 +227,11 @@ function Set-CustomRole {
 # 4. Subscription-scope deployments only (no resource rights): the entry point targets the subscription,
 #    while every resource lands in a pre-created resource group granted below.
 $deploymentRoleName = 'DefenStack Subscription Deployment Operator'
-Set-CustomRole -Name $deploymentRoleName -Description 'Run subscription-scope ARM deployments (validate, what-if, create) and read resource groups. Grants no resource permissions.' -Actions @(
+Set-CustomRole -Name $deploymentRoleName -Description 'Run subscription-scope ARM deployments (validate, what-if, create) and read resource groups. Grants no resource permissions and cannot cancel or delete deployments.' -Actions @(
     'Microsoft.Resources/deployments/read',
     'Microsoft.Resources/deployments/write',
-    'Microsoft.Resources/deployments/delete',
-    'Microsoft.Resources/deployments/cancel/action',
     'Microsoft.Resources/deployments/validate/action',
     'Microsoft.Resources/deployments/whatIf/action',
-    'Microsoft.Resources/deployments/exportTemplate/action',
     'Microsoft.Resources/deployments/operations/read',
     'Microsoft.Resources/deployments/operationstatuses/read',
     'Microsoft.Resources/subscriptions/read',

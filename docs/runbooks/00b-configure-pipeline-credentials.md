@@ -21,7 +21,7 @@ The only values stored in GitHub are three **identifiers**, kept as environment 
 | Where | What |
 |---|---|
 | Microsoft Entra ID | One app registration and service principal (`gh-Godson90-bicep-dev-deploy`) with one federated credential (`github-dev`) |
-| Azure RBAC, at subscription scope | Custom role `DefenStack Subscription Deployment Operator` (deployment read/write/delete/cancel/validate/whatIf/exportTemplate/operations, subscription and resource-group read; no resource rights), assigned to the identity |
+| Azure RBAC, at subscription scope | Custom role `DefenStack Subscription Deployment Operator` (deployment read/write/validate/whatIf, deployment-operation read, subscription and resource-group read — no resource rights, and deliberately no deployment delete/cancel/exportTemplate), assigned to the identity |
 | Azure RBAC, on `rg-defenstack-dev-global` and `rg-defenstack-dev-wus3` only | `Contributor`; `Role Based Access Control Administrator` with a condition that allows assigning only `Storage Blob Data Contributor` |
 | GitHub `Godson90/bicep` | Environment `dev` with three variables |
 
@@ -32,7 +32,8 @@ The only values stored in GitHub are three **identifiers**, kept as environment 
 | Requirement | How to check |
 |---|---|
 | Entra role that can create app registrations (`Application Developer`, or `Cloud Application Administrator`, or tenant setting "Users can register applications" = Yes) | Entra admin center → **Roles & admins** → **My roles** |
-| Azure role that can create a custom role definition and role assignments at subscription scope: `Owner`, or `User Access Administrator`, or `Role Based Access Control Administrator` (plus `Contributor` to see resources) | `az role assignment list --assignee <your-upn> --scope /subscriptions/<subscription-id> -o table` |
+| Azure role for the **first** run against a subscription (it creates the custom `DefenStack Subscription Deployment Operator` role definition, which needs `Microsoft.Authorization/roleDefinitions/write`): `Owner`, or `User Access Administrator`, at subscription scope. `Role Based Access Control Administrator` is **not** sufficient for this step — it cannot create a role definition. | `az role assignment list --assignee <your-upn> --scope /subscriptions/<subscription-id> -o table` |
+| Azure role for **later** runs, once the custom role definition already exists (a second environment, or re-running the script): `Role Based Access Control Administrator` at subscription scope and on the target resource groups (plus `Contributor` to see resources) | Same command; check the role name column |
 | Resource groups `rg-defenstack-dev-global` and `rg-defenstack-dev-wus3` exist | `az group show -n rg-defenstack-dev-global --query name -o tsv`; `az group show -n rg-defenstack-dev-wus3 --query name -o tsv` |
 | GitHub admin access to `Godson90/bicep` (needed for **Settings** → **Environments**) | Repository page shows the **Settings** tab |
 | Azure CLI 2.90+ signed in to the right tenant and subscription | `az version`; `az account show --query "{sub:id,tenant:tenantId}" -o table` |
@@ -129,24 +130,33 @@ Check that `subscription` is the one that contains `rg-defenstack-dev-global` an
 
 3. **Custom subscription-scope role, `DefenStack Subscription Deployment Operator`.**
    1. Azure portal → **Subscriptions** → the target subscription → **Access control (IAM)** → **Roles** → **Add** → **Add custom role**.
-   2. Name `DefenStack Subscription Deployment Operator`; Baseline permissions **Start from scratch**.
-   3. **Permissions** tab → **Add permissions**, and add these eleven actions (search each by name):
-      - `Microsoft.Resources/deployments/read`
-      - `Microsoft.Resources/deployments/write`
-      - `Microsoft.Resources/deployments/delete`
-      - `Microsoft.Resources/deployments/cancel/action`
-      - `Microsoft.Resources/deployments/validate/action`
-      - `Microsoft.Resources/deployments/whatIf/action`
-      - `Microsoft.Resources/deployments/exportTemplate/action`
-      - `Microsoft.Resources/deployments/operations/read`
-      - `Microsoft.Resources/deployments/operationstatuses/read`
-      - `Microsoft.Resources/subscriptions/read`
-      - `Microsoft.Resources/subscriptions/resourceGroups/read`
-   4. **Assignable scopes** tab: leave it at the subscription (do not narrow it further; the script assigns it there too).
-   5. **Review + create** → **Create**.
-   6. Back on the subscription's **Access control (IAM)** → **Add** → **Add role assignment** → select **DefenStack Subscription Deployment Operator** → **Members**: `gh-Godson90-bicep-dev-deploy` → **Review + assign**.
+   2. Recommended: skip the **Basics**/**Permissions** wizard and use the **JSON** tab instead — **Edit** → replace the contents with:
 
-   This grants deployment operations and read-only visibility at subscription scope only — no rights over any resource.
+      ```json
+      {
+        "Name": "DefenStack Subscription Deployment Operator",
+        "Description": "Run subscription-scope ARM deployments (validate, what-if, create) and read resource groups. Grants no resource permissions and cannot cancel or delete deployments.",
+        "Actions": [
+          "Microsoft.Resources/deployments/read",
+          "Microsoft.Resources/deployments/write",
+          "Microsoft.Resources/deployments/validate/action",
+          "Microsoft.Resources/deployments/whatIf/action",
+          "Microsoft.Resources/deployments/operations/read",
+          "Microsoft.Resources/deployments/operationstatuses/read",
+          "Microsoft.Resources/subscriptions/read",
+          "Microsoft.Resources/subscriptions/resourceGroups/read"
+        ],
+        "NotActions": [],
+        "AssignableScopes": ["/subscriptions/<subscription-id>"]
+      }
+      ```
+
+      Replace `<subscription-id>` with the actual subscription ID, then **Review + create** → **Create**. This is exactly what the script writes, and it avoids typing each action by hand through the **Permissions** tab's search box.
+
+      Alternative: use the **Permissions** tab and add these eight actions individually (search each by name): `Microsoft.Resources/deployments/read`, `Microsoft.Resources/deployments/write`, `Microsoft.Resources/deployments/validate/action`, `Microsoft.Resources/deployments/whatIf/action`, `Microsoft.Resources/deployments/operations/read`, `Microsoft.Resources/deployments/operationstatuses/read`, `Microsoft.Resources/subscriptions/read`, `Microsoft.Resources/subscriptions/resourceGroups/read`. Do **not** add `deployments/delete`, `deployments/cancel/action` or `deployments/exportTemplate/action` — none is needed to validate, what-if or create a deployment, and because this role is assigned at subscription scope, granting them would let this identity cancel or delete another environment's in-flight deployments or export its templates. Leave **Assignable scopes** at the subscription (do not narrow it further; the script assigns it there too).
+   3. Back on the subscription's **Access control (IAM)** → **Add** → **Add role assignment** → select **DefenStack Subscription Deployment Operator** → **Members**: `gh-Godson90-bicep-dev-deploy` → **Review + assign**.
+
+   This grants deployment operations and read-only visibility at subscription scope only — no rights over any resource, and no ability to cancel or delete a deployment record.
 
 4. **Contributor, on each dev resource group.** Repeat for `rg-defenstack-dev-global` and `rg-defenstack-dev-wus3`:
    1. Azure portal → the resource group → **Access control (IAM)** → **Add** → **Add role assignment**.
