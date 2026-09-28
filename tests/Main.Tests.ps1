@@ -32,3 +32,10 @@ Describe 'Spoke CIDR single source of truth (F5)' {
         $main.parameters.PSObject.Properties.Name | Should -Not -Contain 'approvedPrivateEndpointSourceCidrs'
     }
 }
+
+Describe 'Firewall threat intelligence wiring (F9)' {
+    It 'uses Deny in prod and Alert elsewhere' {
+        (Get-ModuleDeployment -Template $main -Name 'azure-firewall').properties.parameters.threatIntelMode.value |
+            Should -Be "[if(equals(parameters('environmentType'), 'prod'), 'Deny', 'Alert')]"
+    }
+}

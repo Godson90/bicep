@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "8063536590992544016"
+      "templateHash": "17154678323920115399"
     }
   },
   "parameters": {
@@ -726,7 +726,8 @@
           },
           "allowedOutboundFqdns": {
             "value": "[parameters('allowedOutboundFqdns')]"
-          }
+          },
+          "threatIntelMode": "[if(equals(parameters('environmentType'), 'prod'), createObject('value', 'Deny'), createObject('value', 'Alert'))]"
         },
         "template": {
           "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
@@ -735,7 +736,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "177183176472672962"
+              "templateHash": "3669913730305025370"
             }
           },
           "parameters": {
@@ -793,6 +794,25 @@
               "metadata": {
                 "description": "Approved outbound FQDNs for App Service traffic. An empty list denies application traffic by default."
               }
+            },
+            "availabilityZones": {
+              "type": "array",
+              "defaultValue": [],
+              "metadata": {
+                "description": "Availability zones for the firewall and its public IP, for example ['1', '2', '3']. Zones are fixed at creation, so leave empty when updating an existing non-zonal firewall."
+              }
+            },
+            "threatIntelMode": {
+              "type": "string",
+              "defaultValue": "Deny",
+              "allowedValues": [
+                "Alert",
+                "Deny",
+                "Off"
+              ],
+              "metadata": {
+                "description": "Threat intelligence mode for the firewall policy."
+              }
             }
           },
           "resources": [
@@ -801,6 +821,7 @@
               "apiVersion": "2025-01-01",
               "name": "[parameters('publicIpName')]",
               "location": "[parameters('location')]",
+              "zones": "[if(empty(parameters('availabilityZones')), null(), parameters('availabilityZones'))]",
               "sku": {
                 "name": "Standard"
               },
@@ -817,7 +838,7 @@
                 "sku": {
                   "tier": "Standard"
                 },
-                "threatIntelMode": "Alert",
+                "threatIntelMode": "[parameters('threatIntelMode')]",
                 "dnsSettings": {
                   "enableProxy": true
                 }
@@ -851,6 +872,30 @@
                         ],
                         "destinationPorts": [
                           "53"
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "name": "azure-monitor",
+                    "priority": 110,
+                    "ruleCollectionType": "FirewallPolicyFilterRuleCollection",
+                    "action": {
+                      "type": "Allow"
+                    },
+                    "rules": [
+                      {
+                        "ruleType": "NetworkRule",
+                        "name": "azure-monitor-agent",
+                        "ipProtocols": [
+                          "TCP"
+                        ],
+                        "sourceAddresses": "[parameters('spokeAddressPrefixes')]",
+                        "destinationAddresses": [
+                          "AzureMonitor"
+                        ],
+                        "destinationPorts": [
+                          "443"
                         ]
                       }
                     ]
@@ -902,7 +947,12 @@
               "apiVersion": "2025-01-01",
               "name": "[parameters('firewallName')]",
               "location": "[parameters('location')]",
+              "zones": "[if(empty(parameters('availabilityZones')), null(), parameters('availabilityZones'))]",
               "properties": {
+                "sku": {
+                  "name": "AZFW_VNet",
+                  "tier": "Standard"
+                },
                 "firewallPolicy": {
                   "id": "[resourceId('Microsoft.Network/firewallPolicies', parameters('firewallPolicyName'))]"
                 },
@@ -932,6 +982,7 @@
               "name": "firewall-diagnostics",
               "properties": {
                 "workspaceId": "[parameters('logAnalyticsWorkspaceId')]",
+                "logAnalyticsDestinationType": "Dedicated",
                 "logs": [
                   {
                     "categoryGroup": "allLogs",

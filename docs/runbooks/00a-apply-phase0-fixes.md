@@ -27,6 +27,8 @@ Applies the Phase 0 defect fixes to the existing `defenStack` resource group (de
 | `appServiceIntegrationSubnetAddressPrefix` | `10.0.2.0/24` | same | Also an approved PE source |
 | `virtualMachineSubnetAddressPrefix` | `10.0.3.0/24` | same | Also an approved PE source (jump host reaches Key Vault/Storage) |
 | `additionalPrivateEndpointSourceCidrs` | `[]` | `[]` | Replaces removed `approvedPrivateEndpointSourceCidrs` |
+| `threatIntelMode` (firewall module) | `Deny` | `Deny` (main passes `Alert` for dev/test) | Block known-malicious IPs/FQDNs in prod |
+| `availabilityZones` (firewall module) | `[]` | `['1','2','3']` in Phase 1 greenfield | Zones cannot be added to an existing firewall/PIP in place |
 
 ## 4. Step-by-step deployment
 1. Run the local test suite and confirm every test passes:
@@ -94,6 +96,21 @@ Until Task 11 creates `params/dev.bicepparam`, use `--template-file main.bicep -
 
 **Manual steps:** none.
 
+### F9 - Firewall hardening
+**Change:**
+- Threat intelligence mode is now a parameter (`Alert` in dev).
+- The firewall SKU is declared explicitly (`AZFW_VNet`/`Standard`, unchanged).
+- A zones parameter exists but defaults to none.
+- A platform rule allows the spoke to reach the `AzureMonitor` service tag on 443.
+- Firewall logs move to resource-specific tables.
+
+**Expected what-if:**
+- `~ Modify` on the firewall policy rule collection group `dns-egress`: adds collection `azure-monitor`.
+- `~ Modify` on the diagnostic setting `firewall-diagnostics`: `logAnalyticsDestinationType` becomes `Dedicated`.
+- The firewall itself may show `~ Modify` for `sku` (no-op). **The public IP must not show a zones change.**
+
+**Manual step - update saved queries:** after deployment, new firewall logs land in `AZFW*` tables. Any saved query or workbook that reads `AzureDiagnostics | where Category == "AzureFirewallNetworkRule"` must be rewritten to use `AZFWNetworkRule`. Old data stays in `AzureDiagnostics` until its retention expires.
+
 ## 6. Validation
 | Check | Command | Expected result |
 |---|---|---|
@@ -101,6 +118,9 @@ Until Task 11 creates `params/dev.bicepparam`, use `--template-file main.bicep -
 | BGP propagation disabled | `az network route-table list -g defenStack --query "[].{name:name,bgpOff:disableBgpRoutePropagation}" -o table` | `bgpOff` = `True` for both spoke route tables |
 | No admin inbound yet | `az network nsg rule list -g defenStack --nsg-name <spoke-vnet>-virtual-machines-nsg -o table` | Only `deny-unsolicited-inbound` (4096) |
 | PE NSG sources | `az network nsg rule show -g defenStack --nsg-name <spoke-vnet>-private-endpoints-nsg -n allow-approved-https --query sourceAddressPrefixes -o tsv` | `10.0.2.0/24` and `10.0.3.0/24` |
+| Threat intel mode | `az network firewall policy show -g defenStack -n <firewall-policy> --query threatIntelMode -o tsv` | `Alert` (dev) |
+| Azure Monitor rule | `az network firewall policy rule-collection-group show -g defenStack --policy-name <firewall-policy> -n dns-egress --query "ruleCollections[].name" -o tsv` | `dns` and `azure-monitor` |
+| Dedicated tables | In Log Analytics: `AZFWNetworkRule \| take 5` (after 15 minutes of traffic) | Rows returned |
 
 ## 7. Rollback
 General rollback: redeploy the last good commit from `main` with the same commands in §4. Per-fix exceptions are listed below.
@@ -113,3 +133,5 @@ See the per-fix notes in §5.
 ## 9. Troubleshooting
 | Symptom / error text | Cause | Fix |
 |---|---|---|
+| `AnotherOperationInProgress` on firewall policy | Two rule collection groups updated concurrently | Re-run the deployment; groups are serialised by `parent` dependency on retry |
+| `Firewall zones cannot be changed` | `availabilityZones` passed for an existing non-zonal firewall | Leave `availabilityZones` empty for in-place updates; zones arrive with Phase 1 greenfield |

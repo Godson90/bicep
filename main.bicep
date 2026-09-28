@@ -166,6 +166,7 @@ module azureFirewall 'modules/azureFirewall.bicep' = {
     logAnalyticsWorkspaceId: monitoring.outputs.id
     spokeAddressPrefixes: spokeVnetAddressSpace
     allowedOutboundFqdns: allowedOutboundFqdns
+    threatIntelMode: environmentType == 'prod' ? 'Deny' : 'Alert'
   }
 }
 
