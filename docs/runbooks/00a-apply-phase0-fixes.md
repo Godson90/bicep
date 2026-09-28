@@ -10,6 +10,15 @@ Applies the Phase 0 defect fixes to the existing `defenStack` resource group (de
 - Bicep CLI 0.47.16 or later: `bicep --version`.
 - PowerShell 5.1 or 7.
 - Operator role on `defenStack`: `Owner`, or `Contributor` plus `Role Based Access Control Administrator`. Role assignments are created and one is deleted in §5.
+- F4 step 1 (`az keyvault secret set`) additionally needs the **Key Vault Secrets Officer** data-plane role scoped to the vault — the vault uses RBAC authorization, so `Owner` alone (a management-plane role) does not grant secret access:
+
+  ```powershell
+  az role assignment create `
+    --assignee-object-id <operator-object-id> `
+    --assignee-principal-type User `
+    --role "Key Vault Secrets Officer" `
+    --scope <key-vault-resource-id>
+  ```
 - Signed in to the correct subscription:
 
   ```powershell
@@ -86,8 +95,6 @@ Applies the Phase 0 defect fixes to the existing `defenStack` resource group (de
 5. Run every manual step in §5, in order.
 6. Run every validation in §6 and paste the outputs into the Phase 0 PR.
 
-Until Task 11 creates `params/dev.bicepparam`, use `--template-file main.bicep --parameters environmentType=dev` instead.
-
 ## 5. Manual and post-deployment steps
 
 ### F1/F2 - Management subnet isolation and forced tunnelling
@@ -99,6 +106,8 @@ Until Task 11 creates `params/dev.bicepparam`, use `--template-file main.bicep -
 - `~ Modify` on `<spoke>-appservice-egress-rt`: `disableBgpRoutePropagation` goes false → true.
 
 **Manual steps:** none.
+
+**Note:** the spec's F2 also calls for a `GatewaySubnet` route table that sends spoke prefixes to the firewall; no gateway exists yet, so this is delivered with the VPN gateway in Phase 3.
 
 ### F5 - Spoke CIDRs defined once
 **Change:** the firewall source ranges and the private endpoint NSG sources are derived from the spoke address parameters instead of repeated literals. The management subnet (`10.0.3.0/24`) is now an approved private endpoint source, so the future jump host can reach Key Vault and Storage.
@@ -114,7 +123,7 @@ Until Task 11 creates `params/dev.bicepparam`, use `--template-file main.bicep -
 - Threat intelligence mode is now a parameter (`Alert` in dev).
 - The firewall SKU is declared explicitly (`AZFW_VNet`/`Standard`, unchanged).
 - A zones parameter exists but defaults to none.
-- A platform rule allows the spoke to reach the `AzureMonitor` service tag on 443.
+- A platform rule allows the spoke to reach the `AzureMonitor` and `AzureResourceManager` service tags on 443 (Azure Monitor Agent ingestion and its Azure Resource Manager control-plane dependency).
 - Firewall logs move to resource-specific tables.
 
 **Expected what-if:**
@@ -134,13 +143,13 @@ Until Task 11 creates `params/dev.bicepparam`, use `--template-file main.bicep -
 **Manual steps:** none.
 
 ### F4 - Key Vault template deployment access
-**Change:** the vault now allows Resource Manager to read secrets for deployments. Without this, the README's `az.getSecret()` flow cannot resolve.
+**Change:** the vault now allows Resource Manager to read secrets for deployments. Without this, the README's `az.getSecret()` flow cannot resolve. ARM template-deployment secret retrieval is a Key Vault trusted service, so the composed stack also sets `networkAcls.bypass: 'AzureServices'` (only when `enabledForTemplateDeployment` is `true`; otherwise it stays `'None'`) so that Resource Manager can resolve the `az.getSecret()` reference while `publicNetworkAccess` and `defaultAction: 'Deny'` keep the vault otherwise closed to the public internet.
 
-**Expected what-if:** `~ Modify` on the Key Vault, where `enabledForTemplateDeployment` goes to `true`.
+**Expected what-if:** `~ Modify` on the Key Vault, where `enabledForTemplateDeployment` goes to `true` and `properties.networkAcls.bypass` goes `None` → `AzureServices`.
 
 **Manual verification (required once per environment):** confirm that ARM can resolve a reference while `publicNetworkAccess` is `Disabled`.
 
-1. From an approved network path, create a test secret. Until Phase 3 adds Bastion/VPN there is no private path, so temporarily add your IP:
+1. From an approved network path, create a test secret. Until Phase 3 adds Bastion/VPN there is no private path, so temporarily add your IP. This step also requires the **Key Vault Secrets Officer** data-plane role on the vault for the identity running `az keyvault secret set` (see §2 prerequisites — an RBAC vault does not grant secret access through `Owner` alone):
 
    ```powershell
    $vault = '<key-vault-name>'
@@ -157,6 +166,8 @@ Until Task 11 creates `params/dev.bicepparam`, use `--template-file main.bicep -
    ```powershell
    az keyvault show -n $vault --query properties.publicNetworkAccess -o tsv
    ```
+
+   If the output is not `Disabled`, immediately re-run `az keyvault update -n $vault --public-network-access Disabled` and re-check before doing anything else.
 
 2. Create `verify.local.bicepparam` (git-ignored) that references the secret, alongside a scratch template `verify.bicep` containing:
 
@@ -190,9 +201,9 @@ Until Task 11 creates `params/dev.bicepparam`, use `--template-file main.bicep -
    Remove-Item verify.bicep, verify.local.bicepparam
    ```
 
-   Delete the test secret during the next private-path session (Phase 3), or now while the temporary IP rule is in place.
+   Delete the test secret during the next private-path session (Phase 3), or re-add the temporary IP rule, delete the secret, and remove the rule again.
 
-5. **If step 3 fails with `ForbiddenByFirewall` or `KeyVaultParameterReferenceSecretRetrieveFailed`:** ARM cannot reach the private vault. Record this in `docs/decisions/ADR-001-keyvault-deployment-references.md` and switch the secret flow to pipeline-side retrieval: the GitHub runner reads the secret over the private path (Phase 3) and passes it with `--parameters` from an environment variable. Do **not** enable public access as a workaround.
+5. **If step 3 fails with `ForbiddenByFirewall` or `KeyVaultParameterReferenceSecretRetrieveFailed` while `networkAcls.bypass` is confirmed `AzureServices` and `enabledForTemplateDeployment` is confirmed `true`:** ARM cannot reach the private vault even with the trusted-service bypass in place. Record this in `docs/decisions/ADR-001-keyvault-deployment-references.md` and switch the secret flow to pipeline-side retrieval: the GitHub runner reads the secret over the private path (Phase 3) and passes it with `--parameters` from an environment variable. Do **not** enable public access as a workaround. If the failure occurs and `bypass` is not yet `AzureServices` (or `enabledForTemplateDeployment` is not yet `true`), fix that configuration and retry before falling back to ADR-001.
 
 ### F12 - Key Vault private endpoint output
 **Change:** `privateConnectivity` now outputs `keyVaultPrivateEndpointId`, which later alerting phases use. No Azure change.
@@ -206,7 +217,7 @@ Until Task 11 creates `params/dev.bicepparam`, use `--template-file main.bicep -
 
 **Cost:** versions and soft-deleted data are billed as stored capacity, and change feed and logs add small ingestion costs. Review `docs/cost.md` after one week.
 
-**Restore procedure (point in time), run from an approved private path:**
+**Restore procedure (point in time):** `az storage blob restore` is a management-plane operation, so it does not need a private network path — the caller needs the **Storage Account Contributor** role (or equivalent) on the storage account:
 
 ```powershell
 az storage blob restore `
@@ -333,7 +344,7 @@ implicit default explicit, except where noted.
 | Threat intel mode | `az network firewall policy show -g defenStack -n <firewall-policy> --query threatIntelMode -o tsv` | `Alert` (dev) |
 | Azure Monitor rule | `az network firewall policy rule-collection-group show -g defenStack --policy-name <firewall-policy> -n dns-egress --query "ruleCollections[].name" -o tsv` | `dns` and `azure-monitor` |
 | Dedicated tables | In Log Analytics: `AZFWNetworkRule \| take 5` (after 15 minutes of traffic) | Rows returned |
-| (VM enabled only) agent healthy | `az vm extension show -g defenStack --vm-name <vm> -n AzureMonitorLinuxAgent --query provisioningState -o tsv` | `Succeeded` |
+| (VM enabled only) agent healthy | `az vm extension show -g defenStack --vm-name <vm> -n AzureMonitorLinuxAgent --query provisioningState -o tsv` (Linux) or `-n AzureMonitorWindowsAgent` (Windows) | `Succeeded` |
 | (VM enabled only) data arriving | Log Analytics: `Heartbeat \| where Computer == "<vm>" \| take 1` after 10 minutes | One row |
 | Template deployment enabled | `az keyvault show -n <key-vault-name> --query "{tmpl:properties.enabledForTemplateDeployment,public:properties.publicNetworkAccess}" -o table` | `tmpl` True, `public` Disabled |
 | Data protection on | `az storage account blob-service-properties show -g defenStack -n <storage-account> --query "{ver:isVersioningEnabled,soft:deleteRetentionPolicy.days,pitr:restorePolicy.days}" -o table` | `ver` True, `soft` 14, `pitr` 13 |
@@ -351,8 +362,11 @@ implicit default explicit, except where noted.
 General rollback: redeploy the last good commit from `main` with the same commands in §4. Per-fix exceptions are listed below.
 
 - **F1/F2:** redeploy the previous commit. ARM re-points the subnet to the App Service NSG and route table; the new NSG and route table remain and can be deleted afterwards with `az network nsg delete` / `az network route-table delete`.
-- **F4:** set `enabledForTemplateDeployment: false` in `main.bicep` and redeploy, or run `az keyvault update -n <vault> --enabled-for-template-deployment false`.
+- **F4:** set `enabledForTemplateDeployment: false` in `main.bicep` and redeploy, or run `az keyvault update -n <vault> --enabled-for-template-deployment false`. `networkAcls.bypass` reverts to `None` automatically once `enabledForTemplateDeployment` is `false` (the two are tied together in `modules/keyVault.bicep`).
 - **F7:** point-in-time restore must be disabled **before** change feed or versioning (Azure rejects the reverse order). Set `restorePolicy.enabled: false`, deploy, then disable the others.
+- **F3/F6:** redeploying the previous commit does not remove the data collection rule (DCR), the DCR association, the Azure Monitor Agent extension, or the `blob-diagnostics` diagnostic setting — Bicep incremental mode does not delete resources that a rollback's template no longer declares. Delete them explicitly if required: `az monitor data-collection-rule delete`, `az monitor data-collection-rule association delete`, `az vm extension delete`, and `az monitor diagnostic-settings delete`.
+- **F8:** `basicPublishingCredentialsPolicies` (`ftp`/`scm`) stay `allow: false` after redeploying an older commit, because incremental deployment mode does not revert a property the older template never set explicitly. Re-enable basic auth only by explicitly setting `allow: true` (in a template, or with `az resource update`) — rollback alone will not restore it.
+- **F10:** reducing `retentionInDays` back to `30` purges Log Analytics data older than 30 days; export any data you need to keep before rolling back.
 - **F11:** redeploy the previous commit (recreates the account-scope assignment), then delete the container-scope assignment with `az role assignment delete --ids <id>`.
 - **PSRule baseline fixes (Task 11):** redeploy the previous commit. The storage
   firewall default and the App Service client affinity setting revert immediately.
@@ -376,6 +390,7 @@ General rollback: redeploy the last good commit from `main` with the same comman
 | App gets `AuthorizationPermissionMismatch` on another container | Access is now limited to `def-blob` | Add a container-scoped assignment for the extra container through Bicep; do not widen to account scope |
 | Instances marked unhealthy after deploy | App returns non-2xx on `healthCheckPath` | Set `healthCheckPath` to a real health endpoint and redeploy |
 | `401` from publish profile deploy | Basic auth disabled by F8 | Use `az webapp deploy` with Entra ID credentials |
+| `ForbiddenByFirewall` on `az.getSecret()` reference resolution | Key Vault firewall is not bypassing the trusted-service (ARM) request | Check `networkAcls.bypass` is `AzureServices` and `enabledForTemplateDeployment` is `true` on the vault (`az keyvault show -n <vault> --query "{bypass:properties.networkAcls.bypass,tmpl:properties.enabledForTemplateDeployment}" -o table`) |
 
 ## Execution record
 | Date (UTC) | Environment | Deployment name | Operator | Result | Notes |

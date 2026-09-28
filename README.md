@@ -220,7 +220,7 @@ The VM module is disabled by default through `enableVirtualMachine=false`. When 
 - App Service integration traffic uses a `0.0.0.0/0` route through the firewall private IP and App Service route-all is enabled.
 - Private endpoint traffic remains on the private endpoint subnet and is not routed through the firewall.
 - No inbound DNAT rules are created. Public exposure must remain disabled unless a separate reviewed design adds explicit rules.
-- `allowedOutboundFqdns` defaults to an empty list, so application HTTPS traffic is denied until administrators provide an approved FQDN allowlist. The default platform egress rules are DNS to Azure's resolver (`168.63.129.16:53`) and HTTPS to the `AzureMonitor` service tag for the Azure Monitor Agent.
+- `allowedOutboundFqdns` defaults to an empty list, so application HTTPS traffic is denied until administrators provide an approved FQDN allowlist. The default platform egress rules are DNS to Azure's resolver (`168.63.129.16:53`) and HTTPS to the `AzureMonitor` and `AzureResourceManager` service tags for the Azure Monitor Agent (ingestion and its control-plane dependency).
 - Threat intelligence runs in `Deny` mode for `prod` and `Alert` mode for `dev`/`test`. Firewall logs are written to resource-specific tables (`AZFWNetworkRule`, `AZFWApplicationRule`, `AZFWDnsQuery`, `AZFWThreatIntel`, …), not `AzureDiagnostics`.
 - NSGs deny unsolicited inbound traffic on the private endpoint, App Service integration, and management subnets. Private endpoint network security policy is enabled. By default only the App Service integration and management subnets can reach private endpoints over HTTPS; the allowed sources are derived from `appServiceIntegrationSubnetAddressPrefix` and `virtualMachineSubnetAddressPrefix`. Add narrowly scoped administrator/client CIDRs through `additionalPrivateEndpointSourceCidrs` when required. Spoke CIDRs are defined once (`spokeVnetAddressSpace` and the subnet prefix parameters) and reused by the firewall rules.
 - Forwarded traffic is enabled on the reciprocal peerings for firewall service chaining. Gateway transit and remote gateways remain disabled.
@@ -270,17 +270,29 @@ az deployment group create `
 							 allowedOutboundFqdns='["management.azure.com"]'
 ```
 
-For Windows, use an Azure CLI parameter file or interactive secure input for `virtualMachineAdminPassword`; never add the password to `main.bicep`, `main.json`, shell history, or source control. Validate the VM deployment before creating it:
+For Windows, never pass `virtualMachineAdminPassword` as a command-line argument — it would be visible in shell history and process listings. Use a local, git-ignored `*.local.bicepparam` file with `az.getSecret()`, as described in [Key Vault and deployment secrets](#key-vault-and-deployment-secrets):
+
+```bicep
+using './main.bicep'
+
+param environmentType = 'dev'
+param enableVirtualMachine = true
+param virtualMachineOsType = 'Windows'
+param virtualMachineAdminUsername = '<admin-username>'
+param virtualMachineAdminPassword = az.getSecret(
+	'<subscription-id>',
+	'<resource-group-name>',
+	'<key-vault-name>',
+	'vm-admin-password'
+)
+```
+
+Validate the VM deployment before creating it:
 
 ```powershell
 az deployment group validate `
 	--resource-group <resource-group> `
-	--template-file main.bicep `
-	--parameters environmentType=dev `
-							 enableVirtualMachine=true `
-							 virtualMachineOsType=Windows `
-							 virtualMachineAdminUsername=<admin-username> `
-							 virtualMachineAdminPassword=<secure-password>
+	--parameters <file>.local.bicepparam
 ```
 
 ### Azure CLI administrator commands
