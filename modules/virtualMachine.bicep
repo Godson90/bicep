@@ -75,9 +75,9 @@ var performanceCounterSource = {
       ]
       samplingFrequencyInSeconds: 60
       counterSpecifiers: osType == 'Linux' ? [
-        'Processor(*)\\% Processor Time'
-        'Memory(*)\\% Used Memory'
-        'Logical Disk(*)\\% Used Space'
+        '\\Processor(*)\\% Processor Time'
+        '\\Memory(*)\\% Used Memory'
+        '\\Logical Disk(*)\\% Used Space'
       ] : [
         '\\Processor Information(_Total)\\% Processor Time'
         '\\Memory\\% Committed Bytes In Use'

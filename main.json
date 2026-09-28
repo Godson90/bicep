@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "15645473366284174175"
+      "templateHash": "6349500973089506134"
     }
   },
   "parameters": {
@@ -1855,7 +1855,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "7159512017881724760"
+              "templateHash": "16832090019238527098"
             }
           },
           "parameters": {
@@ -1953,7 +1953,7 @@
                     "Microsoft-Perf"
                   ],
                   "samplingFrequencyInSeconds": 60,
-                  "counterSpecifiers": "[if(equals(parameters('osType'), 'Linux'), createArray('Processor(*)\\% Processor Time', 'Memory(*)\\% Used Memory', 'Logical Disk(*)\\% Used Space'), createArray('\\Processor Information(_Total)\\% Processor Time', '\\Memory\\% Committed Bytes In Use', '\\LogicalDisk(_Total)\\% Free Space'))]"
+                  "counterSpecifiers": "[if(equals(parameters('osType'), 'Linux'), createArray('\\Processor(*)\\% Processor Time', '\\Memory(*)\\% Used Memory', '\\Logical Disk(*)\\% Used Space'), createArray('\\Processor Information(_Total)\\% Processor Time', '\\Memory\\% Committed Bytes In Use', '\\LogicalDisk(_Total)\\% Free Space'))]"
                 }
               ]
             },

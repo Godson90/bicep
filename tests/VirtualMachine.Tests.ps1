@@ -39,4 +39,11 @@ Describe 'VM monitoring (F3)' {
     It 'outputs the DCR ID' {
         $template.outputs.PSObject.Properties.Name | Should -Contain 'dataCollectionRuleId'
     }
+
+    It 'uses Azure Monitor counter paths with a leading backslash' {
+        # dataSources compiles to the expression '[union(variables(...), variables(...))]' rather than
+        # an inline object, so the literal counter text lives in the performanceCounterSource variable.
+        $dcrText = $template.variables.performanceCounterSource | ConvertTo-Json -Depth 10
+        $dcrText | Should -Match ([regex]::Escape('\\Processor(*)\\% Processor Time'))
+    }
 }
