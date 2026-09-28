@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "3471265596867305835"
+      "templateHash": "4840435594044875629"
     }
   },
   "parameters": {
@@ -1744,7 +1744,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "654758650604387791"
+              "templateHash": "18169017120905256794"
             }
           },
           "parameters": {
@@ -1785,6 +1785,29 @@
               "metadata": {
                 "description": "Deployment environment that controls App Service plan sizing."
               }
+            },
+            "healthCheckPath": {
+              "type": "string",
+              "defaultValue": "/",
+              "metadata": {
+                "description": "Relative path probed by App Service health check; it must return 200-299 when the instance is healthy."
+              }
+            },
+            "zoneRedundant": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "Spread plan instances across availability zones. Zone redundancy is set when a plan is created, so enable it only for new plans."
+              }
+            },
+            "instanceCount": {
+              "type": "int",
+              "defaultValue": 1,
+              "minValue": 1,
+              "maxValue": 30,
+              "metadata": {
+                "description": "Number of plan instances. Zone-redundant plans require at least 3."
+              }
             }
           },
           "variables": {
@@ -1800,7 +1823,11 @@
               "location": "[parameters('location')]",
               "sku": {
                 "name": "[variables('appServicePlanSkuName')]",
-                "tier": "[variables('appServicePlanSkuTier')]"
+                "tier": "[variables('appServicePlanSkuTier')]",
+                "capacity": "[parameters('instanceCount')]"
+              },
+              "properties": {
+                "zoneRedundant": "[parameters('zoneRedundant')]"
               }
             },
             "appServiceApp": {
@@ -1820,11 +1847,37 @@
                   "ftpsState": "Disabled",
                   "http20Enabled": true,
                   "minTlsVersion": "1.2",
-                  "vnetRouteAllEnabled": true
+                  "vnetRouteAllEnabled": true,
+                  "alwaysOn": true,
+                  "healthCheckPath": "[parameters('healthCheckPath')]",
+                  "scmMinTlsVersion": "1.2",
+                  "remoteDebuggingEnabled": false
                 }
               },
               "dependsOn": [
                 "appServiceplan"
+              ]
+            },
+            "ftpBasicPublishing": {
+              "type": "Microsoft.Web/sites/basicPublishingCredentialsPolicies",
+              "apiVersion": "2025-03-01",
+              "name": "[format('{0}/{1}', parameters('appServiceAppName'), 'ftp')]",
+              "properties": {
+                "allow": false
+              },
+              "dependsOn": [
+                "appServiceApp"
+              ]
+            },
+            "scmBasicPublishing": {
+              "type": "Microsoft.Web/sites/basicPublishingCredentialsPolicies",
+              "apiVersion": "2025-03-01",
+              "name": "[format('{0}/{1}', parameters('appServiceAppName'), 'scm')]",
+              "properties": {
+                "allow": false
+              },
+              "dependsOn": [
+                "appServiceApp"
               ]
             },
             "appServiceDiagnostics": {

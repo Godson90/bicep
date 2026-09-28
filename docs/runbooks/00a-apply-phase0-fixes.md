@@ -38,6 +38,9 @@ Applies the Phase 0 defect fixes to the existing `defenStack` resource group (de
 | `availabilityZones` (firewall module) | `[]` | `['1','2','3']` in Phase 1 greenfield | Zones cannot be added to an existing firewall/PIP in place |
 | `enabledForTemplateDeployment` (Key Vault) | `false` (module) | `true` (composed stack) | Required for `az.getSecret()` Key Vault references |
 | `blobSoftDeleteRetentionDays` (storage) | `14` | `14` or higher per data retention policy | Recovery window; PITR = value − 1 |
+| `healthCheckPath` (App Service) | `/` | Application health endpoint, e.g. `/healthz` | Unhealthy instances are removed from rotation |
+| `zoneRedundant` (App Service) | `false` | `true` in Phase 1 greenfield | Set at plan creation only |
+| `instanceCount` (App Service) | `1` | `3` with zone redundancy | Zone-redundant minimum |
 
 ## 4. Step-by-step deployment
 1. Run the local test suite and confirm every test passes:
@@ -234,6 +237,27 @@ $oldId = az role assignment list --scope $storageId --assignee $principalId --ro
 az role assignment delete --ids $oldId
 ```
 
+### F8 - App Service hardening
+**Change:**
+- FTP and SCM basic-auth publishing are disabled.
+- Always On, health check, SCM TLS 1.2 and remote debugging off are added.
+- Zone redundancy and instance-count parameters are added with in-place-safe defaults.
+
+**Expected what-if:**
+- `~ Modify` on the site's `siteConfig`.
+- `+ Create`/`~ Modify` for `basicPublishingCredentialsPolicies/ftp` and `/scm`.
+- `~ Modify` on the plan (`capacity: 1`, `zoneRedundant: false`), which is a no-op.
+
+**Manual steps:**
+1. Confirm the application returns HTTP 200 on `healthCheckPath` before deploying. With health check on, an app that returns non-2xx on `/` will have instances marked unhealthy.
+2. Any deployment tooling that used a publish profile (username/password) stops working. Deploy code with Entra ID auth instead:
+
+   ```powershell
+   az webapp deploy -g defenStack -n <app-service-name> --src-path app.zip --type zip
+   ```
+
+   This must run from a network path that can reach the SCM private endpoint (Phase 3).
+
 ## 6. Validation
 | Check | Command | Expected result |
 |---|---|---|
@@ -251,6 +275,8 @@ az role assignment delete --ids $oldId
 | Blob logs arriving | Log Analytics: `StorageBlobLogs \| take 5` after blob activity | Rows returned |
 | Only container-scoped access | `az role assignment list --assignee <app-principal-id> --all --query "[?roleDefinitionName=='Storage Blob Data Contributor'].scope" -o tsv` | Exactly one scope ending `/containers/def-blob` |
 | App still reads/writes | Application smoke test against `def-blob` | Success; `StorageBlobLogs` shows `AuthenticationType == "OAuth"` |
+| Basic auth off | `az resource show -g defenStack --namespace Microsoft.Web --parent sites/<app-service-name> --resource-type basicPublishingCredentialsPolicies -n scm --query properties.allow -o tsv` | `false` (repeat with `-n ftp`) |
+| Site config | `az webapp config show -g defenStack -n <app-service-name> --query "{alwaysOn:alwaysOn,health:healthCheckPath,scmTls:scmMinTlsVersion,debug:remoteDebuggingEnabled}" -o table` | `True`, `/`, `1.2`, `False` |
 
 ## 7. Rollback
 General rollback: redeploy the last good commit from `main` with the same commands in §4. Per-fix exceptions are listed below.
@@ -270,3 +296,5 @@ See the per-fix notes in §5.
 | `Firewall zones cannot be changed` | `availabilityZones` passed for an existing non-zonal firewall | Leave `availabilityZones` empty for in-place updates; zones arrive with Phase 1 greenfield |
 | No `Heartbeat` rows | Firewall blocking agent egress | Check `AZFWNetworkRule \| where DestinationPort == 443 and Action == "Deny"`; confirm the `azure-monitor` collection exists |
 | App gets `AuthorizationPermissionMismatch` on another container | Access is now limited to `def-blob` | Add a container-scoped assignment for the extra container through Bicep; do not widen to account scope |
+| Instances marked unhealthy after deploy | App returns non-2xx on `healthCheckPath` | Set `healthCheckPath` to a real health endpoint and redeploy |
+| `401` from publish profile deploy | Basic auth disabled by F8 | Use `az webapp deploy` with Entra ID credentials |
