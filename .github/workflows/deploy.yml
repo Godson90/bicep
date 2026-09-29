@@ -29,11 +29,12 @@ env:
   TARGET_ENV: ${{ inputs.environment || 'dev' }}
 
 jobs:
-  # Validate and what-if without approval, so reviewers can read the change before approving apply.
+  # Prod: runs in the reviewer-gated prod environment (approve plan, read the what-if, then approve apply) so every prod token needs approval.
+  # Dev: runs in dev-plan (no reviewers).
   plan:
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment || 'dev' }}-plan
+    environment: ${{ inputs.environment == 'prod' && 'prod' || 'dev-plan' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -77,6 +78,8 @@ jobs:
         with:
           name: whatif-${{ inputs.environment || 'dev' }}
           path: whatif.txt
+          retention-days: 14
+          if-no-files-found: error
 
   # Gated by the target environment's required reviewers (prod); reviewers read the plan job summary first.
   apply:

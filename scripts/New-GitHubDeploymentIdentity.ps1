@@ -68,8 +68,9 @@ if ([string]::IsNullOrWhiteSpace($DisplayName)) {
 
 $subscriptionScope = "/subscriptions/$SubscriptionId"
 $resourceGroupScopes = @($ResourceGroupNames | ForEach-Object { "$subscriptionScope/resourceGroups/$_" })
-# The deploy workflow's plan job runs in '<env>-plan' (no reviewers) and its apply job in '<env>' (reviewers in prod).
-$credentialEnvironments = @($EnvironmentName, "$EnvironmentName-plan")
+# The deploy workflow's plan job runs in '<env>-plan' (no reviewers) for non-prod, and its apply job in '<env>' (reviewers in prod).
+# Prod never gets an ungated credential: its plan job runs in the gated 'prod' environment alongside apply.
+$credentialEnvironments = if ($EnvironmentName -eq 'prod') { @($EnvironmentName) } else { @($EnvironmentName, "$EnvironmentName-plan") }
 
 Write-Host "Application: $DisplayName"
 Write-Host "Federated subjects: $(($credentialEnvironments | ForEach-Object { "repo:${GitHubRepository}:environment:$_" }) -join ', ')"

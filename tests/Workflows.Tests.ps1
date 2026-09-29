@@ -54,8 +54,8 @@ Describe 'Deploy workflow plan/apply split (Phase 2)' {
         $applyStart | Should -BeGreaterThan $planStart
     }
 
-    It 'runs validate and what-if in the plan job, in the ungated <env>-plan environment' {
-        $planJob | Should -Match "environment: \$\{\{ inputs\.environment \|\| 'dev' \}\}-plan"
+    It 'runs validate and what-if in the plan job, gated to prod for prod and dev-plan otherwise' {
+        $planJob | Should -Match "environment: \$\{\{ inputs\.environment == 'prod' && 'prod' \|\| 'dev-plan' \}\}"
         $planJob | Should -Match 'az deployment sub validate'
         $planJob | Should -Match 'az deployment sub what-if'
         $planJob | Should -Not -Match 'az deployment sub create'
@@ -74,5 +74,13 @@ Describe 'Deploy workflow plan/apply split (Phase 2)' {
 
     It 'runs the PR what-if in dev-plan' {
         $ci | Should -Match 'environment: dev-plan'
+    }
+
+    It 'has no prod-plan environment anywhere' {
+        $deploy | Should -Not -Match 'prod-plan'
+    }
+
+    It 'retains the what-if artifact for 14 days' {
+        $planJob | Should -Match 'retention-days: 14'
     }
 }

@@ -231,19 +231,37 @@ Describe 'New-GitHubDeploymentIdentity.ps1' {
             $responses['*role definition list*'] = 'existing-custom-role'
             Set-AzShadow $responses
             try {
-                & $scriptPath -ResourceGroupNames $resourceGroups -GitHubRepository 'Godson90/bicep' -EnvironmentName 'prod' -Confirm:$false | Out-Null
+                & $scriptPath -ResourceGroupNames $resourceGroups -GitHubRepository 'Godson90/bicep' -EnvironmentName 'dev' -Confirm:$false | Out-Null
             }
             finally {
                 Remove-AzShadow
             }
             $credentials = @($global:FederatedCredentialPayloads | ForEach-Object { $_ | ConvertFrom-Json })
             $credentials.Count | Should -Be 2
-            ($credentials | Where-Object { $_.name -eq 'github-prod' }).subject | Should -BeExactly 'repo:Godson90/bicep:environment:prod'
-            ($credentials | Where-Object { $_.name -eq 'github-prod-plan' }).subject | Should -BeExactly 'repo:Godson90/bicep:environment:prod-plan'
+            ($credentials | Where-Object { $_.name -eq 'github-dev' }).subject | Should -BeExactly 'repo:Godson90/bicep:environment:dev'
+            ($credentials | Where-Object { $_.name -eq 'github-dev-plan' }).subject | Should -BeExactly 'repo:Godson90/bicep:environment:dev-plan'
             foreach ($credential in $credentials) {
                 $credential.issuer | Should -BeExactly 'https://token.actions.githubusercontent.com'
                 @($credential.audiences) | Should -Be @('api://AzureADTokenExchange')
             }
+        }
+
+        It 'creates only github-prod for the prod environment, with no plan credential' {
+            $responses = New-BaseResponses
+            $responses['*ad app list*'] = 'cccccccc-3333-3333-3333-333333333333'
+            $responses['*ad sp list*'] = 'dddddddd-4444-4444-4444-444444444444'
+            $responses['*role definition list*'] = 'existing-custom-role'
+            Set-AzShadow $responses
+            try {
+                & $scriptPath -ResourceGroupNames $resourceGroups -GitHubRepository 'Godson90/bicep' -EnvironmentName 'prod' -Confirm:$false | Out-Null
+            }
+            finally {
+                Remove-AzShadow
+            }
+            $credentials = @($global:FederatedCredentialPayloads | ForEach-Object { $_ | ConvertFrom-Json })
+            $credentials.Count | Should -Be 1
+            $credentials[0].name | Should -BeExactly 'github-prod'
+            $credentials[0].subject | Should -BeExactly 'repo:Godson90/bicep:environment:prod'
         }
 
         It 'refuses an existing credential whose subject differs only in case' {
