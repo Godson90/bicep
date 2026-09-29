@@ -50,3 +50,13 @@ payload-level HTTPS inspection. At that point, plan together:
 - Distributing trust of the intermediate CA to every client that traverses
   the firewall (management VMs, and any future workload identities).
 - The `transportSecurity` block itself on the firewall policy.
+- **Whether Azure Firewall Premium can actually reach a private-endpoint-only
+  Key Vault to read the intermediate CA certificate.** Every Key Vault in
+  this design has public network access disabled
+  (`modules/keyVault.bicep`), so the firewall would need a path to the
+  vault's private endpoint that does not itself depend on TLS inspection
+  being active — this has not been verified end-to-end (no TLS-inspecting
+  firewall has been deployed against one of this project's private-endpoint
+  Key Vaults). This check is deferred along with the rest of TLS inspection,
+  and must be completed and confirmed working before TLS inspection is
+  enabled, not assumed to work because the firewall uses a managed identity.

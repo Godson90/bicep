@@ -61,7 +61,7 @@ Describe 'Deploy workflow plan/apply split (Phase 2)' {
         $planJob | Should -Not -Match 'az deployment sub create'
     }
 
-    It 'creates only in the apply job, which waits for plan and runs in the reviewer-gated <env> environment' {
+    It 'creates only in the apply job, which waits for plan and runs in the reviewer-gated {env} environment' {
         $applyJob | Should -Match 'needs: plan'
         $applyJob | Should -Match "environment: \$\{\{ inputs\.environment \|\| 'dev' \}\}\s"
         $applyJob | Should -Match 'az deployment sub create'
@@ -82,5 +82,9 @@ Describe 'Deploy workflow plan/apply split (Phase 2)' {
 
     It 'retains the what-if artifact for 14 days' {
         $planJob | Should -Match 'retention-days: 14'
+    }
+
+    It 'overwrites the what-if artifact so a re-run of a failed plan job does not fail on an existing artifact name (Final review D.4)' {
+        $planJob | Should -Match 'overwrite: true'
     }
 }

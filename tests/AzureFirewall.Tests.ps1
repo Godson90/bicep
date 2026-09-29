@@ -30,7 +30,12 @@ Describe 'Azure Firewall Premium (Phase 2)' {
 
     It 'enables IDPS on Premium policies only, defaulting to Deny' {
         $template.parameters.idpsMode.defaultValue | Should -Be 'Deny'
-        $policy.properties.intrusionDetection | Should -Be "[if(variables('isPremium'), createObject('mode', parameters('idpsMode')), null())]"
+        $policy.properties.intrusionDetection | Should -Be "[if(variables('isPremium'), createObject('mode', parameters('idpsMode'), 'configuration', createObject('signatureOverrides', parameters('idpsSignatureOverrides'))), null())]"
+    }
+
+    It 'accepts per-signature IDPS overrides on the policy resource, defaulting to none (Final review A)' {
+        @($template.parameters.idpsSignatureOverrides.defaultValue).Count | Should -Be 0
+        $policy.properties.intrusionDetection | Should -Match 'idpsSignatureOverrides'
     }
 }
 

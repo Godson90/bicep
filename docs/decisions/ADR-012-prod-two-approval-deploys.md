@@ -35,6 +35,12 @@ the PR what-if in `bicep-ci.yml` can also use it), and `apply` runs in `dev`.
   artifact, kept 14 days) a reviewer approves the `apply` job before it
   actually creates or updates prod resources. Both approvals gate the same
   prod credential; there is no way to reach prod with only one approval.
+- The two approvals provide separation of duties only when the `prod`
+  environment's required-reviewers rule also has **Prevent self-review**
+  enabled (`docs/runbooks/00b-configure-pipeline-credentials.md` §5 "Prod").
+  Without it, the person who dispatches the run can approve both their own
+  `plan` and `apply` jobs, and "two approvals" becomes two clicks by the same
+  person rather than an independent second reviewer.
 - Reviewers see the what-if for the exact deployment `apply` is about to run,
   since both jobs authenticate as the same prod identity in the same run.
 - Dev's workflow shape, and the identity script's behavior for dev

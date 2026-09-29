@@ -68,9 +68,13 @@ if ([string]::IsNullOrWhiteSpace($DisplayName)) {
 
 $subscriptionScope = "/subscriptions/$SubscriptionId"
 $resourceGroupScopes = @($ResourceGroupNames | ForEach-Object { "$subscriptionScope/resourceGroups/$_" })
-# The deploy workflow's plan job runs in '<env>-plan' (no reviewers) for non-prod, and its apply job in '<env>' (reviewers in prod).
-# Prod never gets an ungated credential: its plan job runs in the gated 'prod' environment alongside apply.
-$credentialEnvironments = if ($EnvironmentName -eq 'prod') { @($EnvironmentName) } else { @($EnvironmentName, "$EnvironmentName-plan") }
+# The deploy workflow's plan job runs in '<env>-plan' (no reviewers) only for the environments listed here;
+# every other environment's plan job runs in the gated '<env>' environment alongside apply, so it gets no
+# ungated '-plan' credential. Fail closed: an environment must be explicitly opted in to get an ungated plan
+# credential. Today only dev is opted in; prod (ADR-012) and any future environment (for example a 'staging')
+# get no '-plan' credential unless deliberately added here.
+$ungatedPlanEnvironments = @('dev')
+$credentialEnvironments = if ($ungatedPlanEnvironments -contains $EnvironmentName) { @($EnvironmentName, "$EnvironmentName-plan") } else { @($EnvironmentName) }
 
 Write-Host "Application: $DisplayName"
 Write-Host "Federated subjects: $(($credentialEnvironments | ForEach-Object { "repo:${GitHubRepository}:environment:$_" }) -join ', ')"

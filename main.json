@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "15717784355291886966"
+      "templateHash": "6223473245839668118"
     }
   },
   "definitions": {
@@ -597,7 +597,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "10425398724888185916"
+              "templateHash": "12046777419788058238"
             }
           },
           "definitions": {
@@ -1379,7 +1379,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "12576322112921906322"
+                      "templateHash": "16763894543488761727"
                     }
                   },
                   "parameters": {
@@ -1486,6 +1486,13 @@
                         "description": "IDPS mode for Premium policies: Alert logs signature hits, Deny also blocks them. Ignored for Standard."
                       }
                     },
+                    "idpsSignatureOverrides": {
+                      "type": "array",
+                      "defaultValue": [],
+                      "metadata": {
+                        "description": "Per-signature IDPS overrides for Premium policies, for example to Alert-only on one signature that false-positives against legitimate traffic. Find the signature ID in the AZFWIdpsSignature table's SignatureId column. Each entry: { id: '<signatureId>', mode: 'Alert' | 'Deny' | 'Off' }. Empty by default; never used to disable IDPS as a whole (use idpsMode = 'Off' for that, which this project does not do)."
+                      }
+                    },
                     "enableDeleteLock": {
                       "type": "bool",
                       "defaultValue": false,
@@ -1521,7 +1528,7 @@
                           "tier": "[parameters('firewallTier')]"
                         },
                         "threatIntelMode": "[parameters('threatIntelMode')]",
-                        "intrusionDetection": "[if(variables('isPremium'), createObject('mode', parameters('idpsMode')), null())]",
+                        "intrusionDetection": "[if(variables('isPremium'), createObject('mode', parameters('idpsMode'), 'configuration', createObject('signatureOverrides', parameters('idpsSignatureOverrides'))), null())]",
                         "dnsSettings": {
                           "enableProxy": true
                         }
@@ -3613,7 +3620,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "10425398724888185916"
+              "templateHash": "12046777419788058238"
             }
           },
           "definitions": {
@@ -4395,7 +4402,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "12576322112921906322"
+                      "templateHash": "16763894543488761727"
                     }
                   },
                   "parameters": {
@@ -4502,6 +4509,13 @@
                         "description": "IDPS mode for Premium policies: Alert logs signature hits, Deny also blocks them. Ignored for Standard."
                       }
                     },
+                    "idpsSignatureOverrides": {
+                      "type": "array",
+                      "defaultValue": [],
+                      "metadata": {
+                        "description": "Per-signature IDPS overrides for Premium policies, for example to Alert-only on one signature that false-positives against legitimate traffic. Find the signature ID in the AZFWIdpsSignature table's SignatureId column. Each entry: { id: '<signatureId>', mode: 'Alert' | 'Deny' | 'Off' }. Empty by default; never used to disable IDPS as a whole (use idpsMode = 'Off' for that, which this project does not do)."
+                      }
+                    },
                     "enableDeleteLock": {
                       "type": "bool",
                       "defaultValue": false,
@@ -4537,7 +4551,7 @@
                           "tier": "[parameters('firewallTier')]"
                         },
                         "threatIntelMode": "[parameters('threatIntelMode')]",
-                        "intrusionDetection": "[if(variables('isPremium'), createObject('mode', parameters('idpsMode')), null())]",
+                        "intrusionDetection": "[if(variables('isPremium'), createObject('mode', parameters('idpsMode'), 'configuration', createObject('signatureOverrides', parameters('idpsSignatureOverrides'))), null())]",
                         "dnsSettings": {
                           "enableProxy": true
                         }

@@ -24,10 +24,13 @@ enforces:
 - **IDPS** (Premium-only): `idpsMode` — `Alert` in dev, `Deny` in prod.
 - **Threat intelligence**: `threatIntelMode` — `Alert` in dev (`ADR-003`),
   `Deny` in prod.
-- **The DNS proxy** (`dnsSettings.enableProxy: true`): every spoke and hub VNet
-  in the stamp uses the firewall's private IP as its DNS server, so all DNS
-  resolution — including the private DNS zones linked in the global layer —
-  is proxied through the firewall.
+- **The DNS proxy** (`dnsSettings.enableProxy: true`): the stamp's **spoke**
+  VNet uses the firewall's private IP as its DNS server
+  (`modules/spokeNetwork.bicep`'s `vnet.bicep` call sets `dhcpOptions`), so
+  all spoke DNS resolution — including the private DNS zones linked in the
+  global layer — is proxied through the firewall. The **hub** VNet
+  (`modules/hubNetwork.bicep`) sets no `dhcpOptions` and so has no VNet-level
+  DNS server override; it relies on Azure-provided DNS directly (`ADR-005`).
 
 TLS inspection is explicitly out of scope for Phase 2 (`ADR-011`): IDPS and
 threat intelligence see only unencrypted traffic and TLS metadata, not
@@ -45,10 +48,16 @@ collection groups), `modules/regionStamp.bicep` (wires `firewallTier`,
   group scope (or broader). To run a deploy that changes firewall rules, the
   same pipeline identity and process as any other change — see
   [runbook 00b](00b-configure-pipeline-credentials.md) and
-  [runbook 01](01-deploy-stack.md) §2/§3. No additional role is needed beyond
-  what those runbooks already grant; firewall and firewall-policy resources
-  are ordinary resources under the pipeline identity's per-resource-group
-  `Contributor` grant.
+  [runbook 01](01-deploy-stack.md) §2/§3. Firewall and firewall-policy
+  resources are ordinary resources under the pipeline identity's
+  per-resource-group `Contributor` grant. **Prod deploys also need the
+  `DefenStack Resource Lock Operator` custom role**, granted by running
+  `scripts/New-GitHubDeploymentIdentity.ps1` with `-GrantLockManagement`
+  (`docs/runbooks/00b-configure-pipeline-credentials.md` §5 "Prod") — built-in
+  `Contributor` excludes `Microsoft.Authorization/*` writes, so it cannot
+  create or update the `CanNotDelete` locks a prod deploy applies to the
+  firewall, its policy, and its public IP (§6/§7 below) without this
+  additional role.
 - **The Log Analytics workspace** `log-defenstack-<env>`, in
   `rg-defenstack-<env>-global`, must already exist (`modules/global.bicep`,
   runbook 01). Firewall diagnostics (`firewall-diagnostics`,
@@ -86,6 +95,15 @@ code change.
      `modules/firewallPolicyRules.bicep` directly.
    - An **application allowlist** entry (one environment only): edit
      `allowedOutboundFqdns` in `params/<env>.bicepparam`.
+   - An **IDPS signature override** (Alert-only or Off for one specific
+     signature): edit `idpsSignatureOverrides` in `modules/azureFirewall.bicep`'s
+     module call in `modules/regionStamp.bicep` (or the parameter's default in
+     `modules/azureFirewall.bicep` for every stamp). This is **not** in
+     `modules/firewallPolicyRules.bicep` — that module holds only the three
+     rule collection groups (`dns-egress`, `platform-egress`,
+     `approved-https-egress`); IDPS overrides live on the policy resource
+     itself, under `intrusionDetection.configuration.signatureOverrides`. See
+     §8.
 2. **Add or adjust a test** in `tests/FirewallPolicyRules.Tests.ps1` covering
    the new or changed rule.
 3. **Run the suite and PSRule** locally:
@@ -165,10 +183,19 @@ toggle:
 
 - **IDPS tuning:** review `AZFWIdpsSignature` in dev weekly while dev runs in
   `Alert` mode. If a signature false-positives against legitimate traffic,
-  add a signature override in `modules/firewallPolicyRules.bicep` (or a
-  dedicated overrides module, if the list grows) in a follow-up PR through
-  the normal rule change procedure (§4) — there is no portal-side
-  configuration drift, since every override lives in source control.
+  find its ID in `AZFWIdpsSignature`'s `SignatureId` column and add an entry
+  to `idpsSignatureOverrides` (each entry `{ id: '<signatureId>', mode:
+  'Alert' | 'Off' }`) — **not** in `modules/firewallPolicyRules.bicep`, which
+  holds only rule collection groups. The override lives on the firewall
+  policy resource in `modules/azureFirewall.bicep`
+  (`intrusionDetection.configuration.signatureOverrides`), in a follow-up PR
+  through the normal rule change procedure (§4): edit the source, add or
+  adjust a test in `tests/AzureFirewall.Tests.ps1`, run the suite, open a PR,
+  read the dev what-if, merge, then for prod run `deploy` with
+  `environment=prod` and approve `plan` then `apply` (§4 steps 4–6). There is
+  no portal-side configuration drift, since every override lives in source
+  control. Never disable IDPS entirely to tune out one false positive — set
+  only that signature's mode, never `idpsMode: 'Off'`.
 - **Moving dev IDPS to Deny:** change the `idpsMode: isProd ? 'Deny' :
   'Alert'` expression in `modules/regionStamp.bicep`'s `azureFirewall` module
   call to stop conditioning on `isProd`, through the normal rule change
@@ -226,7 +253,7 @@ toggle:
 | `AnotherOperationInProgress` / `FirewallPolicyUpdateNotAllowedWhenUpdatingOrDeleting` | Two rule collection groups on the same policy tried to update concurrently | The groups are already dependency-chained in `modules/firewallPolicyRules.bicep`; re-run the deployment — it is transient, not a real conflict |
 | VM (or other management-subnet resource) updates fail to reach an OS update endpoint | `AZFWApplicationRule` is denying the request from the management subnet | Query `AZFWApplicationRule` for `Action == "Deny"` from the management subnet's source IP; confirm the target FQDN is actually covered by `platform-egress` (`WindowsUpdate` tag or the Ubuntu archive FQDNs) — if not, it needs a baseline rule change (§4), not an allowlist entry |
 | An application call is denied that should be allowed | The destination FQDN is not in `allowedOutboundFqdns` | Follow the allowlist request process (§5) |
-| IDPS blocks legitimate prod traffic | A signature is matching traffic that is actually benign, and prod's `idpsMode: Deny` blocks on match | Temporarily set that specific signature to `Alert` through a signature override (a rule change, §4/§8) — never disable IDPS entirely to work around one false positive |
+| IDPS blocks legitimate prod traffic | A signature is matching traffic that is actually benign, and prod's `idpsMode: Deny` blocks on match | Find the signature ID in `AZFWIdpsSignature`'s `SignatureId` column and temporarily add `{ id: '<signatureId>', mode: 'Alert' }` to `idpsSignatureOverrides` in `modules/azureFirewall.bicep` (not `modules/firewallPolicyRules.bicep`) through the normal rule change procedure (§4/§8) — never disable IDPS entirely to work around one false positive |
 | `ScopeLocked` on a delete in prod | A `CanNotDelete` lock (§6) is still attached | See §7/§8's lock-removal step, then redeploy to restore the lock |
 | `AADSTS70021` in the dev **plan** job | The `dev-plan` federated credential or environment is missing — the identity script only created it if `-EnvironmentName dev` was used (it does not create a `-plan` credential for `-EnvironmentName prod`) | Re-run `scripts/New-GitHubDeploymentIdentity.ps1` for dev (`-EnvironmentName dev`); see [runbook 00b](00b-configure-pipeline-credentials.md) §9 |
 

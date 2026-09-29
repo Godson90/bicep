@@ -12,13 +12,18 @@ Phase 1 replaces the single resource-group, resource-group-scoped `defenStack` d
   - The **secondary** stamp is deployed only when `deploySecondaryRegion = true` (prod only, East US). Dev runs primary-only (`ADR-008`).
 - Shared-zone **VNet links** (`modules/privateDnsZoneLinks.bicep`), one deployment per zone, linking every deployed stamp's hub and spoke VNets so both firewall DNS-proxy resolution and private-endpoint record lookups work from every region.
 
-What exists after Phase 1: zone-redundant Azure Firewall Standard and App Service (prod primary only) per region, private endpoints for Storage/App Service/Key Vault, deny-by-default NSGs, hub↔spoke peering, and Log Analytics workspace replication from the primary region to the secondary (prod only).
+What exists after Phase 1–2 (the current state of this branch): a
+zone-redundant Azure Firewall **Premium** with IDPS (`Alert` in dev, `Deny`
+in prod) and zone-redundant App Service (prod primary only) per region,
+private endpoints for Storage/App Service/Key Vault, deny-by-default NSGs,
+hub↔spoke peering, and Log Analytics workspace replication from the primary
+region to the secondary (prod only).
 
-**Phase 2** upgraded every stamp's firewall to **Premium** with IDPS
-(`Alert` in dev, `Deny` in prod) and moved rule content into a shared module
-(`modules/firewallPolicyRules.bicep`) instead of the one-parent-policy design
-originally planned, since a parent and its child policies must share a
-region (`ADR-010`). See §3 and §7 below, and
+**Phase 2** upgraded every stamp's firewall from Phase 1's Standard tier to
+**Premium** with IDPS (`Alert` in dev, `Deny` in prod) and moved rule content
+into a shared module (`modules/firewallPolicyRules.bicep`) instead of the
+one-parent-policy design originally planned, since a parent and its child
+policies must share a region (`ADR-010`). See §3 and §7 below, and
 [runbook 02](../runbooks/02-firewall.md).
 
 What later phases add (not present after Phase 2):

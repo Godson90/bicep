@@ -57,6 +57,9 @@ param threatIntelMode string = 'Deny'
 ])
 param idpsMode string = 'Deny'
 
+@description('Per-signature IDPS overrides for Premium policies, for example to Alert-only on one signature that false-positives against legitimate traffic. Find the signature ID in the AZFWIdpsSignature table\'s SignatureId column. Each entry: { id: \'<signatureId>\', mode: \'Alert\' | \'Deny\' | \'Off\' }. Empty by default; never used to disable IDPS as a whole (use idpsMode = \'Off\' for that, which this project does not do).')
+param idpsSignatureOverrides array = []
+
 @description('Apply CanNotDelete locks to the firewall, its policy, and its public IP.')
 param enableDeleteLock bool = false
 
@@ -86,6 +89,9 @@ resource firewallPolicy 'Microsoft.Network/firewallPolicies@2025-01-01' = {
     threatIntelMode: threatIntelMode
     intrusionDetection: isPremium ? {
       mode: idpsMode
+      configuration: {
+        signatureOverrides: idpsSignatureOverrides
+      }
     } : null
     dnsSettings: {
       enableProxy: true

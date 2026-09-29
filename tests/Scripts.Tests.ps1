@@ -246,6 +246,24 @@ Describe 'New-GitHubDeploymentIdentity.ps1' {
             }
         }
 
+        It 'creates only github-staging for an environment not on the ungated-plan allowlist, with no plan credential (Final review D.7, fail closed)' {
+            $responses = New-BaseResponses
+            $responses['*ad app list*'] = 'cccccccc-3333-3333-3333-333333333333'
+            $responses['*ad sp list*'] = 'dddddddd-4444-4444-4444-444444444444'
+            $responses['*role definition list*'] = 'existing-custom-role'
+            Set-AzShadow $responses
+            try {
+                & $scriptPath -ResourceGroupNames $resourceGroups -GitHubRepository 'Godson90/bicep' -EnvironmentName 'staging' -Confirm:$false | Out-Null
+            }
+            finally {
+                Remove-AzShadow
+            }
+            $credentials = @($global:FederatedCredentialPayloads | ForEach-Object { $_ | ConvertFrom-Json })
+            $credentials.Count | Should -Be 1
+            $credentials[0].name | Should -BeExactly 'github-staging'
+            $credentials[0].subject | Should -BeExactly 'repo:Godson90/bicep:environment:staging'
+        }
+
         It 'creates only github-prod for the prod environment, with no plan credential' {
             $responses = New-BaseResponses
             $responses['*ad app list*'] = 'cccccccc-3333-3333-3333-333333333333'

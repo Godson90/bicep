@@ -80,6 +80,7 @@ jobs:
           path: whatif.txt
           retention-days: 14
           if-no-files-found: error
+          overwrite: true
 
   # Gated by the target environment's required reviewers (prod); reviewers read the plan job summary first.
   apply:

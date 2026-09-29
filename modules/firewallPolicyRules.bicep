@@ -33,6 +33,16 @@ resource dnsEgress 'Microsoft.Network/firewallPolicies/ruleCollectionGroups@2025
         }
         rules: [
           {
+            // With the firewall's DNS proxy on (dnsSettings.enableProxy in
+            // azureFirewall.bicep), spoke clients query the firewall's own
+            // private IP for DNS, which the firewall's DNS proxy itself
+            // resolves and never appears as network traffic evaluated by this
+            // rule collection group. This rule instead covers a spoke client
+            // that bypasses the proxy and queries 168.63.129.16 (Azure's
+            // recursive resolver) directly — a supported but non-default
+            // configuration. Under the normal, proxied path this rule is
+            // inert (nothing matches it); it exists as a fallback, not the
+            // primary DNS path.
             ruleType: 'NetworkRule'
             name: 'azure-dns'
             ipProtocols: [

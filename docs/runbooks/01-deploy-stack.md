@@ -1,4 +1,4 @@
-# 01 - Deploy the Phase 1 stack (subscription scope, multi-region)
+# 01 - Deploy the stack (Phases 1-2, subscription scope, multi-region)
 
 > Owning module(s): `main.bicep`, `modules/global.bicep`, `modules/regionStamp.bicep`, `modules/privateDnsZoneLinks.bicep`, `modules/types.bicep`. Spec section: `docs/superpowers/specs/2026-09-25-secure-connectivity-design.md` §1. Related: `docs/architecture/overview.md`, [runbook 00b](00b-configure-pipeline-credentials.md), [ADR-008](../decisions/ADR-008-warm-standby-and-dev-single-region.md), [ADR-009](../decisions/ADR-009-subscription-scope-pipeline-identity.md).
 
