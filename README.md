@@ -6,7 +6,7 @@ This deployment is a **subscription-scope**, multi-region stack: `main.bicep` (`
 
 - Design: `docs/superpowers/specs/2026-09-25-secure-connectivity-design.md`
 - Architecture: `docs/architecture/overview.md` - topology, traffic flows, address plan, naming convention, and resource inventory
-- Runbooks: `docs/runbooks/` - start with `00-pipeline-and-identity.md`, `00b-configure-pipeline-credentials.md` (pipeline Azure login via OIDC), `00a-apply-phase0-fixes.md`, `01-deploy-stack.md` (deploy dev or prod), and `01a-migrate-from-defenstack.md` (retire the Phase 0 resource group)
+- Runbooks: `docs/runbooks/` - start with `00-pipeline-and-identity.md`, `00b-configure-pipeline-credentials.md` (pipeline Azure login via OIDC), `00a-apply-phase0-fixes.md`, `01-deploy-stack.md` (deploy dev or prod), `01a-migrate-from-defenstack.md` (retire the Phase 0 resource group), and `02-firewall.md` (Premium firewall rule changes and allowlist requests)
 - Runbook structure (mandatory for every change): `docs/runbooks/_template.md`
 
 ### Module layout
@@ -23,7 +23,8 @@ Each region stamp composes these existing building blocks:
 - `modules/monitoring.bicep`: Log Analytics workspace (called from `modules/global.bicep`, not per region).
 - `modules/storage.bicep`: Storage account, blob container, and storage diagnostics.
 - `modules/hubNetwork.bicep`: Hub VNet and `AzureFirewallSubnet`.
-- `modules/azureFirewall.bicep`: Firewall, public IP, policy, DNS proxy, rules, and diagnostics.
+- `modules/azureFirewall.bicep`: Premium Firewall, public IP, policy (with IDPS and threat intelligence), DNS proxy, and diagnostics; includes `modules/firewallPolicyRules.bicep`.
+- `modules/firewallPolicyRules.bicep`: the three shared rule collection groups (`dns-egress`, `platform-egress`, `approved-https-egress`) applied to every stamp's policy (`docs/decisions/ADR-010-shared-firewall-rules-module.md`).
 - `modules/spokeNetwork.bicep`: Spoke NSGs, App Service route table, and VNet/subnet associations.
 - `modules/vnet.bicep`: Reusable spoke VNet resource and subnet contract.
 - `modules/appService.bicep`: App Service plan, site, identity, route-all, and diagnostics.
@@ -226,16 +227,21 @@ The VM module is disabled by default through `enableVirtualMachine=false`. When 
 ### Firewall behavior
 
 - The hub contains an exact-case `AzureFirewallSubnet` using `10.1.0.0/26` by default. The configured prefix must be at least `/26` and contained in the hub address space. Do not attach a workload NSG to this subnet.
-- Azure Firewall uses the Standard SKU, a Standard static public IP, DNS proxy, and a Firewall Policy.
+- Azure Firewall uses the **Premium** SKU (`firewallTier: 'Premium'` for every environment), with a Standard static public IP, DNS proxy, and a Firewall Policy. Premium adds **IDPS** (`Alert` in dev, `Deny` in prod) on top of Standard's capabilities; TLS inspection is deliberately deferred (`docs/decisions/ADR-011-tls-inspection-deferred.md`), so IDPS and threat intelligence see unencrypted traffic and TLS metadata only, not decrypted HTTPS payloads.
+- Rule content comes from a shared module (`modules/firewallPolicyRules.bicep`, `docs/decisions/ADR-010-shared-firewall-rules-module.md`) included by every stamp's policy, as three dependency-chained rule collection groups:
+  - `dns-egress` (priority 100): DNS to Azure's resolver (`168.63.129.16:53`), and HTTPS to the `AzureMonitor`/`AzureResourceManager` service tags for the Azure Monitor Agent.
+  - `platform-egress` (priority 150): OS update endpoints (`WindowsUpdate` FQDN tag, Ubuntu archive FQDNs) — **management subnet only**, never the App Service subnet.
+  - `approved-https-egress` (priority 200, optional): the application allowlist from `allowedOutboundFqdns`; not deployed at all while that list is empty.
 - App Service integration traffic uses a `0.0.0.0/0` route through the firewall private IP and App Service route-all is enabled.
 - Private endpoint traffic remains on the private endpoint subnet and is not routed through the firewall.
 - No inbound DNAT rules are created. Public exposure must remain disabled unless a separate reviewed design adds explicit rules.
-- `allowedOutboundFqdns` defaults to an empty list, so application HTTPS traffic is denied until administrators provide an approved FQDN allowlist. The default platform egress rules are DNS to Azure's resolver (`168.63.129.16:53`) and HTTPS to the `AzureMonitor` and `AzureResourceManager` service tags for the Azure Monitor Agent (ingestion and its control-plane dependency).
-- Threat intelligence runs in `Deny` mode for `prod` and `Alert` mode for `dev`/`test`. Firewall logs are written to resource-specific tables (`AZFWNetworkRule`, `AZFWApplicationRule`, `AZFWDnsQuery`, `AZFWThreatIntel`, …), not `AzureDiagnostics`.
+- `allowedOutboundFqdns` defaults to an empty list, so application HTTPS traffic is denied until administrators provide an approved FQDN allowlist (see `docs/runbooks/02-firewall.md` §5 for the request process). OS update egress is available to the management subnet only, never to App Service.
+- Threat intelligence runs in `Deny` mode for `prod` and `Alert` mode for `dev`/`test`. IDPS follows the identical split. Firewall logs are written to resource-specific tables (`AZFWNetworkRule`, `AZFWApplicationRule`, `AZFWDnsQuery`, `AZFWThreatIntel`, `AZFWIdpsSignature`, …), not `AzureDiagnostics`.
 - NSGs deny unsolicited inbound traffic on the private endpoint, App Service integration, and management subnets. Private endpoint network security policy is enabled. By default only the App Service integration and management subnets can reach private endpoints over HTTPS; the allowed sources are derived from `appServiceIntegrationSubnetAddressPrefix` and `virtualMachineSubnetAddressPrefix`. Add narrowly scoped administrator/client CIDRs through `additionalPrivateEndpointSourceCidrs` when required. Spoke CIDRs are defined once, in each environment's `primaryAddressPlan` / `secondaryAddressPlan` object in `params/*.bicepparam` (`modules/types.bicep`'s `regionAddressPlan`), and reused by the firewall rules.
 - Forwarded traffic is enabled on the reciprocal peerings for firewall service chaining. Gateway transit and remote gateways remain disabled.
+- **Prod locks:** in prod (`enableDeleteLock: true`), `CanNotDelete` locks are applied to the hub VNet, the spoke VNet, the Key Vault, the firewall, the firewall policy, and the firewall public IP — see `docs/runbooks/02-firewall.md` §6/§7 for the validation and removal procedure.
 
-Azure Firewall has ongoing hourly and data-processing charges. Regional VNet peering and Log Analytics ingestion also incur charges. This design intentionally avoids Premium Firewall, global peering, NAT gateways, VPN/ExpressRoute gateways, extra public IPs, and Azure Firewall Manager unless separately approved.
+Azure Firewall Premium has ongoing hourly and data-processing charges, higher than Standard's (`docs/cost.md` "Phase 2 delta"). Regional VNet peering and Log Analytics ingestion also incur charges. This design intentionally avoids global peering, NAT gateways, VPN/ExpressRoute gateways, extra public IPs, and Azure Firewall Manager unless separately approved.
 
 ### Validate and build
 

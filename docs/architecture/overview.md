@@ -1,6 +1,6 @@
-# Architecture overview: Phase 1 (subscription-scope, multi-region)
+# Architecture overview: Phase 1-2 (subscription-scope, multi-region, Premium firewall)
 
-> Owning files: `main.bicep`, `modules/global.bicep`, `modules/regionStamp.bicep`, `modules/privateDnsZoneLinks.bicep`, `modules/types.bicep`. Spec: `docs/superpowers/specs/2026-09-25-secure-connectivity-design.md` §1.
+> Owning files: `main.bicep`, `modules/global.bicep`, `modules/regionStamp.bicep`, `modules/privateDnsZoneLinks.bicep`, `modules/types.bicep`, `modules/azureFirewall.bicep`, `modules/firewallPolicyRules.bicep`. Spec: `docs/superpowers/specs/2026-09-25-secure-connectivity-design.md` §1, §3, §5.
 
 ## 1. Purpose and status
 
@@ -14,11 +14,17 @@ Phase 1 replaces the single resource-group, resource-group-scoped `defenStack` d
 
 What exists after Phase 1: zone-redundant Azure Firewall Standard and App Service (prod primary only) per region, private endpoints for Storage/App Service/Key Vault, deny-by-default NSGs, hub↔spoke peering, and Log Analytics workspace replication from the primary region to the secondary (prod only).
 
-What later phases add (not present after Phase 1):
+**Phase 2** upgraded every stamp's firewall to **Premium** with IDPS
+(`Alert` in dev, `Deny` in prod) and moved rule content into a shared module
+(`modules/firewallPolicyRules.bicep`) instead of the one-parent-policy design
+originally planned, since a parent and its child policies must share a
+region (`ADR-010`). See §3 and §7 below, and
+[runbook 02](../runbooks/02-firewall.md).
+
+What later phases add (not present after Phase 2):
 
 | Phase | Adds |
 |---|---|
-| 2 | Azure Firewall **Premium** and a parent firewall policy |
 | 3 | Azure Bastion, Point-to-Site VPN, and the `deployAdminAccess` flag; a `GatewaySubnet` route table |
 | 4 | Azure Front Door Premium + WAF (public ingress) |
 | 5 | RA-GZRS storage, Application Insights |
@@ -207,15 +213,15 @@ One row per `names.*` key in `modules/regionStamp.bicep`, plus the resource grou
 | Resource group | Contents |
 |---|---|
 | `rg-defenstack-dev-global` | Log Analytics workspace `log-defenstack-dev` (`replication.enabled: false`); private DNS zones `privatelink.blob...`, `privatelink.azurewebsites.net`, `privatelink.vaultcore.azure.net`, each with 2 VNet links (dev-wus3 hub and spoke) |
-| `rg-defenstack-dev-wus3` | Hub VNet with `AzureFirewallSubnet`; Firewall Standard `afw-defenstack-dev-wus3` (zones 1/2/3, `threatIntelMode: Alert`, `ADR-003`); firewall policy and public IP; spoke VNet with `private-endpoints`, `appservice-integration`, `management` subnets, their NSGs, and two route tables (App Service and management egress through the firewall); App Service Plan `asp-defenstack-dev-wus3` (S1-equivalent, 1 instance, non-zonal); App Service with system-assigned identity and private endpoint; Key Vault (RBAC, purge protection on, 90-day soft delete) with private endpoint; Storage account (`Standard_LRS`) with private endpoint; hub↔spoke peering |
+| `rg-defenstack-dev-wus3` | Hub VNet with `AzureFirewallSubnet`; Firewall **Premium** `afw-defenstack-dev-wus3` (zones 1/2/3, IDPS `Alert`, `threatIntelMode: Alert`, `ADR-003`); firewall policy with three rule collection groups — `dns-egress`, `platform-egress`, and `approved-https-egress` when `allowedOutboundFqdns` is non-empty (`ADR-010`) — and public IP; spoke VNet with `private-endpoints`, `appservice-integration`, `management` subnets, their NSGs, and two route tables (App Service and management egress through the firewall); App Service Plan `asp-defenstack-dev-wus3` (S1-equivalent, 1 instance, non-zonal); App Service with system-assigned identity and private endpoint; Key Vault (RBAC, purge protection on, 90-day soft delete) with private endpoint; Storage account (`Standard_LRS`) with private endpoint; hub↔spoke peering |
 
 ### prod
 
 | Resource group | Contents |
 |---|---|
 | `rg-defenstack-prod-global` | Log Analytics workspace `log-defenstack-prod` (`replication.enabled: true, location: eastus`); the same three private DNS zones, each with 4 VNet links (wus3 hub, wus3 spoke, eus hub, eus spoke); `enableDeleteLock: true` on the zones and the workspace |
-| `rg-defenstack-prod-wus3` (primary) | Same shape as dev's region resource group, but: Firewall `threatIntelMode: Deny`; App Service Plan `asp-defenstack-prod-wus3` zone-redundant, 3 instances (`isProd && isPrimary`); Storage account `Standard_GRS`; `enableDeleteLock: true` on the spoke VNet |
-| `rg-defenstack-prod-eus` (secondary, warm standby) | Same resource types as `rg-defenstack-prod-wus3`, deployed only when `deploySecondaryRegion = true`: App Service Plan `asp-defenstack-prod-eus`, 1 instance, non-zonal (no scale-out until failover, `ADR-008`); Storage account `Standard_GRS`; hub↔spoke peering local to this region; `enableDeleteLock: true` on the spoke VNet, same as the primary |
+| `rg-defenstack-prod-wus3` (primary) | Same shape as dev's region resource group, but: Firewall Premium with IDPS `Deny`, `threatIntelMode: Deny`; App Service Plan `asp-defenstack-prod-wus3` zone-redundant, 3 instances (`isProd && isPrimary`); Storage account `Standard_GRS`; `enableDeleteLock: true` on the hub VNet, spoke VNet, Key Vault, firewall, firewall policy, and firewall public IP |
+| `rg-defenstack-prod-eus` (secondary, warm standby) | Same resource types as `rg-defenstack-prod-wus3`, deployed only when `deploySecondaryRegion = true`: App Service Plan `asp-defenstack-prod-eus`, 1 instance, non-zonal (no scale-out until failover, `ADR-008`); Storage account `Standard_GRS`; hub↔spoke peering local to this region; `enableDeleteLock: true` on the same set of resources as the primary (hub VNet, spoke VNet, Key Vault, firewall, firewall policy, firewall public IP) |
 
 ## 7. Design decisions
 
@@ -226,3 +232,6 @@ One row per `names.*` key in `modules/regionStamp.bicep`, plus the resource grou
 - [ADR-007: Dev environment pipeline exposure accepted for Phase 0](../decisions/ADR-007-dev-environment-pipeline-exposure.md)
 - [ADR-008: Warm standby in East US, dev stays single-region](../decisions/ADR-008-warm-standby-and-dev-single-region.md)
 - [ADR-009: Subscription-scope pipeline and hardened deployment identity](../decisions/ADR-009-subscription-scope-pipeline-identity.md)
+- [ADR-010: Shared firewall rules module instead of one parent policy per region](../decisions/ADR-010-shared-firewall-rules-module.md)
+- [ADR-011: TLS inspection deferred on Premium firewalls](../decisions/ADR-011-tls-inspection-deferred.md)
+- [ADR-012: Prod plan and apply both run in the gated `prod` environment](../decisions/ADR-012-prod-two-approval-deploys.md)

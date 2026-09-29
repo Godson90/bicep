@@ -62,10 +62,29 @@ should be built before the first prod deploy (runbook 01 §4), since the warm-st
 region is billed from the moment it's deployed, not from the moment of an actual
 failover.
 
+## Phase 2 delta
+Phase 2 upgrades every stamp's Azure Firewall from Standard to **Premium**
+(`modules/azureFirewall.bicep`, `firewallTier: 'Premium'` for every
+environment) and adds IDPS. It does not change resource counts — the same
+one firewall per deployed stamp as Phase 1 — only the SKU tier and the
+policy features enabled on it. As with every phase, **fill in the actual
+dollar estimate from the Pricing Calculator; do not invent prices.**
+
+| Environment | Cost driver | What changed / why it costs more |
+|---|---|---|
+| Dev | Azure Firewall **Premium** ×1 (was Standard ×1) | Premium's hourly rate is higher than Standard's, plus Premium's data processing rate per GB is higher than Standard's — IDPS deep packet inspection adds processing overhead even though TLS inspection itself is deferred (`ADR-011`) |
+| Prod | Azure Firewall **Premium** ×2 (was Standard ×2) | Same per-instance Premium delta as dev, doubled — one per region (`rg-defenstack-prod-wus3`, `rg-defenstack-prod-eus`), including the idle warm-standby region's firewall (`ADR-008`) |
+| Both | No change in instance count, zone count, or rule-processing volume from Phase 1 | The delta is purely the Standard → Premium SKU rate and Premium's data-processing rate, not a change in what traffic flows through the firewall |
+
+**Estimate:** fill in from the Pricing Calculator, using the Premium SKU's
+hourly and data-processing rates for the deployed region(s), once dev has run
+on Premium for a representative period to measure actual data-processing
+volume (`AZFWApplicationRule`/`AZFWNetworkRule`/`AZFWIdpsSignature` ingestion
+via the same `Usage` KQL pattern as the Phase 0 table above).
+
 ## Dominant future cost drivers
 From `docs/superpowers/specs/2026-09-25-secure-connectivity-design.md` §6, the
 resources expected to dominate spend in later phases (not present in Phase 0):
-- Two Azure Firewall Premium instances (hub-to-hub, later phase)
 - VPN gateway
 - Azure Bastion
 - Azure Front Door Premium

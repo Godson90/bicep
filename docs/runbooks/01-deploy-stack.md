@@ -120,6 +120,7 @@ Every `main.bicep` parameter, with the value each committed `.bicepparam` file s
 | Check | Command | Expected result |
 |---|---|---|
 | Firewall zones | `az network firewall show -g rg-defenstack-<env>-wus3 -n afw-defenstack-<env>-wus3 --query zones -o tsv` | `1 2 3` |
+| Firewall tier, IDPS, rule groups, prod locks | See [runbook 02](02-firewall.md) §6 | Premium tier; IDPS `Alert` (dev) / `Deny` (prod); `dns-egress`/`platform-egress`/`approved-https-egress` rule collection groups; locks on the hub VNet, spoke VNet, Key Vault, firewall, firewall policy and firewall public IP in prod |
 | App Service plan (prod WUS3) | `az appservice plan show -g rg-defenstack-prod-wus3 -n asp-defenstack-prod-wus3 --query "{zr:zoneRedundant,capacity:sku.capacity}"` | `true`, `3` |
 | DNS links | `az network private-dns link vnet list -g rg-defenstack-<env>-global -z privatelink.vaultcore.azure.net --query "[].name" -o tsv` | The hub and spoke link of every deployed stamp (dev: 2 links; prod: 4 links) |
 | Peering | `az network vnet peering list -g rg-defenstack-<env>-wus3 --vnet-name vnet-defenstack-<env>-wus3-hub --query "[].peeringState" -o tsv` | `Connected` |
@@ -131,11 +132,11 @@ Every `main.bicep` parameter, with the value each committed `.bicepparam` file s
 
 ## 7. Rollback
 
-- **New environment, before it holds real data:** delete the new resource groups. Prod's resource groups carry `CanNotDelete` locks (`enableDeleteLock` when `isProd`), so remove those first:
+- **New environment, before it holds real data:** delete the new resource groups. Prod's resource groups carry `CanNotDelete` locks (`enableDeleteLock` when `isProd`) on individual **resources**, not on the resource groups themselves, so list and remove every locked resource's lock first. In prod this is the spoke VNet, the hub VNet, the Key Vault, the firewall, the firewall policy, and the firewall public IP (per stamp — [runbook 02](02-firewall.md) §6), plus the shared private DNS zones and the Log Analytics workspace in the global resource group:
 
   ```powershell
   az lock list -g <resource-group> -o table
-  az lock delete --ids <lock-id>
+  az lock delete --ids <lock-id>   # repeat for every listed lock
   az group delete --name <resource-group> --yes --no-wait
   ```
 

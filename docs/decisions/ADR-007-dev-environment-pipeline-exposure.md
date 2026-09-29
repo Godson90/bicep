@@ -58,3 +58,27 @@ Accept this exposure for Phase 0, scoped to `dev` only, with one mitigation:
 - before Phase 1 ships (Phase 1 introduces the separate prod identity/environment
   described above; at that point, re-evaluate whether dev also needs required
   reviewers or a narrower trigger).
+
+## Phase 2 amendment
+
+Phase 2 splits `deploy.yml` into a `plan` job and an `apply` job (what-if
+before deploy). For dev, both the PR what-if job (`bicep-ci.yml`) and
+`deploy.yml`'s `plan` job now run in the `dev-plan` GitHub environment (no
+branch restriction, matching `dev`'s prior configuration), and `deploy.yml`'s
+`apply` job runs in `dev`. Both `dev-plan` and `dev` hold the **same** dev
+deployment identity (`scripts/New-GitHubDeploymentIdentity.ps1` creates two
+federated credentials, `github-dev` and `github-dev-plan`, on one app
+registration) — so the exposure this ADR describes is unchanged: a same-repo
+pull request or a push to `main` still runs arbitrary workflow YAML
+authenticated as the single dev identity, whichever of the two environments
+that particular job happens to run in, with the same `Contributor` plus
+ABAC-constrained `Role Based Access Control Administrator` blast radius on
+the dev resource groups. Nothing about the plan/apply split narrows or widens
+that boundary for dev.
+
+Prod is covered separately: prod's `plan` and `apply` jobs both run in the
+gated `prod` environment, and there is deliberately no `prod-plan`
+environment. See
+[ADR-012](ADR-012-prod-two-approval-deploys.md) for why, and
+[runbook 00b](../runbooks/00b-configure-pipeline-credentials.md) §1a for the
+operational summary.

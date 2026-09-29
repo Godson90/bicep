@@ -1,29 +1,60 @@
 # 00b - Configure secure pipeline credentials for Azure (OIDC)
 
-> Owning files: `.github/workflows/bicep-ci.yml` (PR what-if), `.github/workflows/deploy.yml` (deploy), `scripts/New-GitHubDeploymentIdentity.ps1`. Related: [00 - Pipeline and deployment identity](00-pipeline-and-identity.md), [ADR-007](../decisions/ADR-007-dev-environment-pipeline-exposure.md).
+> Owning files: `.github/workflows/bicep-ci.yml` (PR what-if), `.github/workflows/deploy.yml` (plan/apply), `scripts/New-GitHubDeploymentIdentity.ps1`. Related: [00 - Pipeline and deployment identity](00-pipeline-and-identity.md), [ADR-007](../decisions/ADR-007-dev-environment-pipeline-exposure.md), [ADR-012](../decisions/ADR-012-prod-two-approval-deploys.md).
 
 ## 1. Purpose and scope
 
-This runbook configures the credentials GitHub Actions uses to run `az` commands (what-if, validate, deploy) against Azure. Use it when the `what-if` or `deploy` job fails at the **Azure login** step.
+This runbook configures the credentials GitHub Actions uses to run `az` commands (what-if, validate, deploy) against Azure. Use it when the `what-if`, `plan` or `apply` job fails at the **Azure login** step.
 
 **How authentication works. There is no password, client secret or certificate anywhere.**
 
-1. The workflow job runs in the GitHub environment `dev` and has `permissions: id-token: write`.
-2. GitHub issues the job a short-lived OIDC token. Its subject is `repo:Godson90/bicep:environment:dev`.
+1. The workflow job runs in a GitHub environment (`dev`, `dev-plan`, or `prod` — §1a below) and has `permissions: id-token: write`.
+2. GitHub issues the job a short-lived OIDC token. Its subject names that environment, for example `repo:Godson90/bicep:environment:dev` or `repo:Godson90/bicep:environment:dev-plan`.
 3. `azure/login@v2` presents that token to Microsoft Entra ID.
 4. Entra ID accepts the token only because the deployment app registration has a **federated credential** with exactly that issuer, subject and audience.
 5. Entra ID returns an Azure access token that lasts about one hour. `az` then runs as the app's service principal: the custom `DefenStack Subscription Deployment Operator` role at subscription scope lets it run the deployment itself, and `Contributor` plus `Role Based Access Control Administrator` on each of the environment's own resource groups let it create resources there (`docs/decisions/ADR-009-subscription-scope-pipeline-identity.md`).
 
 The only values stored in GitHub are three **identifiers**, kept as environment variables: client ID, tenant ID and subscription ID. None of them grants access on its own.
 
+### 1a. Plan/apply split: why dev gets a `-plan` environment and prod does not
+
+`deploy.yml` runs a `plan` job (validate + what-if) before an `apply` job
+(the actual `az deployment sub create`), so reviewers can see a what-if
+before a deployment runs. Where each job's `environment:` points differs by
+target, and this is deliberate, not an oversight:
+
+| Target | `plan` runs in | `apply` runs in | Approvals needed for a deploy |
+|---|---|---|---|
+| dev | `dev-plan` (no reviewers, no branch restriction) | `dev` (no reviewers) | none |
+| prod | `prod` (reviewers) | `prod` (reviewers) | **two** — one to let `plan` run, one to let `apply` run |
+
+**There is no `prod-plan` environment, and you must not create one.** A GitHub
+Actions job that names an environment which does not yet exist
+**auto-creates it, unprotected** — no required reviewers, no branch
+restriction — the first time the job runs. If `prod-plan` held the prod
+identity's credentials and had no reviewers, any change landed on `main`
+would authenticate as prod and run `what-if` against prod (and, if the
+job were ever changed to do more, worse) with zero approval gate. So prod's
+`plan` job intentionally runs in the same gated `prod` environment as
+`apply`: reviewers approve `plan`, read the what-if it produces (the job
+summary, or the `whatif-prod` artifact kept 14 days), then approve `apply`.
+Two approvals per prod deploy. `docs/decisions/ADR-012-prod-two-approval-deploys.md`
+has the full reasoning.
+
+Dev's `plan` job runs in `dev-plan` precisely because it is *not* gated: the
+PR `what-if` job in `bicep-ci.yml` also runs in `dev-plan`, from feature
+branches, so a branch restriction there would block every PR's what-if. This
+mirrors ADR-007's accepted dev exposure — dev must never hold real data while
+this stands.
+
 **This runbook creates or changes:**
 
 | Where | What |
 |---|---|
-| Microsoft Entra ID | One app registration and service principal (`gh-Godson90-bicep-dev-deploy`) with one federated credential (`github-dev`) |
+| Microsoft Entra ID | One app registration and service principal per environment name (`gh-Godson90-bicep-dev-deploy`, `gh-Godson90-bicep-prod-deploy`) — dev's app gets **two** federated credentials (`github-dev`, `github-dev-plan`); prod's app gets **one** (`github-prod`, since there is no `prod-plan` environment) |
 | Azure RBAC, at subscription scope | Custom role `DefenStack Subscription Deployment Operator` (deployment read/write/validate/whatIf, deployment-operation read, subscription and resource-group read, subscription operation-results read — no resource rights, and deliberately no deployment delete/cancel/exportTemplate), assigned to the identity |
 | Azure RBAC, on `rg-defenstack-dev-global` and `rg-defenstack-dev-wus3` only | `Contributor`; `Role Based Access Control Administrator` with a condition that allows assigning only `Storage Blob Data Contributor` |
-| GitHub `Godson90/bicep` | Environment `dev` with three variables |
+| GitHub `Godson90/bicep` | Environments `dev` and `dev-plan`, each with the same three variables (§4 "Prod" covers the `prod` environment) |
 
 > **Do not** create a client secret, run `az ad sp create-for-rbac --sdk-auth`, or store an `AZURE_CREDENTIALS` JSON secret. All three put a long-lived credential into GitHub, and this design exists to avoid that.
 
@@ -49,8 +80,8 @@ The only values stored in GitHub are three **identifiers**, kept as environment 
 | Name | Value for dev | Where it is used | Secret? |
 |---|---|---|---|
 | GitHub repository | `Godson90/bicep` | Federated credential subject | No |
-| GitHub environment | `dev` | Job `environment:` in both workflows; federated credential subject | No |
-| Federated subject | `repo:Godson90/bicep:environment:dev` | Entra federated credential | No |
+| GitHub environments | `dev`, `dev-plan` | Job `environment:` across `bicep-ci.yml` (`what-if` → `dev-plan`) and `deploy.yml` (`plan` → `dev-plan`, `apply` → `dev`); federated credential subjects | No |
+| Federated subjects | `repo:Godson90/bicep:environment:dev`, `repo:Godson90/bicep:environment:dev-plan` | Entra federated credentials `github-dev`, `github-dev-plan` (one app registration, two credentials) | No |
 | Issuer | `https://token.actions.githubusercontent.com` | Entra federated credential | No |
 | Audience | `api://AzureADTokenExchange` | Entra federated credential | No |
 | `AZURE_CLIENT_ID` | App registration **Application (client) ID** | GitHub environment variable | No (identifier) |
@@ -94,7 +125,7 @@ Check that `subscription` is the one that contains `rg-defenstack-dev-global` an
    Expected: `What if:` lines for, in order:
    - the app registration
    - the service principal
-   - the federated credential (subject `repo:Godson90/bicep:environment:dev`)
+   - **two** federated credentials: subject `repo:Godson90/bicep:environment:dev` (`github-dev`) and subject `repo:Godson90/bicep:environment:dev-plan` (`github-dev-plan`) — the script creates one credential per entry in `$credentialEnvironments`, which for any environment except `prod` is `@($EnvironmentName, "$EnvironmentName-plan")`
    - the custom role `DefenStack Subscription Deployment Operator`
    - assigning `DefenStack Subscription Deployment Operator` at subscription scope
    - `Contributor` and `Role Based Access Control Administrator` on `rg-defenstack-dev-global`
@@ -104,7 +135,7 @@ Check that `subscription` is the one that contains `rg-defenstack-dev-global` an
 
 2. Create. Run the same command without `-WhatIf`.
 
-   Expected: the script prints three `gh variable set …` lines, then an object with `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID`. Copy the three values. The first run against a fresh subscription can take a few minutes longer than later runs: creating the custom role and then assigning it needs the role to replicate first, so the script retries that assignment (up to 6 times, `-RoleReplicationWaitSeconds` apart, 20s by default).
+   Expected: the script prints six `gh variable set …` lines (the same three `AZURE_*` values, once per line, for **each** of `dev` and `dev-plan`), then an object with `AZURE_CLIENT_ID`, `AZURE_TENANT_ID` and `AZURE_SUBSCRIPTION_ID`. Copy the three values — the same identity and the same three values back both the `dev` and `dev-plan` GitHub environments. The first run against a fresh subscription can take a few minutes longer than later runs: creating the custom role and then assigning it needs the role to replicate first, so the script retries that assignment (up to 6 times, `-RoleReplicationWaitSeconds` apart, 20s by default).
 
 3. Continue at Step 3.
 
@@ -116,7 +147,9 @@ Check that `subscription` is the one that contains `rg-defenstack-dev-global` an
    3. Select **Register**.
    4. Copy the **Application (client) ID** and **Directory (tenant) ID**.
 
-2. **Federated credential.**
+2. **Federated credentials — two, on the same app.**
+
+   First, `github-dev`:
    1. In the app: **Certificates & secrets** → **Federated credentials** → **Add credential**.
    2. Scenario: **GitHub Actions deploying Azure resources**.
    3. Organization `Godson90`; Repository `bicep`; Entity type **Environment**; GitHub environment name `dev`.
@@ -125,6 +158,16 @@ Check that `subscription` is the one that contains `rg-defenstack-dev-global` an
    6. Select **Add**.
 
    Check that the displayed subject is exactly `repo:Godson90/bicep:environment:dev`. Case matters, and so does the environment name.
+
+   Then, on the **same** app, repeat for `github-dev-plan`:
+   1. **Add credential** again.
+   2. Scenario: **GitHub Actions deploying Azure resources**.
+   3. Organization `Godson90`; Repository `bicep`; Entity type **Environment**; GitHub environment name `dev-plan`.
+   4. Name `github-dev-plan`.
+   5. Leave Issuer and Audience at their defaults.
+   6. Select **Add**.
+
+   Check that this second credential's subject is exactly `repo:Godson90/bicep:environment:dev-plan`. The `dev-plan` job (`bicep-ci.yml`'s `what-if`, `deploy.yml`'s `plan` for dev) authenticates with this credential; the `dev` job (`deploy.yml`'s `apply`) authenticates with `github-dev`. Both credentials point at the same app registration and service principal — dev has one identity, backing two environments.
 
    Do **not** open the **Client secrets** tab.
 
@@ -198,7 +241,7 @@ az role definition list --name "DefenStack Subscription Deployment Operator" --c
 The last command is a drift check: it must return exactly the 9 actions in §1 above (no more, no fewer). A role created before `Microsoft.Resources/subscriptions/operationresults/read` was added will be missing that action (§9).
 
 Expected:
-- One federated credential, `github-dev`, with subject `repo:Godson90/bicep:environment:dev` and issuer `https://token.actions.githubusercontent.com`.
+- **Two** federated credentials: `github-dev` (subject `repo:Godson90/bicep:environment:dev`) and `github-dev-plan` (subject `repo:Godson90/bicep:environment:dev-plan`), both with issuer `https://token.actions.githubusercontent.com`.
 - `az ad app credential list` prints `[]`: no secrets or certificates.
 - Exactly one role assignment at `/subscriptions/<sub>`: the custom `DefenStack Subscription Deployment Operator` role.
 - Exactly two role assignments at `/subscriptions/<sub>/resourceGroups/rg-defenstack-dev-global`, and the same two at `/subscriptions/<sub>/resourceGroups/rg-defenstack-dev-wus3`:
@@ -232,6 +275,8 @@ Nothing else is expected at any of these three scopes.
 
    If the `dev` environment still has an `AZURE_RESOURCE_GROUP` variable from before Phase 1, delete it: the workflows no longer read it, and `main.bicep` now deploys at subscription scope to the resource groups it references directly.
 
+6. **Repeat steps 2–5 for the `dev-plan` environment.** Same three `AZURE_*` variables, same values (the identity is shared — §1a). **Deployment branches and tags: No restriction** (same reasoning as `dev`: PR what-if runs from feature branches), no required reviewers.
+
 **GitHub CLI alternative** (if `gh` is installed and signed in):
 
 ```powershell
@@ -241,6 +286,12 @@ gh variable set AZURE_TENANT_ID --env dev --repo Godson90/bicep --body '<tenant-
 gh variable set AZURE_SUBSCRIPTION_ID --env dev --repo Godson90/bicep --body '<subscription-id>'
 gh variable list --env dev --repo Godson90/bicep
 gh variable delete AZURE_RESOURCE_GROUP --env dev --repo Godson90/bicep
+
+gh api --method PUT repos/Godson90/bicep/environments/dev-plan
+gh variable set AZURE_CLIENT_ID --env dev-plan --repo Godson90/bicep --body '<client-id>'
+gh variable set AZURE_TENANT_ID --env dev-plan --repo Godson90/bicep --body '<tenant-id>'
+gh variable set AZURE_SUBSCRIPTION_ID --env dev-plan --repo Godson90/bicep --body '<subscription-id>'
+gh variable list --env dev-plan --repo Godson90/bicep
 ```
 
 ### Step 5 - Re-run the pipeline
@@ -255,11 +306,12 @@ gh variable delete AZURE_RESOURCE_GROUP --env dev --repo Godson90/bicep
 
 - The role assignments can take up to 10 minutes to propagate. If the first re-run fails with `AuthorizationFailed`, wait and re-run.
 - Once `validate` and `what-if` are green, continue with runbook 01 §4 (the dev deploy) and runbook 01a (the `defenStack` migration) before merging. Merging to `main` triggers `deploy.yml`, which uses the same credentials.
-- **Prod.** Repeat this runbook for the `prod` environment:
+- **Prod.** Repeat this runbook for the `prod` environment. Prod does **not** get a `-plan` environment or credential (§1a, `ADR-012`) — only these steps:
   1. Create the prod resource groups first (`docs/runbooks/01-*.md` §4 step 2): `rg-defenstack-prod-global`, `rg-defenstack-prod-wus3` and `rg-defenstack-prod-eus`.
-  2. Run the script with `-EnvironmentName prod -ResourceGroupNames 'rg-defenstack-prod-global','rg-defenstack-prod-wus3','rg-defenstack-prod-eus' -GrantLockManagement`. This creates a **separate** app registration (the script derives the name `gh-Godson90-bicep-prod-deploy`), its own federated credential (subject `repo:Godson90/bicep:environment:prod`), and grants it `Contributor` plus the constrained `Role Based Access Control Administrator` on each of the three prod resource groups, plus the `DefenStack Resource Lock Operator` role (from `-GrantLockManagement`) needed to manage the `CanNotDelete` locks prod deploys. It reuses the same subscription-scope `DefenStack Subscription Deployment Operator` custom role definition created for dev (one role definition, one assignment per identity).
-  3. Create the GitHub environment `prod` with **Required reviewers** (at least 1) and **Deployment branches and tags: Selected branches → `main`**.
+  2. Run the script with `-EnvironmentName prod -ResourceGroupNames 'rg-defenstack-prod-global','rg-defenstack-prod-wus3','rg-defenstack-prod-eus' -GrantLockManagement`. Because `EnvironmentName` is `prod`, the script creates only **one** federated credential (`github-prod`, subject `repo:Godson90/bicep:environment:prod`) — not a `-plan` credential — on a **separate** app registration (the script derives the name `gh-Godson90-bicep-prod-deploy`), and grants it `Contributor` plus the constrained `Role Based Access Control Administrator` on each of the three prod resource groups, plus the `DefenStack Resource Lock Operator` role (from `-GrantLockManagement`) needed to manage the `CanNotDelete` locks prod deploys. It reuses the same subscription-scope `DefenStack Subscription Deployment Operator` custom role definition created for dev (one role definition, one assignment per identity).
+  3. Create the GitHub environment `prod` with **Required reviewers** (at least 1) and **Deployment branches and tags: Selected branches → `main`**. **Do not create a `prod-plan` environment** — `deploy.yml`'s `plan` job already runs in `prod` for a prod deploy, so `prod-plan` would either duplicate `prod` pointlessly or, if left without reviewers, create an ungated prod credential (§1a).
   4. Add the three `AZURE_*` variables (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`) to the `prod` environment, exactly as in Step 4 above but for `prod`.
+  5. **Prod deploys need two approvals.** When `deploy` runs with `environment=prod`: a reviewer approves the `plan` job, which runs validate + what-if against prod; the reviewer (or another reviewer) then reads that what-if — the `GITHUB_STEP_SUMMARY` job summary, or the `whatif-prod` artifact (kept 14 days) — before approving `apply`, which actually deploys. Neither approval can be skipped; both gate the same `prod` environment.
 
   Never reuse the dev identity for prod.
 
@@ -267,10 +319,11 @@ gh variable delete AZURE_RESOURCE_GROUP --env dev --repo Godson90/bicep
 
 | Check | Command / location | Expected result |
 |---|---|---|
-| Federated credential subject | `az ad app federated-credential list --id <client-id> --query "[].subject" -o tsv` | `repo:Godson90/bicep:environment:dev` |
+| Federated credential subjects | `az ad app federated-credential list --id <client-id> --query "[].subject" -o tsv` | Dev app: `repo:Godson90/bicep:environment:dev` and `repo:Godson90/bicep:environment:dev-plan`. Prod app: `repo:Godson90/bicep:environment:prod` only |
 | No long-lived secret | `az ad app credential list --id <client-id>` | `[]` |
 | Least-privilege roles | Step 3 role query | `DefenStack Subscription Deployment Operator` at `/subscriptions/<sub>` only; `Contributor` (no condition) and `Role Based Access Control Administrator` (condition) on each of `rg-defenstack-dev-global` and `rg-defenstack-dev-wus3`; nothing else at subscription scope |
-| GitHub variables | Settings → Environments → dev | Three `AZURE_*` variables; no environment secrets |
+| GitHub variables | Settings → Environments → `dev`, `dev-plan` | Three `AZURE_*` variables on each; no environment secrets |
+| No `prod-plan` environment | Settings → Environments | Only `dev`, `dev-plan`, and `prod` (with reviewers) exist |
 | Pipeline login | PR → `what-if` job → azure/login step | `Login successful.` |
 | Sign-in audit | Entra admin center → **Monitoring** → **Sign-in logs** → **Service principal sign-ins** | Successful sign-ins for `gh-Godson90-bicep-dev-deploy`, credential type **Federated identity credential** |
 
@@ -290,7 +343,9 @@ gh variable delete AZURE_RESOURCE_GROUP --env dev --repo Godson90/bicep
   az ad app delete --id <client-id>
   ```
 
-- Delete the three variables, or the whole `dev` environment, under GitHub **Settings** → **Environments**. Deleting the app registration also removes the subscription-scope `DefenStack Subscription Deployment Operator` role *assignment* to it, but leaves the role *definition* itself in place — it is shared with (or ready to be reused by) the prod identity; delete the role definition separately (`az role definition delete --name "DefenStack Subscription Deployment Operator"`) only once no identity uses it.
+  Deleting the app registration removes **both** the `github-dev` and `github-dev-plan` federated credentials (dev's single identity backs both environments).
+
+- Delete the three variables, or the whole `dev` and `dev-plan` environments, under GitHub **Settings** → **Environments**. Deleting the app registration also removes the subscription-scope `DefenStack Subscription Deployment Operator` role *assignment* to it, but leaves the role *definition* itself in place — it is shared with (or ready to be reused by) the prod identity; delete the role definition separately (`az role definition delete --name "DefenStack Subscription Deployment Operator"`) only once no identity uses it.
 
 ## 8. Operations
 
@@ -308,6 +363,7 @@ gh variable delete AZURE_RESOURCE_GROUP --env dev --repo Godson90/bicep
 |---|---|---|
 | `Login failed … Not all values are present. Ensure 'client-id' and 'tenant-id' are supplied.` | Variables missing, created as secrets, or created at repo level instead of on the `dev` environment | Step 4: create them as **environment variables** on `dev` |
 | `AADSTS70021: No matching federated identity record found for presented assertion` | Subject mismatch. Wrong environment name, owner/repo typo or case, or the job isn't running in environment `dev` | Compare the credential subject with `repo:Godson90/bicep:environment:dev`; confirm the job has `environment: dev` |
+| `AADSTS70021` specifically in the **dev plan job** (`bicep-ci.yml`'s `what-if`, or `deploy.yml`'s `plan` for dev) | The `dev-plan` federated credential (`github-dev-plan`) or the `dev-plan` GitHub environment itself is missing | Re-run `scripts/New-GitHubDeploymentIdentity.ps1` for dev (`-EnvironmentName dev`) — it creates both the `dev` and `dev-plan` credentials in one run; confirm the `dev-plan` environment exists with the three `AZURE_*` variables (§4 step 6) |
 | `AADSTS700016: Application with identifier … was not found in the directory` | `AZURE_CLIENT_ID` or `AZURE_TENANT_ID` is wrong, or from another tenant | Re-copy both from the app registration **Overview** |
 | `AADSTS700213` / audience error | Federated credential audience changed from the default | Set the audience to `api://AzureADTokenExchange` |
 | `Unable to get ACTIONS_ID_TOKEN_REQUEST_URL env variable` | Job lacks `permissions: id-token: write`, or it's a fork PR | Workflows already grant it; fork PRs are skipped by design |

@@ -46,3 +46,29 @@ Describe 'README reflects the subscription-scope layout' {
         $script:beforeTeardown | Should -Not -Match 'az deployment group'
     }
 }
+
+Describe 'Phase 2 documentation' {
+    It '<_> exists' -ForEach 'docs/runbooks/02-firewall.md', 'docs/decisions/ADR-010-shared-firewall-rules-module.md', 'docs/decisions/ADR-011-tls-inspection-deferred.md', 'docs/decisions/ADR-012-prod-two-approval-deploys.md' {
+        Get-RepoPath $_ | Should -Exist
+    }
+
+    It 'the firewall runbook follows the 9-section template' {
+        $text = Get-Content (Get-RepoPath 'docs/runbooks/02-firewall.md') -Raw
+        foreach ($section in '## 1. Purpose and scope', '## 2. Prerequisites', '## 3. Parameters', '## 4. Step-by-step', '## 5. Manual and post-deployment steps', '## 6. Validation', '## 7. Rollback', '## 8. Operations', '## 9. Troubleshooting') {
+            $text | Should -Match ([regex]::Escape($section))
+        }
+    }
+
+    It 'the firewall runbook documents the rule change and allowlist request procedures' {
+        $text = Get-Content (Get-RepoPath 'docs/runbooks/02-firewall.md') -Raw
+        $text | Should -Match 'Rule change procedure'
+        $text | Should -Match 'Allowlist request'
+    }
+
+    It 'runbook 00b documents the dev-plan environment and the prod two-approval design' {
+        $text = Get-Content (Get-RepoPath 'docs/runbooks/00b-configure-pipeline-credentials.md') -Raw
+        $text | Should -Match 'dev-plan'
+        $text | Should -Match 'two approvals'
+        $text | Should -Match 'no `?prod-plan`? environment'
+    }
+}

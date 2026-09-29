@@ -38,3 +38,16 @@ the dev parameter file PSRule evaluates in CI.
 **Phase 1 naming note:** this ADR predates the Phase 1 subscription-scope rename;
 `main.bicep`'s parameter is now `environmentName` (still `@allowed(['dev', 'prod'])`),
 not `environmentType`.
+
+## Phase 2 amendment
+
+Phase 2 adds Azure Firewall Premium and its IDPS feature
+(`intrusionDetection.mode` on the firewall policy, `modules/azureFirewall.bicep`).
+IDPS follows the identical dev/prod split as `threatIntelMode`, for the same
+reason given above: `idpsMode: isProd ? 'Deny' : 'Alert'`
+(`modules/regionStamp.bicep`). A dev IDPS false positive logs
+(`AZFWIdpsSignature` with `Action: Alert`) instead of silently dropping
+traffic, which would be harder to diagnose during development than an
+over-permissive dev network. Prod stays `Deny`. See
+[runbook 02](../runbooks/02-firewall.md) §8 for the dev IDPS tuning and
+promotion-to-`Deny` procedure.
