@@ -96,9 +96,10 @@ code change.
    - An **application allowlist** entry (one environment only): edit
      `allowedOutboundFqdns` in `params/<env>.bicepparam`.
    - An **IDPS signature override** (Alert-only or Off for one specific
-     signature): edit `idpsSignatureOverrides` in `modules/azureFirewall.bicep`'s
-     module call in `modules/regionStamp.bicep` (or the parameter's default in
-     `modules/azureFirewall.bicep` for every stamp). This is **not** in
+     signature): edit the default value of the `idpsSignatureOverrides`
+     parameter in `modules/azureFirewall.bicep`. `modules/regionStamp.bicep`
+     does not pass this parameter, so the override applies to **every stamp
+     in every environment** — there is no per-environment setting. This is **not** in
      `modules/firewallPolicyRules.bicep` — that module holds only the three
      rule collection groups (`dns-egress`, `platform-egress`,
      `approved-https-egress`); IDPS overrides live on the policy resource
