@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "6223473245839668118"
+      "templateHash": "8028684706263984095"
     }
   },
   "definitions": {
@@ -57,6 +57,24 @@
             "description": "AzureFirewallSubnet prefix (at least /26) inside hubAddressSpace."
           }
         },
+        "bastionSubnetPrefix": {
+          "type": "string",
+          "metadata": {
+            "description": "AzureBastionSubnet prefix (at least /26) inside hubAddressSpace."
+          }
+        },
+        "gatewaySubnetPrefix": {
+          "type": "string",
+          "metadata": {
+            "description": "GatewaySubnet prefix (at least /27) inside hubAddressSpace."
+          }
+        },
+        "vpnClientAddressPool": {
+          "type": "string",
+          "metadata": {
+            "description": "Point-to-site VPN client address pool. Must not overlap any VNet in any region or environment."
+          }
+        },
         "spokeAddressSpace": {
           "type": "array",
           "items": {
@@ -86,7 +104,7 @@
         }
       },
       "metadata": {
-        "description": "Address plan for one region: hub VNet with the firewall subnet, and spoke VNet with its three subnets.",
+        "description": "Address plan for one region: hub VNet with the firewall, Bastion and gateway subnets, spoke VNet with its three subnets, and the P2S VPN client pool.",
         "__bicep_imported_from!": {
           "sourceTemplate": "modules/types.bicep"
         }
@@ -164,7 +182,21 @@
       "type": "array",
       "defaultValue": [],
       "metadata": {
-        "description": "CIDR ranges allowed to administer management VMs over SSH/RDP. Empty denies all administrative inbound traffic."
+        "description": "Extra CIDR ranges allowed to administer management VMs over SSH/RDP, beyond the AzureBastionSubnet and VPN client pool of each region."
+      }
+    },
+    "deployPrimaryAdminAccess": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Deploy Azure Bastion and the point-to-site VPN gateway in the primary region."
+      }
+    },
+    "deploySecondaryAdminAccess": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Deploy Azure Bastion and the point-to-site VPN gateway in the secondary region. Off in steady state; turned on during failover."
       }
     },
     "healthCheckPath": {
@@ -587,6 +619,9 @@
           },
           "virtualMachineAdminPassword": {
             "value": "[parameters('virtualMachineAdminPassword')]"
+          },
+          "deployAdminAccess": {
+            "value": "[parameters('deployPrimaryAdminAccess')]"
           }
         },
         "template": {
@@ -597,7 +632,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "12046777419788058238"
+              "templateHash": "7282777787573290969"
             }
           },
           "definitions": {
@@ -648,6 +683,24 @@
                     "description": "AzureFirewallSubnet prefix (at least /26) inside hubAddressSpace."
                   }
                 },
+                "bastionSubnetPrefix": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "AzureBastionSubnet prefix (at least /26) inside hubAddressSpace."
+                  }
+                },
+                "gatewaySubnetPrefix": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "GatewaySubnet prefix (at least /27) inside hubAddressSpace."
+                  }
+                },
+                "vpnClientAddressPool": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "Point-to-site VPN client address pool. Must not overlap any VNet in any region or environment."
+                  }
+                },
                 "spokeAddressSpace": {
                   "type": "array",
                   "items": {
@@ -677,7 +730,7 @@
                 }
               },
               "metadata": {
-                "description": "Address plan for one region: hub VNet with the firewall subnet, and spoke VNet with its three subnets.",
+                "description": "Address plan for one region: hub VNet with the firewall, Bastion and gateway subnets, spoke VNet with its three subnets, and the P2S VPN client pool.",
                 "__bicep_imported_from!": {
                   "sourceTemplate": "types.bicep"
                 }
@@ -805,6 +858,13 @@
               "metadata": {
                 "description": "Local administrator password for Windows management VMs."
               }
+            },
+            "deployAdminAccess": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "Deploy Azure Bastion and the point-to-site VPN gateway in this region. The warm standby leaves it off until failover."
+              }
             }
           },
           "variables": {
@@ -826,8 +886,14 @@
               "keyVault": "[format('kv-{0}-{1}', parameters('regionCode'), variables('nameSuffix'))]",
               "appServicePlan": "[format('asp-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
               "appService": "[format('app-defenstack-{0}-{1}-{2}', parameters('environmentName'), parameters('regionCode'), take(variables('nameSuffix'), 6))]",
-              "virtualMachine": "[format('vm{0}{1}', parameters('regionCode'), take(variables('nameSuffix'), 7))]"
+              "virtualMachine": "[format('vm{0}{1}', parameters('regionCode'), take(variables('nameSuffix'), 7))]",
+              "bastion": "[format('bas-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
+              "bastionPublicIp": "[format('pip-bas-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
+              "vpnGateway": "[format('vpng-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
+              "vpnGatewayPublicIp": "[format('pip-vpng-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]"
             },
+            "firewallPrivateIp": "[cidrHost(parameters('addressPlan').firewallSubnetPrefix, 3)]",
+            "adminSourceCidrs": "[concat(createArray(parameters('addressPlan').bastionSubnetPrefix, parameters('addressPlan').vpnClientAddressPool), parameters('managementSourceCidrs'))]",
             "privateEndpointSubnetName": "private-endpoints",
             "appServiceIntegrationSubnetName": "appservice-integration"
           },
@@ -1218,6 +1284,23 @@
                   "firewallSubnetAddressPrefix": {
                     "value": "[parameters('addressPlan').firewallSubnetPrefix]"
                   },
+                  "bastionSubnetAddressPrefix": {
+                    "value": "[parameters('addressPlan').bastionSubnetPrefix]"
+                  },
+                  "gatewaySubnetAddressPrefix": {
+                    "value": "[parameters('addressPlan').gatewaySubnetPrefix]"
+                  },
+                  "firewallPrivateIp": {
+                    "value": "[variables('firewallPrivateIp')]"
+                  },
+                  "spokeAddressPrefixes": {
+                    "value": "[parameters('addressPlan').spokeAddressSpace]"
+                  },
+                  "bastionTargetAddressPrefixes": {
+                    "value": [
+                      "[parameters('addressPlan').managementSubnetPrefix]"
+                    ]
+                  },
                   "enableDeleteLock": {
                     "value": "[variables('isProd')]"
                   }
@@ -1229,7 +1312,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "7645391979480855793"
+                      "templateHash": "3739191848790486457"
                     }
                   },
                   "parameters": {
@@ -1259,6 +1342,36 @@
                         "description": "Address prefix for the exact-case AzureFirewallSubnet. It must be at least /26 and contained in addressSpace."
                       }
                     },
+                    "bastionSubnetAddressPrefix": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Address prefix for the exact-case AzureBastionSubnet. It must be at least /26 and contained in addressSpace."
+                      }
+                    },
+                    "gatewaySubnetAddressPrefix": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Address prefix for the exact-case GatewaySubnet. It must be at least /27 and contained in addressSpace."
+                      }
+                    },
+                    "firewallPrivateIp": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Azure Firewall private IP. The GatewaySubnet route table sends spoke traffic from VPN clients to it, and the hub (and so every VPN client) uses its DNS proxy."
+                      }
+                    },
+                    "spokeAddressPrefixes": {
+                      "type": "array",
+                      "metadata": {
+                        "description": "Spoke address prefixes that VPN client traffic must reach through the firewall."
+                      }
+                    },
+                    "bastionTargetAddressPrefixes": {
+                      "type": "array",
+                      "metadata": {
+                        "description": "Management subnet prefixes Bastion may open SSH/RDP sessions to."
+                      }
+                    },
                     "enableDeleteLock": {
                       "type": "bool",
                       "defaultValue": false,
@@ -1268,9 +1381,188 @@
                     }
                   },
                   "variables": {
-                    "firewallSubnetName": "AzureFirewallSubnet"
+                    "firewallSubnetName": "AzureFirewallSubnet",
+                    "bastionSubnetName": "AzureBastionSubnet",
+                    "gatewaySubnetName": "GatewaySubnet",
+                    "bastionNsgName": "[format('{0}-bastion-nsg', parameters('vnetName'))]",
+                    "gatewayRouteTableName": "[format('{0}-gateway-rt', parameters('vnetName'))]"
                   },
                   "resources": [
+                    {
+                      "type": "Microsoft.Network/networkSecurityGroups",
+                      "apiVersion": "2024-07-01",
+                      "name": "[variables('bastionNsgName')]",
+                      "location": "[parameters('location')]",
+                      "properties": {
+                        "securityRules": [
+                          {
+                            "name": "allow-https-inbound",
+                            "properties": {
+                              "priority": 100,
+                              "access": "Allow",
+                              "direction": "Inbound",
+                              "protocol": "Tcp",
+                              "sourceAddressPrefix": "Internet",
+                              "sourcePortRange": "*",
+                              "destinationAddressPrefix": "*",
+                              "destinationPortRange": "443"
+                            }
+                          },
+                          {
+                            "name": "allow-gateway-manager-inbound",
+                            "properties": {
+                              "priority": 110,
+                              "access": "Allow",
+                              "direction": "Inbound",
+                              "protocol": "Tcp",
+                              "sourceAddressPrefix": "GatewayManager",
+                              "sourcePortRange": "*",
+                              "destinationAddressPrefix": "*",
+                              "destinationPortRange": "443"
+                            }
+                          },
+                          {
+                            "name": "allow-load-balancer-inbound",
+                            "properties": {
+                              "priority": 120,
+                              "access": "Allow",
+                              "direction": "Inbound",
+                              "protocol": "Tcp",
+                              "sourceAddressPrefix": "AzureLoadBalancer",
+                              "sourcePortRange": "*",
+                              "destinationAddressPrefix": "*",
+                              "destinationPortRange": "443"
+                            }
+                          },
+                          {
+                            "name": "allow-bastion-host-communication-inbound",
+                            "properties": {
+                              "priority": 130,
+                              "access": "Allow",
+                              "direction": "Inbound",
+                              "protocol": "*",
+                              "sourceAddressPrefix": "VirtualNetwork",
+                              "sourcePortRange": "*",
+                              "destinationAddressPrefix": "VirtualNetwork",
+                              "destinationPortRanges": [
+                                "8080",
+                                "5701"
+                              ]
+                            }
+                          },
+                          {
+                            "name": "deny-unsolicited-inbound",
+                            "properties": {
+                              "priority": 4096,
+                              "access": "Deny",
+                              "direction": "Inbound",
+                              "protocol": "*",
+                              "sourceAddressPrefix": "*",
+                              "sourcePortRange": "*",
+                              "destinationAddressPrefix": "*",
+                              "destinationPortRange": "*"
+                            }
+                          },
+                          {
+                            "name": "allow-ssh-rdp-to-management-outbound",
+                            "properties": {
+                              "priority": 100,
+                              "access": "Allow",
+                              "direction": "Outbound",
+                              "protocol": "Tcp",
+                              "sourceAddressPrefix": "*",
+                              "sourcePortRange": "*",
+                              "destinationAddressPrefixes": "[parameters('bastionTargetAddressPrefixes')]",
+                              "destinationPortRanges": [
+                                "22",
+                                "3389"
+                              ]
+                            }
+                          },
+                          {
+                            "name": "allow-azure-cloud-outbound",
+                            "properties": {
+                              "priority": 110,
+                              "access": "Allow",
+                              "direction": "Outbound",
+                              "protocol": "Tcp",
+                              "sourceAddressPrefix": "*",
+                              "sourcePortRange": "*",
+                              "destinationAddressPrefix": "AzureCloud",
+                              "destinationPortRange": "443"
+                            }
+                          },
+                          {
+                            "name": "allow-bastion-host-communication-outbound",
+                            "properties": {
+                              "priority": 120,
+                              "access": "Allow",
+                              "direction": "Outbound",
+                              "protocol": "*",
+                              "sourceAddressPrefix": "VirtualNetwork",
+                              "sourcePortRange": "*",
+                              "destinationAddressPrefix": "VirtualNetwork",
+                              "destinationPortRanges": [
+                                "8080",
+                                "5701"
+                              ]
+                            }
+                          },
+                          {
+                            "name": "allow-session-information-outbound",
+                            "properties": {
+                              "priority": 130,
+                              "access": "Allow",
+                              "direction": "Outbound",
+                              "protocol": "*",
+                              "sourceAddressPrefix": "*",
+                              "sourcePortRange": "*",
+                              "destinationAddressPrefix": "Internet",
+                              "destinationPortRange": "80"
+                            }
+                          },
+                          {
+                            "name": "deny-other-ssh-rdp-outbound",
+                            "properties": {
+                              "priority": 4000,
+                              "access": "Deny",
+                              "direction": "Outbound",
+                              "protocol": "*",
+                              "sourceAddressPrefix": "*",
+                              "sourcePortRange": "*",
+                              "destinationAddressPrefix": "*",
+                              "destinationPortRanges": [
+                                "22",
+                                "3389"
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "type": "Microsoft.Network/routeTables",
+                      "apiVersion": "2024-07-01",
+                      "name": "[variables('gatewayRouteTableName')]",
+                      "location": "[parameters('location')]",
+                      "properties": {
+                        "copy": [
+                          {
+                            "name": "routes",
+                            "count": "[length(parameters('spokeAddressPrefixes'))]",
+                            "input": {
+                              "name": "[format('spoke-{0}-through-firewall', copyIndex('routes'))]",
+                              "properties": {
+                                "addressPrefix": "[parameters('spokeAddressPrefixes')[copyIndex('routes')]]",
+                                "nextHopType": "VirtualAppliance",
+                                "nextHopIpAddress": "[parameters('firewallPrivateIp')]"
+                              }
+                            }
+                          }
+                        ],
+                        "disableBgpRoutePropagation": false
+                      }
+                    },
                     {
                       "type": "Microsoft.Network/virtualNetworks",
                       "apiVersion": "2025-09-01",
@@ -1280,15 +1572,42 @@
                         "addressSpace": {
                           "addressPrefixes": "[parameters('addressSpace')]"
                         },
+                        "dhcpOptions": {
+                          "dnsServers": [
+                            "[parameters('firewallPrivateIp')]"
+                          ]
+                        },
                         "subnets": [
                           {
                             "name": "[variables('firewallSubnetName')]",
                             "properties": {
                               "addressPrefix": "[parameters('firewallSubnetAddressPrefix')]"
                             }
+                          },
+                          {
+                            "name": "[variables('bastionSubnetName')]",
+                            "properties": {
+                              "addressPrefix": "[parameters('bastionSubnetAddressPrefix')]",
+                              "networkSecurityGroup": {
+                                "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('bastionNsgName'))]"
+                              }
+                            }
+                          },
+                          {
+                            "name": "[variables('gatewaySubnetName')]",
+                            "properties": {
+                              "addressPrefix": "[parameters('gatewaySubnetAddressPrefix')]",
+                              "routeTable": {
+                                "id": "[resourceId('Microsoft.Network/routeTables', variables('gatewayRouteTableName'))]"
+                              }
+                            }
                           }
                         ]
-                      }
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/networkSecurityGroups', variables('bastionNsgName'))]",
+                        "[resourceId('Microsoft.Network/routeTables', variables('gatewayRouteTableName'))]"
+                      ]
                     },
                     {
                       "condition": "[parameters('enableDeleteLock')]",
@@ -1316,6 +1635,14 @@
                     "firewallSubnetId": {
                       "type": "string",
                       "value": "[resourceId('Microsoft.Network/virtualNetworks/subnets', parameters('vnetName'), variables('firewallSubnetName'))]"
+                    },
+                    "bastionSubnetId": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.Network/virtualNetworks/subnets', parameters('vnetName'), variables('bastionSubnetName'))]"
+                    },
+                    "gatewaySubnetId": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.Network/virtualNetworks/subnets', parameters('vnetName'), variables('gatewaySubnetName'))]"
                     }
                   }
                 }
@@ -1357,6 +1684,11 @@
                       "[parameters('addressPlan').managementSubnetPrefix]"
                     ]
                   },
+                  "vpnClientAddressPrefixes": {
+                    "value": [
+                      "[parameters('addressPlan').vpnClientAddressPool]"
+                    ]
+                  },
                   "allowedOutboundFqdns": {
                     "value": "[parameters('allowedOutboundFqdns')]"
                   },
@@ -1379,7 +1711,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "16763894543488761727"
+                      "templateHash": "8194811478929470243"
                     }
                   },
                   "parameters": {
@@ -1435,6 +1767,13 @@
                       "type": "array",
                       "metadata": {
                         "description": "Management subnet CIDR ranges permitted to reach OS update endpoints."
+                      }
+                    },
+                    "vpnClientAddressPrefixes": {
+                      "type": "array",
+                      "defaultValue": [],
+                      "metadata": {
+                        "description": "Point-to-site VPN client pools permitted to reach the management subnet over SSH/RDP."
                       }
                     },
                     "allowedOutboundFqdns": {
@@ -1651,6 +1990,9 @@
                           "managementAddressPrefixes": {
                             "value": "[parameters('managementAddressPrefixes')]"
                           },
+                          "vpnClientAddressPrefixes": {
+                            "value": "[parameters('vpnClientAddressPrefixes')]"
+                          },
                           "allowedOutboundFqdns": {
                             "value": "[parameters('allowedOutboundFqdns')]"
                           }
@@ -1662,7 +2004,7 @@
                             "_generator": {
                               "name": "bicep",
                               "version": "0.47.16.16243",
-                              "templateHash": "16574336547023164791"
+                              "templateHash": "2613963203774291437"
                             }
                           },
                           "parameters": {
@@ -1682,6 +2024,12 @@
                               "type": "array",
                               "metadata": {
                                 "description": "Management subnet CIDR ranges permitted to reach OS update endpoints (Windows Update, Ubuntu archives)."
+                              }
+                            },
+                            "vpnClientAddressPrefixes": {
+                              "type": "array",
+                              "metadata": {
+                                "description": "Point-to-site VPN client pools permitted to open SSH/RDP sessions to the management subnet."
                               }
                             },
                             "allowedOutboundFqdns": {
@@ -1756,6 +2104,42 @@
                             {
                               "type": "Microsoft.Network/firewallPolicies/ruleCollectionGroups",
                               "apiVersion": "2025-01-01",
+                              "name": "[format('{0}/{1}', parameters('firewallPolicyName'), 'admin-access')]",
+                              "properties": {
+                                "priority": 120,
+                                "ruleCollections": [
+                                  {
+                                    "name": "vpn-to-management",
+                                    "priority": 120,
+                                    "ruleCollectionType": "FirewallPolicyFilterRuleCollection",
+                                    "action": {
+                                      "type": "Allow"
+                                    },
+                                    "rules": [
+                                      {
+                                        "ruleType": "NetworkRule",
+                                        "name": "vpn-ssh-rdp",
+                                        "ipProtocols": [
+                                          "TCP"
+                                        ],
+                                        "sourceAddresses": "[parameters('vpnClientAddressPrefixes')]",
+                                        "destinationAddresses": "[parameters('managementAddressPrefixes')]",
+                                        "destinationPorts": [
+                                          "22",
+                                          "3389"
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                ]
+                              },
+                              "dependsOn": [
+                                "[resourceId('Microsoft.Network/firewallPolicies/ruleCollectionGroups', parameters('firewallPolicyName'), 'dns-egress')]"
+                              ]
+                            },
+                            {
+                              "type": "Microsoft.Network/firewallPolicies/ruleCollectionGroups",
+                              "apiVersion": "2025-01-01",
                               "name": "[format('{0}/{1}', parameters('firewallPolicyName'), 'platform-egress')]",
                               "properties": {
                                 "priority": 150,
@@ -1812,7 +2196,7 @@
                                 ]
                               },
                               "dependsOn": [
-                                "[resourceId('Microsoft.Network/firewallPolicies/ruleCollectionGroups', parameters('firewallPolicyName'), 'dns-egress')]"
+                                "[resourceId('Microsoft.Network/firewallPolicies/ruleCollectionGroups', parameters('firewallPolicyName'), 'admin-access')]"
                               ]
                             },
                             {
@@ -1918,7 +2302,7 @@
                     "value": "[parameters('addressPlan').managementSubnetPrefix]"
                   },
                   "approvedPrivateEndpointSourceCidrs": {
-                    "value": "[concat(createArray(parameters('addressPlan').appServiceIntegrationSubnetPrefix, parameters('addressPlan').managementSubnetPrefix), parameters('additionalPrivateEndpointSourceCidrs'))]"
+                    "value": "[concat(createArray(parameters('addressPlan').appServiceIntegrationSubnetPrefix, parameters('addressPlan').managementSubnetPrefix, parameters('addressPlan').vpnClientAddressPool), parameters('additionalPrivateEndpointSourceCidrs'))]"
                   },
                   "privateEndpointSubnetName": {
                     "value": "[variables('privateEndpointSubnetName')]"
@@ -1930,7 +2314,7 @@
                     "value": "[variables('isProd')]"
                   },
                   "managementSourceCidrs": {
-                    "value": "[parameters('managementSourceCidrs')]"
+                    "value": "[variables('adminSourceCidrs')]"
                   }
                 },
                 "template": {
@@ -1941,7 +2325,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "1020656757393870286"
+                      "templateHash": "10208180429047590210"
                     }
                   },
                   "parameters": {
@@ -2049,7 +2433,23 @@
                     "privateEndpointNsgName": "[format('{0}-{1}-nsg', parameters('vnetName'), parameters('privateEndpointSubnetName'))]",
                     "appServiceIntegrationNsgName": "[format('{0}-{1}-nsg', parameters('vnetName'), parameters('appServiceIntegrationSubnetName'))]",
                     "virtualMachineNsgName": "[format('{0}-{1}-nsg', parameters('vnetName'), parameters('virtualMachineSubnetName'))]",
-                    "managementInboundRules": "[if(empty(parameters('managementSourceCidrs')), createArray(), createArray(createObject('name', 'allow-management-ssh-rdp', 'properties', createObject('priority', 100, 'access', 'Allow', 'direction', 'Inbound', 'protocol', 'Tcp', 'sourceAddressPrefixes', parameters('managementSourceCidrs'), 'sourcePortRange', '*', 'destinationAddressPrefix', parameters('virtualMachineSubnetAddressPrefix'), 'destinationPortRanges', createArray('22', '3389')))))]"
+                    "managementInboundRules": "[if(empty(parameters('managementSourceCidrs')), createArray(), createArray(createObject('name', 'allow-management-ssh-rdp', 'properties', createObject('priority', 100, 'access', 'Allow', 'direction', 'Inbound', 'protocol', 'Tcp', 'sourceAddressPrefixes', parameters('managementSourceCidrs'), 'sourcePortRange', '*', 'destinationAddressPrefix', parameters('virtualMachineSubnetAddressPrefix'), 'destinationPortRanges', createArray('22', '3389')))))]",
+                    "denyLateralTraversalRule": {
+                      "name": "deny-ssh-rdp-outbound",
+                      "properties": {
+                        "priority": 4000,
+                        "access": "Deny",
+                        "direction": "Outbound",
+                        "protocol": "*",
+                        "sourceAddressPrefix": "*",
+                        "sourcePortRange": "*",
+                        "destinationAddressPrefix": "*",
+                        "destinationPortRanges": [
+                          "22",
+                          "3389"
+                        ]
+                      }
+                    }
                   },
                   "resources": {
                     "privateEndpointNsg": {
@@ -2084,7 +2484,8 @@
                               "destinationAddressPrefix": "*",
                               "destinationPortRange": "*"
                             }
-                          }
+                          },
+                          "[variables('denyLateralTraversalRule')]"
                         ]
                       }
                     },
@@ -2107,7 +2508,8 @@
                               "destinationAddressPrefix": "*",
                               "destinationPortRange": "*"
                             }
-                          }
+                          },
+                          "[variables('denyLateralTraversalRule')]"
                         ]
                       }
                     },
@@ -2136,7 +2538,7 @@
                       "name": "[variables('virtualMachineNsgName')]",
                       "location": "[parameters('location')]",
                       "properties": {
-                        "securityRules": "[concat(variables('managementInboundRules'), createArray(createObject('name', 'deny-unsolicited-inbound', 'properties', createObject('priority', 4096, 'access', 'Deny', 'direction', 'Inbound', 'protocol', '*', 'sourceAddressPrefix', '*', 'sourcePortRange', '*', 'destinationAddressPrefix', '*', 'destinationPortRange', '*'))))]"
+                        "securityRules": "[concat(variables('managementInboundRules'), createArray(createObject('name', 'deny-unsolicited-inbound', 'properties', createObject('priority', 4096, 'access', 'Deny', 'direction', 'Inbound', 'protocol', '*', 'sourceAddressPrefix', '*', 'sourcePortRange', '*', 'destinationAddressPrefix', '*', 'destinationPortRange', '*')), variables('denyLateralTraversalRule')))]"
                       }
                     },
                     "virtualMachineRouteTable": {
@@ -2764,7 +3166,7 @@
                     "value": "[parameters('logAnalyticsWorkspaceId')]"
                   },
                   "managementSourceCidrs": {
-                    "value": "[parameters('managementSourceCidrs')]"
+                    "value": "[variables('adminSourceCidrs')]"
                   }
                 },
                 "template": {
@@ -3063,6 +3465,456 @@
                 "spokeNetwork"
               ]
             },
+            "bastion": {
+              "condition": "[parameters('deployAdminAccess')]",
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "bastion",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "location": {
+                    "value": "[parameters('location')]"
+                  },
+                  "bastionName": {
+                    "value": "[variables('names').bastion]"
+                  },
+                  "publicIpName": {
+                    "value": "[variables('names').bastionPublicIp]"
+                  },
+                  "subnetId": {
+                    "value": "[reference('hubNetwork').outputs.bastionSubnetId.value]"
+                  },
+                  "availabilityZones": {
+                    "value": "[variables('availabilityZones')]"
+                  },
+                  "logAnalyticsWorkspaceId": {
+                    "value": "[parameters('logAnalyticsWorkspaceId')]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.47.16.16243",
+                      "templateHash": "18276085892748367180"
+                    }
+                  },
+                  "parameters": {
+                    "location": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Azure region for Bastion."
+                      }
+                    },
+                    "bastionName": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 80,
+                      "metadata": {
+                        "description": "Bastion host name."
+                      }
+                    },
+                    "publicIpName": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 80,
+                      "metadata": {
+                        "description": "Bastion public IP name."
+                      }
+                    },
+                    "subnetId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "AzureBastionSubnet resource ID."
+                      }
+                    },
+                    "availabilityZones": {
+                      "type": "array",
+                      "defaultValue": [],
+                      "metadata": {
+                        "description": "Availability zones for Bastion and its public IP, for example ['1', '2', '3']. Zones are fixed at creation."
+                      }
+                    },
+                    "logAnalyticsWorkspaceId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Log Analytics workspace resource ID for Bastion audit logs."
+                      }
+                    }
+                  },
+                  "resources": [
+                    {
+                      "type": "Microsoft.Network/publicIPAddresses",
+                      "apiVersion": "2025-01-01",
+                      "name": "[parameters('publicIpName')]",
+                      "location": "[parameters('location')]",
+                      "zones": "[if(empty(parameters('availabilityZones')), null(), parameters('availabilityZones'))]",
+                      "sku": {
+                        "name": "Standard"
+                      },
+                      "properties": {
+                        "publicIPAllocationMethod": "Static"
+                      }
+                    },
+                    {
+                      "type": "Microsoft.Network/bastionHosts",
+                      "apiVersion": "2024-07-01",
+                      "name": "[parameters('bastionName')]",
+                      "location": "[parameters('location')]",
+                      "zones": "[if(empty(parameters('availabilityZones')), null(), parameters('availabilityZones'))]",
+                      "sku": {
+                        "name": "Standard"
+                      },
+                      "properties": {
+                        "enableTunneling": true,
+                        "enableIpConnect": true,
+                        "scaleUnits": 2,
+                        "ipConfigurations": [
+                          {
+                            "name": "bastion-ipconfig",
+                            "properties": {
+                              "subnet": {
+                                "id": "[parameters('subnetId')]"
+                              },
+                              "publicIPAddress": {
+                                "id": "[resourceId('Microsoft.Network/publicIPAddresses', parameters('publicIpName'))]"
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/publicIPAddresses', parameters('publicIpName'))]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.Insights/diagnosticSettings",
+                      "apiVersion": "2021-05-01-preview",
+                      "scope": "[resourceId('Microsoft.Network/bastionHosts', parameters('bastionName'))]",
+                      "name": "bastion-diagnostics",
+                      "properties": {
+                        "workspaceId": "[parameters('logAnalyticsWorkspaceId')]",
+                        "logs": [
+                          {
+                            "categoryGroup": "allLogs",
+                            "enabled": true
+                          }
+                        ],
+                        "metrics": [
+                          {
+                            "category": "AllMetrics",
+                            "enabled": true
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/bastionHosts', parameters('bastionName'))]"
+                      ]
+                    }
+                  ],
+                  "outputs": {
+                    "id": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.Network/bastionHosts', parameters('bastionName'))]"
+                    },
+                    "name": {
+                      "type": "string",
+                      "value": "[parameters('bastionName')]"
+                    }
+                  }
+                }
+              },
+              "dependsOn": [
+                "azureFirewall",
+                "hubNetwork"
+              ]
+            },
+            "vpnGateway": {
+              "condition": "[parameters('deployAdminAccess')]",
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "vpn-gateway",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "location": {
+                    "value": "[parameters('location')]"
+                  },
+                  "gatewayName": {
+                    "value": "[variables('names').vpnGateway]"
+                  },
+                  "publicIpNamePrefix": {
+                    "value": "[variables('names').vpnGatewayPublicIp]"
+                  },
+                  "gatewaySubnetId": {
+                    "value": "[reference('hubNetwork').outputs.gatewaySubnetId.value]"
+                  },
+                  "skuName": "[if(variables('isProd'), createObject('value', 'VpnGw2AZ'), createObject('value', 'VpnGw1AZ'))]",
+                  "availabilityZones": {
+                    "value": "[variables('availabilityZones')]"
+                  },
+                  "vpnClientAddressPool": {
+                    "value": "[parameters('addressPlan').vpnClientAddressPool]"
+                  },
+                  "logAnalyticsWorkspaceId": {
+                    "value": "[parameters('logAnalyticsWorkspaceId')]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.47.16.16243",
+                      "templateHash": "17468747260589965726"
+                    }
+                  },
+                  "parameters": {
+                    "location": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Azure region for the VPN gateway."
+                      }
+                    },
+                    "gatewayName": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 80,
+                      "metadata": {
+                        "description": "VPN gateway name."
+                      }
+                    },
+                    "publicIpNamePrefix": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 78,
+                      "metadata": {
+                        "description": "Name prefix for the two public IPs of the active-active gateway; -1 and -2 are appended."
+                      }
+                    },
+                    "gatewaySubnetId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "GatewaySubnet resource ID."
+                      }
+                    },
+                    "skuName": {
+                      "type": "string",
+                      "defaultValue": "VpnGw2AZ",
+                      "allowedValues": [
+                        "VpnGw1AZ",
+                        "VpnGw2AZ",
+                        "VpnGw3AZ"
+                      ],
+                      "metadata": {
+                        "description": "Zone-redundant VPN gateway SKU."
+                      }
+                    },
+                    "availabilityZones": {
+                      "type": "array",
+                      "defaultValue": [
+                        "1",
+                        "2",
+                        "3"
+                      ],
+                      "metadata": {
+                        "description": "Availability zones for the gateway public IP. AZ gateway SKUs spread across the zones of their public IP."
+                      }
+                    },
+                    "vpnClientAddressPool": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Point-to-site client address pool."
+                      }
+                    },
+                    "tenantId": {
+                      "type": "string",
+                      "defaultValue": "[tenant().tenantId]",
+                      "metadata": {
+                        "description": "Microsoft Entra tenant ID that authenticates VPN users."
+                      }
+                    },
+                    "vpnClientAudience": {
+                      "type": "string",
+                      "defaultValue": "c632b3df-fb67-4d84-bdcf-b95ad541b5c8",
+                      "metadata": {
+                        "description": "Application (audience) ID of the Microsoft-registered Azure VPN Client app."
+                      }
+                    },
+                    "maintenanceWindowStartDateTime": {
+                      "type": "string",
+                      "defaultValue": "2026-10-04 06:00",
+                      "metadata": {
+                        "description": "First customer-controlled gateway maintenance window, in UTC (yyyy-MM-dd HH:mm). It repeats every Sunday; Azure requires at least 5 hours."
+                      }
+                    },
+                    "logAnalyticsWorkspaceId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Log Analytics workspace resource ID for gateway and P2S logs."
+                      }
+                    }
+                  },
+                  "variables": {
+                    "instances": [
+                      1,
+                      2
+                    ]
+                  },
+                  "resources": [
+                    {
+                      "copy": {
+                        "name": "gatewayPublicIps",
+                        "count": "[length(variables('instances'))]"
+                      },
+                      "type": "Microsoft.Network/publicIPAddresses",
+                      "apiVersion": "2025-01-01",
+                      "name": "[format('{0}-{1}', parameters('publicIpNamePrefix'), variables('instances')[copyIndex()])]",
+                      "location": "[parameters('location')]",
+                      "zones": "[parameters('availabilityZones')]",
+                      "sku": {
+                        "name": "Standard"
+                      },
+                      "properties": {
+                        "publicIPAllocationMethod": "Static"
+                      }
+                    },
+                    {
+                      "type": "Microsoft.Network/virtualNetworkGateways",
+                      "apiVersion": "2024-07-01",
+                      "name": "[parameters('gatewayName')]",
+                      "location": "[parameters('location')]",
+                      "properties": {
+                        "copy": [
+                          {
+                            "name": "ipConfigurations",
+                            "count": "[length(variables('instances'))]",
+                            "input": {
+                              "name": "[format('gateway-ipconfig-{0}', variables('instances')[copyIndex('ipConfigurations')])]",
+                              "properties": {
+                                "privateIPAllocationMethod": "Dynamic",
+                                "subnet": {
+                                  "id": "[parameters('gatewaySubnetId')]"
+                                },
+                                "publicIPAddress": {
+                                  "id": "[resourceId('Microsoft.Network/publicIPAddresses', format('{0}-{1}', parameters('publicIpNamePrefix'), variables('instances')[copyIndex('ipConfigurations')]))]"
+                                }
+                              }
+                            }
+                          }
+                        ],
+                        "gatewayType": "Vpn",
+                        "vpnType": "RouteBased",
+                        "vpnGatewayGeneration": "Generation2",
+                        "sku": {
+                          "name": "[parameters('skuName')]",
+                          "tier": "[parameters('skuName')]"
+                        },
+                        "activeActive": true,
+                        "enableBgp": false,
+                        "vpnClientConfiguration": {
+                          "vpnClientAddressPool": {
+                            "addressPrefixes": [
+                              "[parameters('vpnClientAddressPool')]"
+                            ]
+                          },
+                          "vpnClientProtocols": [
+                            "OpenVPN"
+                          ],
+                          "vpnAuthenticationTypes": [
+                            "AAD"
+                          ],
+                          "aadTenant": "[format('{0}{1}/', environment().authentication.loginEndpoint, parameters('tenantId'))]",
+                          "aadAudience": "[parameters('vpnClientAudience')]",
+                          "aadIssuer": "[format('https://sts.windows.net/{0}/', parameters('tenantId'))]"
+                        }
+                      },
+                      "dependsOn": [
+                        "gatewayPublicIps"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.Insights/diagnosticSettings",
+                      "apiVersion": "2021-05-01-preview",
+                      "scope": "[resourceId('Microsoft.Network/virtualNetworkGateways', parameters('gatewayName'))]",
+                      "name": "vpn-gateway-diagnostics",
+                      "properties": {
+                        "workspaceId": "[parameters('logAnalyticsWorkspaceId')]",
+                        "logs": [
+                          {
+                            "categoryGroup": "allLogs",
+                            "enabled": true
+                          }
+                        ],
+                        "metrics": [
+                          {
+                            "category": "AllMetrics",
+                            "enabled": true
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/virtualNetworkGateways', parameters('gatewayName'))]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.Maintenance/maintenanceConfigurations",
+                      "apiVersion": "2023-04-01",
+                      "name": "[format('{0}-maintenance', parameters('gatewayName'))]",
+                      "location": "[parameters('location')]",
+                      "properties": {
+                        "maintenanceScope": "Resource",
+                        "maintenanceWindow": {
+                          "startDateTime": "[parameters('maintenanceWindowStartDateTime')]",
+                          "duration": "05:00",
+                          "timeZone": "UTC",
+                          "recurEvery": "Week Sunday"
+                        }
+                      }
+                    },
+                    {
+                      "type": "Microsoft.Maintenance/configurationAssignments",
+                      "apiVersion": "2023-04-01",
+                      "scope": "[resourceId('Microsoft.Network/virtualNetworkGateways', parameters('gatewayName'))]",
+                      "name": "[format('{0}-maintenance', parameters('gatewayName'))]",
+                      "location": "[parameters('location')]",
+                      "properties": {
+                        "maintenanceConfigurationId": "[resourceId('Microsoft.Maintenance/maintenanceConfigurations', format('{0}-maintenance', parameters('gatewayName')))]",
+                        "resourceId": "[resourceId('Microsoft.Network/virtualNetworkGateways', parameters('gatewayName'))]"
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Maintenance/maintenanceConfigurations', format('{0}-maintenance', parameters('gatewayName')))]",
+                        "[resourceId('Microsoft.Network/virtualNetworkGateways', parameters('gatewayName'))]"
+                      ]
+                    }
+                  ],
+                  "outputs": {
+                    "id": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.Network/virtualNetworkGateways', parameters('gatewayName'))]"
+                    },
+                    "name": {
+                      "type": "string",
+                      "value": "[parameters('gatewayName')]"
+                    }
+                  }
+                }
+              },
+              "dependsOn": [
+                "azureFirewall",
+                "hubNetwork"
+              ]
+            },
             "networkIntegration": {
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -3099,6 +3951,9 @@
                   },
                   "appServiceName": {
                     "value": "[variables('names').appService]"
+                  },
+                  "useHubGateway": {
+                    "value": "[parameters('deployAdminAccess')]"
                   }
                 },
                 "template": {
@@ -3108,7 +3963,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "13063555936045870584"
+                      "templateHash": "8156763654850952950"
                     }
                   },
                   "parameters": {
@@ -3182,6 +4037,13 @@
                       "metadata": {
                         "description": "Allow forwarded traffic across the hub/spoke peering for firewall service chaining."
                       }
+                    },
+                    "useHubGateway": {
+                      "type": "bool",
+                      "defaultValue": false,
+                      "metadata": {
+                        "description": "Share the hub VPN gateway with the spoke (gateway transit). Only set when the gateway exists; the spoke peering fails otherwise."
+                      }
                     }
                   },
                   "resources": [
@@ -3192,7 +4054,7 @@
                       "properties": {
                         "allowVirtualNetworkAccess": true,
                         "allowForwardedTraffic": "[parameters('allowForwardedTraffic')]",
-                        "allowGatewayTransit": false,
+                        "allowGatewayTransit": "[parameters('useHubGateway')]",
                         "useRemoteGateways": false,
                         "remoteVirtualNetwork": {
                           "id": "[parameters('spokeVnetId')]"
@@ -3207,7 +4069,7 @@
                         "allowVirtualNetworkAccess": true,
                         "allowForwardedTraffic": "[parameters('allowForwardedTraffic')]",
                         "allowGatewayTransit": false,
-                        "useRemoteGateways": false,
+                        "useRemoteGateways": "[parameters('useHubGateway')]",
                         "remoteVirtualNetwork": {
                           "id": "[parameters('hubVnetId')]"
                         }
@@ -3231,7 +4093,8 @@
                 "appService",
                 "hubNetwork",
                 "spokeNetwork",
-                "storage"
+                "storage",
+                "vpnGateway"
               ]
             },
             "privateConnectivity": {
@@ -3542,6 +4405,18 @@
             "firewallPrivateIp": {
               "type": "string",
               "value": "[reference('azureFirewall').outputs.privateIp.value]"
+            },
+            "expectedFirewallPrivateIp": {
+              "type": "string",
+              "value": "[variables('firewallPrivateIp')]"
+            },
+            "bastionName": {
+              "type": "string",
+              "value": "[if(parameters('deployAdminAccess'), variables('names').bastion, '')]"
+            },
+            "vpnGatewayName": {
+              "type": "string",
+              "value": "[if(parameters('deployAdminAccess'), variables('names').vpnGateway, '')]"
             },
             "appServiceName": {
               "type": "string",
@@ -3610,6 +4485,9 @@
           },
           "healthCheckPath": {
             "value": "[parameters('healthCheckPath')]"
+          },
+          "deployAdminAccess": {
+            "value": "[parameters('deploySecondaryAdminAccess')]"
           }
         },
         "template": {
@@ -3620,7 +4498,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "12046777419788058238"
+              "templateHash": "7282777787573290969"
             }
           },
           "definitions": {
@@ -3671,6 +4549,24 @@
                     "description": "AzureFirewallSubnet prefix (at least /26) inside hubAddressSpace."
                   }
                 },
+                "bastionSubnetPrefix": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "AzureBastionSubnet prefix (at least /26) inside hubAddressSpace."
+                  }
+                },
+                "gatewaySubnetPrefix": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "GatewaySubnet prefix (at least /27) inside hubAddressSpace."
+                  }
+                },
+                "vpnClientAddressPool": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "Point-to-site VPN client address pool. Must not overlap any VNet in any region or environment."
+                  }
+                },
                 "spokeAddressSpace": {
                   "type": "array",
                   "items": {
@@ -3700,7 +4596,7 @@
                 }
               },
               "metadata": {
-                "description": "Address plan for one region: hub VNet with the firewall subnet, and spoke VNet with its three subnets.",
+                "description": "Address plan for one region: hub VNet with the firewall, Bastion and gateway subnets, spoke VNet with its three subnets, and the P2S VPN client pool.",
                 "__bicep_imported_from!": {
                   "sourceTemplate": "types.bicep"
                 }
@@ -3828,6 +4724,13 @@
               "metadata": {
                 "description": "Local administrator password for Windows management VMs."
               }
+            },
+            "deployAdminAccess": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "Deploy Azure Bastion and the point-to-site VPN gateway in this region. The warm standby leaves it off until failover."
+              }
             }
           },
           "variables": {
@@ -3849,8 +4752,14 @@
               "keyVault": "[format('kv-{0}-{1}', parameters('regionCode'), variables('nameSuffix'))]",
               "appServicePlan": "[format('asp-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
               "appService": "[format('app-defenstack-{0}-{1}-{2}', parameters('environmentName'), parameters('regionCode'), take(variables('nameSuffix'), 6))]",
-              "virtualMachine": "[format('vm{0}{1}', parameters('regionCode'), take(variables('nameSuffix'), 7))]"
+              "virtualMachine": "[format('vm{0}{1}', parameters('regionCode'), take(variables('nameSuffix'), 7))]",
+              "bastion": "[format('bas-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
+              "bastionPublicIp": "[format('pip-bas-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
+              "vpnGateway": "[format('vpng-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
+              "vpnGatewayPublicIp": "[format('pip-vpng-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]"
             },
+            "firewallPrivateIp": "[cidrHost(parameters('addressPlan').firewallSubnetPrefix, 3)]",
+            "adminSourceCidrs": "[concat(createArray(parameters('addressPlan').bastionSubnetPrefix, parameters('addressPlan').vpnClientAddressPool), parameters('managementSourceCidrs'))]",
             "privateEndpointSubnetName": "private-endpoints",
             "appServiceIntegrationSubnetName": "appservice-integration"
           },
@@ -4241,6 +5150,23 @@
                   "firewallSubnetAddressPrefix": {
                     "value": "[parameters('addressPlan').firewallSubnetPrefix]"
                   },
+                  "bastionSubnetAddressPrefix": {
+                    "value": "[parameters('addressPlan').bastionSubnetPrefix]"
+                  },
+                  "gatewaySubnetAddressPrefix": {
+                    "value": "[parameters('addressPlan').gatewaySubnetPrefix]"
+                  },
+                  "firewallPrivateIp": {
+                    "value": "[variables('firewallPrivateIp')]"
+                  },
+                  "spokeAddressPrefixes": {
+                    "value": "[parameters('addressPlan').spokeAddressSpace]"
+                  },
+                  "bastionTargetAddressPrefixes": {
+                    "value": [
+                      "[parameters('addressPlan').managementSubnetPrefix]"
+                    ]
+                  },
                   "enableDeleteLock": {
                     "value": "[variables('isProd')]"
                   }
@@ -4252,7 +5178,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "7645391979480855793"
+                      "templateHash": "3739191848790486457"
                     }
                   },
                   "parameters": {
@@ -4282,6 +5208,36 @@
                         "description": "Address prefix for the exact-case AzureFirewallSubnet. It must be at least /26 and contained in addressSpace."
                       }
                     },
+                    "bastionSubnetAddressPrefix": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Address prefix for the exact-case AzureBastionSubnet. It must be at least /26 and contained in addressSpace."
+                      }
+                    },
+                    "gatewaySubnetAddressPrefix": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Address prefix for the exact-case GatewaySubnet. It must be at least /27 and contained in addressSpace."
+                      }
+                    },
+                    "firewallPrivateIp": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Azure Firewall private IP. The GatewaySubnet route table sends spoke traffic from VPN clients to it, and the hub (and so every VPN client) uses its DNS proxy."
+                      }
+                    },
+                    "spokeAddressPrefixes": {
+                      "type": "array",
+                      "metadata": {
+                        "description": "Spoke address prefixes that VPN client traffic must reach through the firewall."
+                      }
+                    },
+                    "bastionTargetAddressPrefixes": {
+                      "type": "array",
+                      "metadata": {
+                        "description": "Management subnet prefixes Bastion may open SSH/RDP sessions to."
+                      }
+                    },
                     "enableDeleteLock": {
                       "type": "bool",
                       "defaultValue": false,
@@ -4291,9 +5247,188 @@
                     }
                   },
                   "variables": {
-                    "firewallSubnetName": "AzureFirewallSubnet"
+                    "firewallSubnetName": "AzureFirewallSubnet",
+                    "bastionSubnetName": "AzureBastionSubnet",
+                    "gatewaySubnetName": "GatewaySubnet",
+                    "bastionNsgName": "[format('{0}-bastion-nsg', parameters('vnetName'))]",
+                    "gatewayRouteTableName": "[format('{0}-gateway-rt', parameters('vnetName'))]"
                   },
                   "resources": [
+                    {
+                      "type": "Microsoft.Network/networkSecurityGroups",
+                      "apiVersion": "2024-07-01",
+                      "name": "[variables('bastionNsgName')]",
+                      "location": "[parameters('location')]",
+                      "properties": {
+                        "securityRules": [
+                          {
+                            "name": "allow-https-inbound",
+                            "properties": {
+                              "priority": 100,
+                              "access": "Allow",
+                              "direction": "Inbound",
+                              "protocol": "Tcp",
+                              "sourceAddressPrefix": "Internet",
+                              "sourcePortRange": "*",
+                              "destinationAddressPrefix": "*",
+                              "destinationPortRange": "443"
+                            }
+                          },
+                          {
+                            "name": "allow-gateway-manager-inbound",
+                            "properties": {
+                              "priority": 110,
+                              "access": "Allow",
+                              "direction": "Inbound",
+                              "protocol": "Tcp",
+                              "sourceAddressPrefix": "GatewayManager",
+                              "sourcePortRange": "*",
+                              "destinationAddressPrefix": "*",
+                              "destinationPortRange": "443"
+                            }
+                          },
+                          {
+                            "name": "allow-load-balancer-inbound",
+                            "properties": {
+                              "priority": 120,
+                              "access": "Allow",
+                              "direction": "Inbound",
+                              "protocol": "Tcp",
+                              "sourceAddressPrefix": "AzureLoadBalancer",
+                              "sourcePortRange": "*",
+                              "destinationAddressPrefix": "*",
+                              "destinationPortRange": "443"
+                            }
+                          },
+                          {
+                            "name": "allow-bastion-host-communication-inbound",
+                            "properties": {
+                              "priority": 130,
+                              "access": "Allow",
+                              "direction": "Inbound",
+                              "protocol": "*",
+                              "sourceAddressPrefix": "VirtualNetwork",
+                              "sourcePortRange": "*",
+                              "destinationAddressPrefix": "VirtualNetwork",
+                              "destinationPortRanges": [
+                                "8080",
+                                "5701"
+                              ]
+                            }
+                          },
+                          {
+                            "name": "deny-unsolicited-inbound",
+                            "properties": {
+                              "priority": 4096,
+                              "access": "Deny",
+                              "direction": "Inbound",
+                              "protocol": "*",
+                              "sourceAddressPrefix": "*",
+                              "sourcePortRange": "*",
+                              "destinationAddressPrefix": "*",
+                              "destinationPortRange": "*"
+                            }
+                          },
+                          {
+                            "name": "allow-ssh-rdp-to-management-outbound",
+                            "properties": {
+                              "priority": 100,
+                              "access": "Allow",
+                              "direction": "Outbound",
+                              "protocol": "Tcp",
+                              "sourceAddressPrefix": "*",
+                              "sourcePortRange": "*",
+                              "destinationAddressPrefixes": "[parameters('bastionTargetAddressPrefixes')]",
+                              "destinationPortRanges": [
+                                "22",
+                                "3389"
+                              ]
+                            }
+                          },
+                          {
+                            "name": "allow-azure-cloud-outbound",
+                            "properties": {
+                              "priority": 110,
+                              "access": "Allow",
+                              "direction": "Outbound",
+                              "protocol": "Tcp",
+                              "sourceAddressPrefix": "*",
+                              "sourcePortRange": "*",
+                              "destinationAddressPrefix": "AzureCloud",
+                              "destinationPortRange": "443"
+                            }
+                          },
+                          {
+                            "name": "allow-bastion-host-communication-outbound",
+                            "properties": {
+                              "priority": 120,
+                              "access": "Allow",
+                              "direction": "Outbound",
+                              "protocol": "*",
+                              "sourceAddressPrefix": "VirtualNetwork",
+                              "sourcePortRange": "*",
+                              "destinationAddressPrefix": "VirtualNetwork",
+                              "destinationPortRanges": [
+                                "8080",
+                                "5701"
+                              ]
+                            }
+                          },
+                          {
+                            "name": "allow-session-information-outbound",
+                            "properties": {
+                              "priority": 130,
+                              "access": "Allow",
+                              "direction": "Outbound",
+                              "protocol": "*",
+                              "sourceAddressPrefix": "*",
+                              "sourcePortRange": "*",
+                              "destinationAddressPrefix": "Internet",
+                              "destinationPortRange": "80"
+                            }
+                          },
+                          {
+                            "name": "deny-other-ssh-rdp-outbound",
+                            "properties": {
+                              "priority": 4000,
+                              "access": "Deny",
+                              "direction": "Outbound",
+                              "protocol": "*",
+                              "sourceAddressPrefix": "*",
+                              "sourcePortRange": "*",
+                              "destinationAddressPrefix": "*",
+                              "destinationPortRanges": [
+                                "22",
+                                "3389"
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "type": "Microsoft.Network/routeTables",
+                      "apiVersion": "2024-07-01",
+                      "name": "[variables('gatewayRouteTableName')]",
+                      "location": "[parameters('location')]",
+                      "properties": {
+                        "copy": [
+                          {
+                            "name": "routes",
+                            "count": "[length(parameters('spokeAddressPrefixes'))]",
+                            "input": {
+                              "name": "[format('spoke-{0}-through-firewall', copyIndex('routes'))]",
+                              "properties": {
+                                "addressPrefix": "[parameters('spokeAddressPrefixes')[copyIndex('routes')]]",
+                                "nextHopType": "VirtualAppliance",
+                                "nextHopIpAddress": "[parameters('firewallPrivateIp')]"
+                              }
+                            }
+                          }
+                        ],
+                        "disableBgpRoutePropagation": false
+                      }
+                    },
                     {
                       "type": "Microsoft.Network/virtualNetworks",
                       "apiVersion": "2025-09-01",
@@ -4303,15 +5438,42 @@
                         "addressSpace": {
                           "addressPrefixes": "[parameters('addressSpace')]"
                         },
+                        "dhcpOptions": {
+                          "dnsServers": [
+                            "[parameters('firewallPrivateIp')]"
+                          ]
+                        },
                         "subnets": [
                           {
                             "name": "[variables('firewallSubnetName')]",
                             "properties": {
                               "addressPrefix": "[parameters('firewallSubnetAddressPrefix')]"
                             }
+                          },
+                          {
+                            "name": "[variables('bastionSubnetName')]",
+                            "properties": {
+                              "addressPrefix": "[parameters('bastionSubnetAddressPrefix')]",
+                              "networkSecurityGroup": {
+                                "id": "[resourceId('Microsoft.Network/networkSecurityGroups', variables('bastionNsgName'))]"
+                              }
+                            }
+                          },
+                          {
+                            "name": "[variables('gatewaySubnetName')]",
+                            "properties": {
+                              "addressPrefix": "[parameters('gatewaySubnetAddressPrefix')]",
+                              "routeTable": {
+                                "id": "[resourceId('Microsoft.Network/routeTables', variables('gatewayRouteTableName'))]"
+                              }
+                            }
                           }
                         ]
-                      }
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/networkSecurityGroups', variables('bastionNsgName'))]",
+                        "[resourceId('Microsoft.Network/routeTables', variables('gatewayRouteTableName'))]"
+                      ]
                     },
                     {
                       "condition": "[parameters('enableDeleteLock')]",
@@ -4339,6 +5501,14 @@
                     "firewallSubnetId": {
                       "type": "string",
                       "value": "[resourceId('Microsoft.Network/virtualNetworks/subnets', parameters('vnetName'), variables('firewallSubnetName'))]"
+                    },
+                    "bastionSubnetId": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.Network/virtualNetworks/subnets', parameters('vnetName'), variables('bastionSubnetName'))]"
+                    },
+                    "gatewaySubnetId": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.Network/virtualNetworks/subnets', parameters('vnetName'), variables('gatewaySubnetName'))]"
                     }
                   }
                 }
@@ -4380,6 +5550,11 @@
                       "[parameters('addressPlan').managementSubnetPrefix]"
                     ]
                   },
+                  "vpnClientAddressPrefixes": {
+                    "value": [
+                      "[parameters('addressPlan').vpnClientAddressPool]"
+                    ]
+                  },
                   "allowedOutboundFqdns": {
                     "value": "[parameters('allowedOutboundFqdns')]"
                   },
@@ -4402,7 +5577,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "16763894543488761727"
+                      "templateHash": "8194811478929470243"
                     }
                   },
                   "parameters": {
@@ -4458,6 +5633,13 @@
                       "type": "array",
                       "metadata": {
                         "description": "Management subnet CIDR ranges permitted to reach OS update endpoints."
+                      }
+                    },
+                    "vpnClientAddressPrefixes": {
+                      "type": "array",
+                      "defaultValue": [],
+                      "metadata": {
+                        "description": "Point-to-site VPN client pools permitted to reach the management subnet over SSH/RDP."
                       }
                     },
                     "allowedOutboundFqdns": {
@@ -4674,6 +5856,9 @@
                           "managementAddressPrefixes": {
                             "value": "[parameters('managementAddressPrefixes')]"
                           },
+                          "vpnClientAddressPrefixes": {
+                            "value": "[parameters('vpnClientAddressPrefixes')]"
+                          },
                           "allowedOutboundFqdns": {
                             "value": "[parameters('allowedOutboundFqdns')]"
                           }
@@ -4685,7 +5870,7 @@
                             "_generator": {
                               "name": "bicep",
                               "version": "0.47.16.16243",
-                              "templateHash": "16574336547023164791"
+                              "templateHash": "2613963203774291437"
                             }
                           },
                           "parameters": {
@@ -4705,6 +5890,12 @@
                               "type": "array",
                               "metadata": {
                                 "description": "Management subnet CIDR ranges permitted to reach OS update endpoints (Windows Update, Ubuntu archives)."
+                              }
+                            },
+                            "vpnClientAddressPrefixes": {
+                              "type": "array",
+                              "metadata": {
+                                "description": "Point-to-site VPN client pools permitted to open SSH/RDP sessions to the management subnet."
                               }
                             },
                             "allowedOutboundFqdns": {
@@ -4779,6 +5970,42 @@
                             {
                               "type": "Microsoft.Network/firewallPolicies/ruleCollectionGroups",
                               "apiVersion": "2025-01-01",
+                              "name": "[format('{0}/{1}', parameters('firewallPolicyName'), 'admin-access')]",
+                              "properties": {
+                                "priority": 120,
+                                "ruleCollections": [
+                                  {
+                                    "name": "vpn-to-management",
+                                    "priority": 120,
+                                    "ruleCollectionType": "FirewallPolicyFilterRuleCollection",
+                                    "action": {
+                                      "type": "Allow"
+                                    },
+                                    "rules": [
+                                      {
+                                        "ruleType": "NetworkRule",
+                                        "name": "vpn-ssh-rdp",
+                                        "ipProtocols": [
+                                          "TCP"
+                                        ],
+                                        "sourceAddresses": "[parameters('vpnClientAddressPrefixes')]",
+                                        "destinationAddresses": "[parameters('managementAddressPrefixes')]",
+                                        "destinationPorts": [
+                                          "22",
+                                          "3389"
+                                        ]
+                                      }
+                                    ]
+                                  }
+                                ]
+                              },
+                              "dependsOn": [
+                                "[resourceId('Microsoft.Network/firewallPolicies/ruleCollectionGroups', parameters('firewallPolicyName'), 'dns-egress')]"
+                              ]
+                            },
+                            {
+                              "type": "Microsoft.Network/firewallPolicies/ruleCollectionGroups",
+                              "apiVersion": "2025-01-01",
                               "name": "[format('{0}/{1}', parameters('firewallPolicyName'), 'platform-egress')]",
                               "properties": {
                                 "priority": 150,
@@ -4835,7 +6062,7 @@
                                 ]
                               },
                               "dependsOn": [
-                                "[resourceId('Microsoft.Network/firewallPolicies/ruleCollectionGroups', parameters('firewallPolicyName'), 'dns-egress')]"
+                                "[resourceId('Microsoft.Network/firewallPolicies/ruleCollectionGroups', parameters('firewallPolicyName'), 'admin-access')]"
                               ]
                             },
                             {
@@ -4941,7 +6168,7 @@
                     "value": "[parameters('addressPlan').managementSubnetPrefix]"
                   },
                   "approvedPrivateEndpointSourceCidrs": {
-                    "value": "[concat(createArray(parameters('addressPlan').appServiceIntegrationSubnetPrefix, parameters('addressPlan').managementSubnetPrefix), parameters('additionalPrivateEndpointSourceCidrs'))]"
+                    "value": "[concat(createArray(parameters('addressPlan').appServiceIntegrationSubnetPrefix, parameters('addressPlan').managementSubnetPrefix, parameters('addressPlan').vpnClientAddressPool), parameters('additionalPrivateEndpointSourceCidrs'))]"
                   },
                   "privateEndpointSubnetName": {
                     "value": "[variables('privateEndpointSubnetName')]"
@@ -4953,7 +6180,7 @@
                     "value": "[variables('isProd')]"
                   },
                   "managementSourceCidrs": {
-                    "value": "[parameters('managementSourceCidrs')]"
+                    "value": "[variables('adminSourceCidrs')]"
                   }
                 },
                 "template": {
@@ -4964,7 +6191,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "1020656757393870286"
+                      "templateHash": "10208180429047590210"
                     }
                   },
                   "parameters": {
@@ -5072,7 +6299,23 @@
                     "privateEndpointNsgName": "[format('{0}-{1}-nsg', parameters('vnetName'), parameters('privateEndpointSubnetName'))]",
                     "appServiceIntegrationNsgName": "[format('{0}-{1}-nsg', parameters('vnetName'), parameters('appServiceIntegrationSubnetName'))]",
                     "virtualMachineNsgName": "[format('{0}-{1}-nsg', parameters('vnetName'), parameters('virtualMachineSubnetName'))]",
-                    "managementInboundRules": "[if(empty(parameters('managementSourceCidrs')), createArray(), createArray(createObject('name', 'allow-management-ssh-rdp', 'properties', createObject('priority', 100, 'access', 'Allow', 'direction', 'Inbound', 'protocol', 'Tcp', 'sourceAddressPrefixes', parameters('managementSourceCidrs'), 'sourcePortRange', '*', 'destinationAddressPrefix', parameters('virtualMachineSubnetAddressPrefix'), 'destinationPortRanges', createArray('22', '3389')))))]"
+                    "managementInboundRules": "[if(empty(parameters('managementSourceCidrs')), createArray(), createArray(createObject('name', 'allow-management-ssh-rdp', 'properties', createObject('priority', 100, 'access', 'Allow', 'direction', 'Inbound', 'protocol', 'Tcp', 'sourceAddressPrefixes', parameters('managementSourceCidrs'), 'sourcePortRange', '*', 'destinationAddressPrefix', parameters('virtualMachineSubnetAddressPrefix'), 'destinationPortRanges', createArray('22', '3389')))))]",
+                    "denyLateralTraversalRule": {
+                      "name": "deny-ssh-rdp-outbound",
+                      "properties": {
+                        "priority": 4000,
+                        "access": "Deny",
+                        "direction": "Outbound",
+                        "protocol": "*",
+                        "sourceAddressPrefix": "*",
+                        "sourcePortRange": "*",
+                        "destinationAddressPrefix": "*",
+                        "destinationPortRanges": [
+                          "22",
+                          "3389"
+                        ]
+                      }
+                    }
                   },
                   "resources": {
                     "privateEndpointNsg": {
@@ -5107,7 +6350,8 @@
                               "destinationAddressPrefix": "*",
                               "destinationPortRange": "*"
                             }
-                          }
+                          },
+                          "[variables('denyLateralTraversalRule')]"
                         ]
                       }
                     },
@@ -5130,7 +6374,8 @@
                               "destinationAddressPrefix": "*",
                               "destinationPortRange": "*"
                             }
-                          }
+                          },
+                          "[variables('denyLateralTraversalRule')]"
                         ]
                       }
                     },
@@ -5159,7 +6404,7 @@
                       "name": "[variables('virtualMachineNsgName')]",
                       "location": "[parameters('location')]",
                       "properties": {
-                        "securityRules": "[concat(variables('managementInboundRules'), createArray(createObject('name', 'deny-unsolicited-inbound', 'properties', createObject('priority', 4096, 'access', 'Deny', 'direction', 'Inbound', 'protocol', '*', 'sourceAddressPrefix', '*', 'sourcePortRange', '*', 'destinationAddressPrefix', '*', 'destinationPortRange', '*'))))]"
+                        "securityRules": "[concat(variables('managementInboundRules'), createArray(createObject('name', 'deny-unsolicited-inbound', 'properties', createObject('priority', 4096, 'access', 'Deny', 'direction', 'Inbound', 'protocol', '*', 'sourceAddressPrefix', '*', 'sourcePortRange', '*', 'destinationAddressPrefix', '*', 'destinationPortRange', '*')), variables('denyLateralTraversalRule')))]"
                       }
                     },
                     "virtualMachineRouteTable": {
@@ -5787,7 +7032,7 @@
                     "value": "[parameters('logAnalyticsWorkspaceId')]"
                   },
                   "managementSourceCidrs": {
-                    "value": "[parameters('managementSourceCidrs')]"
+                    "value": "[variables('adminSourceCidrs')]"
                   }
                 },
                 "template": {
@@ -6086,6 +7331,456 @@
                 "spokeNetwork"
               ]
             },
+            "bastion": {
+              "condition": "[parameters('deployAdminAccess')]",
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "bastion",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "location": {
+                    "value": "[parameters('location')]"
+                  },
+                  "bastionName": {
+                    "value": "[variables('names').bastion]"
+                  },
+                  "publicIpName": {
+                    "value": "[variables('names').bastionPublicIp]"
+                  },
+                  "subnetId": {
+                    "value": "[reference('hubNetwork').outputs.bastionSubnetId.value]"
+                  },
+                  "availabilityZones": {
+                    "value": "[variables('availabilityZones')]"
+                  },
+                  "logAnalyticsWorkspaceId": {
+                    "value": "[parameters('logAnalyticsWorkspaceId')]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.47.16.16243",
+                      "templateHash": "18276085892748367180"
+                    }
+                  },
+                  "parameters": {
+                    "location": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Azure region for Bastion."
+                      }
+                    },
+                    "bastionName": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 80,
+                      "metadata": {
+                        "description": "Bastion host name."
+                      }
+                    },
+                    "publicIpName": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 80,
+                      "metadata": {
+                        "description": "Bastion public IP name."
+                      }
+                    },
+                    "subnetId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "AzureBastionSubnet resource ID."
+                      }
+                    },
+                    "availabilityZones": {
+                      "type": "array",
+                      "defaultValue": [],
+                      "metadata": {
+                        "description": "Availability zones for Bastion and its public IP, for example ['1', '2', '3']. Zones are fixed at creation."
+                      }
+                    },
+                    "logAnalyticsWorkspaceId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Log Analytics workspace resource ID for Bastion audit logs."
+                      }
+                    }
+                  },
+                  "resources": [
+                    {
+                      "type": "Microsoft.Network/publicIPAddresses",
+                      "apiVersion": "2025-01-01",
+                      "name": "[parameters('publicIpName')]",
+                      "location": "[parameters('location')]",
+                      "zones": "[if(empty(parameters('availabilityZones')), null(), parameters('availabilityZones'))]",
+                      "sku": {
+                        "name": "Standard"
+                      },
+                      "properties": {
+                        "publicIPAllocationMethod": "Static"
+                      }
+                    },
+                    {
+                      "type": "Microsoft.Network/bastionHosts",
+                      "apiVersion": "2024-07-01",
+                      "name": "[parameters('bastionName')]",
+                      "location": "[parameters('location')]",
+                      "zones": "[if(empty(parameters('availabilityZones')), null(), parameters('availabilityZones'))]",
+                      "sku": {
+                        "name": "Standard"
+                      },
+                      "properties": {
+                        "enableTunneling": true,
+                        "enableIpConnect": true,
+                        "scaleUnits": 2,
+                        "ipConfigurations": [
+                          {
+                            "name": "bastion-ipconfig",
+                            "properties": {
+                              "subnet": {
+                                "id": "[parameters('subnetId')]"
+                              },
+                              "publicIPAddress": {
+                                "id": "[resourceId('Microsoft.Network/publicIPAddresses', parameters('publicIpName'))]"
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/publicIPAddresses', parameters('publicIpName'))]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.Insights/diagnosticSettings",
+                      "apiVersion": "2021-05-01-preview",
+                      "scope": "[resourceId('Microsoft.Network/bastionHosts', parameters('bastionName'))]",
+                      "name": "bastion-diagnostics",
+                      "properties": {
+                        "workspaceId": "[parameters('logAnalyticsWorkspaceId')]",
+                        "logs": [
+                          {
+                            "categoryGroup": "allLogs",
+                            "enabled": true
+                          }
+                        ],
+                        "metrics": [
+                          {
+                            "category": "AllMetrics",
+                            "enabled": true
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/bastionHosts', parameters('bastionName'))]"
+                      ]
+                    }
+                  ],
+                  "outputs": {
+                    "id": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.Network/bastionHosts', parameters('bastionName'))]"
+                    },
+                    "name": {
+                      "type": "string",
+                      "value": "[parameters('bastionName')]"
+                    }
+                  }
+                }
+              },
+              "dependsOn": [
+                "azureFirewall",
+                "hubNetwork"
+              ]
+            },
+            "vpnGateway": {
+              "condition": "[parameters('deployAdminAccess')]",
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "vpn-gateway",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "location": {
+                    "value": "[parameters('location')]"
+                  },
+                  "gatewayName": {
+                    "value": "[variables('names').vpnGateway]"
+                  },
+                  "publicIpNamePrefix": {
+                    "value": "[variables('names').vpnGatewayPublicIp]"
+                  },
+                  "gatewaySubnetId": {
+                    "value": "[reference('hubNetwork').outputs.gatewaySubnetId.value]"
+                  },
+                  "skuName": "[if(variables('isProd'), createObject('value', 'VpnGw2AZ'), createObject('value', 'VpnGw1AZ'))]",
+                  "availabilityZones": {
+                    "value": "[variables('availabilityZones')]"
+                  },
+                  "vpnClientAddressPool": {
+                    "value": "[parameters('addressPlan').vpnClientAddressPool]"
+                  },
+                  "logAnalyticsWorkspaceId": {
+                    "value": "[parameters('logAnalyticsWorkspaceId')]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.47.16.16243",
+                      "templateHash": "17468747260589965726"
+                    }
+                  },
+                  "parameters": {
+                    "location": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Azure region for the VPN gateway."
+                      }
+                    },
+                    "gatewayName": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 80,
+                      "metadata": {
+                        "description": "VPN gateway name."
+                      }
+                    },
+                    "publicIpNamePrefix": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 78,
+                      "metadata": {
+                        "description": "Name prefix for the two public IPs of the active-active gateway; -1 and -2 are appended."
+                      }
+                    },
+                    "gatewaySubnetId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "GatewaySubnet resource ID."
+                      }
+                    },
+                    "skuName": {
+                      "type": "string",
+                      "defaultValue": "VpnGw2AZ",
+                      "allowedValues": [
+                        "VpnGw1AZ",
+                        "VpnGw2AZ",
+                        "VpnGw3AZ"
+                      ],
+                      "metadata": {
+                        "description": "Zone-redundant VPN gateway SKU."
+                      }
+                    },
+                    "availabilityZones": {
+                      "type": "array",
+                      "defaultValue": [
+                        "1",
+                        "2",
+                        "3"
+                      ],
+                      "metadata": {
+                        "description": "Availability zones for the gateway public IP. AZ gateway SKUs spread across the zones of their public IP."
+                      }
+                    },
+                    "vpnClientAddressPool": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Point-to-site client address pool."
+                      }
+                    },
+                    "tenantId": {
+                      "type": "string",
+                      "defaultValue": "[tenant().tenantId]",
+                      "metadata": {
+                        "description": "Microsoft Entra tenant ID that authenticates VPN users."
+                      }
+                    },
+                    "vpnClientAudience": {
+                      "type": "string",
+                      "defaultValue": "c632b3df-fb67-4d84-bdcf-b95ad541b5c8",
+                      "metadata": {
+                        "description": "Application (audience) ID of the Microsoft-registered Azure VPN Client app."
+                      }
+                    },
+                    "maintenanceWindowStartDateTime": {
+                      "type": "string",
+                      "defaultValue": "2026-10-04 06:00",
+                      "metadata": {
+                        "description": "First customer-controlled gateway maintenance window, in UTC (yyyy-MM-dd HH:mm). It repeats every Sunday; Azure requires at least 5 hours."
+                      }
+                    },
+                    "logAnalyticsWorkspaceId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Log Analytics workspace resource ID for gateway and P2S logs."
+                      }
+                    }
+                  },
+                  "variables": {
+                    "instances": [
+                      1,
+                      2
+                    ]
+                  },
+                  "resources": [
+                    {
+                      "copy": {
+                        "name": "gatewayPublicIps",
+                        "count": "[length(variables('instances'))]"
+                      },
+                      "type": "Microsoft.Network/publicIPAddresses",
+                      "apiVersion": "2025-01-01",
+                      "name": "[format('{0}-{1}', parameters('publicIpNamePrefix'), variables('instances')[copyIndex()])]",
+                      "location": "[parameters('location')]",
+                      "zones": "[parameters('availabilityZones')]",
+                      "sku": {
+                        "name": "Standard"
+                      },
+                      "properties": {
+                        "publicIPAllocationMethod": "Static"
+                      }
+                    },
+                    {
+                      "type": "Microsoft.Network/virtualNetworkGateways",
+                      "apiVersion": "2024-07-01",
+                      "name": "[parameters('gatewayName')]",
+                      "location": "[parameters('location')]",
+                      "properties": {
+                        "copy": [
+                          {
+                            "name": "ipConfigurations",
+                            "count": "[length(variables('instances'))]",
+                            "input": {
+                              "name": "[format('gateway-ipconfig-{0}', variables('instances')[copyIndex('ipConfigurations')])]",
+                              "properties": {
+                                "privateIPAllocationMethod": "Dynamic",
+                                "subnet": {
+                                  "id": "[parameters('gatewaySubnetId')]"
+                                },
+                                "publicIPAddress": {
+                                  "id": "[resourceId('Microsoft.Network/publicIPAddresses', format('{0}-{1}', parameters('publicIpNamePrefix'), variables('instances')[copyIndex('ipConfigurations')]))]"
+                                }
+                              }
+                            }
+                          }
+                        ],
+                        "gatewayType": "Vpn",
+                        "vpnType": "RouteBased",
+                        "vpnGatewayGeneration": "Generation2",
+                        "sku": {
+                          "name": "[parameters('skuName')]",
+                          "tier": "[parameters('skuName')]"
+                        },
+                        "activeActive": true,
+                        "enableBgp": false,
+                        "vpnClientConfiguration": {
+                          "vpnClientAddressPool": {
+                            "addressPrefixes": [
+                              "[parameters('vpnClientAddressPool')]"
+                            ]
+                          },
+                          "vpnClientProtocols": [
+                            "OpenVPN"
+                          ],
+                          "vpnAuthenticationTypes": [
+                            "AAD"
+                          ],
+                          "aadTenant": "[format('{0}{1}/', environment().authentication.loginEndpoint, parameters('tenantId'))]",
+                          "aadAudience": "[parameters('vpnClientAudience')]",
+                          "aadIssuer": "[format('https://sts.windows.net/{0}/', parameters('tenantId'))]"
+                        }
+                      },
+                      "dependsOn": [
+                        "gatewayPublicIps"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.Insights/diagnosticSettings",
+                      "apiVersion": "2021-05-01-preview",
+                      "scope": "[resourceId('Microsoft.Network/virtualNetworkGateways', parameters('gatewayName'))]",
+                      "name": "vpn-gateway-diagnostics",
+                      "properties": {
+                        "workspaceId": "[parameters('logAnalyticsWorkspaceId')]",
+                        "logs": [
+                          {
+                            "categoryGroup": "allLogs",
+                            "enabled": true
+                          }
+                        ],
+                        "metrics": [
+                          {
+                            "category": "AllMetrics",
+                            "enabled": true
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/virtualNetworkGateways', parameters('gatewayName'))]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.Maintenance/maintenanceConfigurations",
+                      "apiVersion": "2023-04-01",
+                      "name": "[format('{0}-maintenance', parameters('gatewayName'))]",
+                      "location": "[parameters('location')]",
+                      "properties": {
+                        "maintenanceScope": "Resource",
+                        "maintenanceWindow": {
+                          "startDateTime": "[parameters('maintenanceWindowStartDateTime')]",
+                          "duration": "05:00",
+                          "timeZone": "UTC",
+                          "recurEvery": "Week Sunday"
+                        }
+                      }
+                    },
+                    {
+                      "type": "Microsoft.Maintenance/configurationAssignments",
+                      "apiVersion": "2023-04-01",
+                      "scope": "[resourceId('Microsoft.Network/virtualNetworkGateways', parameters('gatewayName'))]",
+                      "name": "[format('{0}-maintenance', parameters('gatewayName'))]",
+                      "location": "[parameters('location')]",
+                      "properties": {
+                        "maintenanceConfigurationId": "[resourceId('Microsoft.Maintenance/maintenanceConfigurations', format('{0}-maintenance', parameters('gatewayName')))]",
+                        "resourceId": "[resourceId('Microsoft.Network/virtualNetworkGateways', parameters('gatewayName'))]"
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Maintenance/maintenanceConfigurations', format('{0}-maintenance', parameters('gatewayName')))]",
+                        "[resourceId('Microsoft.Network/virtualNetworkGateways', parameters('gatewayName'))]"
+                      ]
+                    }
+                  ],
+                  "outputs": {
+                    "id": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.Network/virtualNetworkGateways', parameters('gatewayName'))]"
+                    },
+                    "name": {
+                      "type": "string",
+                      "value": "[parameters('gatewayName')]"
+                    }
+                  }
+                }
+              },
+              "dependsOn": [
+                "azureFirewall",
+                "hubNetwork"
+              ]
+            },
             "networkIntegration": {
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -6122,6 +7817,9 @@
                   },
                   "appServiceName": {
                     "value": "[variables('names').appService]"
+                  },
+                  "useHubGateway": {
+                    "value": "[parameters('deployAdminAccess')]"
                   }
                 },
                 "template": {
@@ -6131,7 +7829,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "13063555936045870584"
+                      "templateHash": "8156763654850952950"
                     }
                   },
                   "parameters": {
@@ -6205,6 +7903,13 @@
                       "metadata": {
                         "description": "Allow forwarded traffic across the hub/spoke peering for firewall service chaining."
                       }
+                    },
+                    "useHubGateway": {
+                      "type": "bool",
+                      "defaultValue": false,
+                      "metadata": {
+                        "description": "Share the hub VPN gateway with the spoke (gateway transit). Only set when the gateway exists; the spoke peering fails otherwise."
+                      }
                     }
                   },
                   "resources": [
@@ -6215,7 +7920,7 @@
                       "properties": {
                         "allowVirtualNetworkAccess": true,
                         "allowForwardedTraffic": "[parameters('allowForwardedTraffic')]",
-                        "allowGatewayTransit": false,
+                        "allowGatewayTransit": "[parameters('useHubGateway')]",
                         "useRemoteGateways": false,
                         "remoteVirtualNetwork": {
                           "id": "[parameters('spokeVnetId')]"
@@ -6230,7 +7935,7 @@
                         "allowVirtualNetworkAccess": true,
                         "allowForwardedTraffic": "[parameters('allowForwardedTraffic')]",
                         "allowGatewayTransit": false,
-                        "useRemoteGateways": false,
+                        "useRemoteGateways": "[parameters('useHubGateway')]",
                         "remoteVirtualNetwork": {
                           "id": "[parameters('hubVnetId')]"
                         }
@@ -6254,7 +7959,8 @@
                 "appService",
                 "hubNetwork",
                 "spokeNetwork",
-                "storage"
+                "storage",
+                "vpnGateway"
               ]
             },
             "privateConnectivity": {
@@ -6565,6 +8271,18 @@
             "firewallPrivateIp": {
               "type": "string",
               "value": "[reference('azureFirewall').outputs.privateIp.value]"
+            },
+            "expectedFirewallPrivateIp": {
+              "type": "string",
+              "value": "[variables('firewallPrivateIp')]"
+            },
+            "bastionName": {
+              "type": "string",
+              "value": "[if(parameters('deployAdminAccess'), variables('names').bastion, '')]"
+            },
+            "vpnGatewayName": {
+              "type": "string",
+              "value": "[if(parameters('deployAdminAccess'), variables('names').vpnGateway, '')]"
             },
             "appServiceName": {
               "type": "string",
@@ -6704,6 +8422,22 @@
     "secondaryAppServiceHostName": {
       "type": "string",
       "value": "[if(parameters('deploySecondaryRegion'), reference('secondaryStamp').outputs.appServiceHostName.value, '')]"
+    },
+    "primaryResourceGroupName": {
+      "type": "string",
+      "value": "[variables('primaryResourceGroupName')]"
+    },
+    "primaryBastionName": {
+      "type": "string",
+      "value": "[reference('primaryStamp').outputs.bastionName.value]"
+    },
+    "primaryVpnGatewayName": {
+      "type": "string",
+      "value": "[reference('primaryStamp').outputs.vpnGatewayName.value]"
+    },
+    "primaryFirewallPrivateIp": {
+      "type": "string",
+      "value": "[reference('primaryStamp').outputs.firewallPrivateIp.value]"
     }
   }
 }

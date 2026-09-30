@@ -38,8 +38,15 @@ param allowedOutboundFqdns array = []
 @description('Extra CIDR ranges allowed to reach private endpoints over HTTPS in every region.')
 param additionalPrivateEndpointSourceCidrs array = []
 
-@description('CIDR ranges allowed to administer management VMs over SSH/RDP. Empty denies all administrative inbound traffic.')
+@description('Extra CIDR ranges allowed to administer management VMs over SSH/RDP, beyond the AzureBastionSubnet and VPN client pool of each region.')
 param managementSourceCidrs array = []
+
+@description('Deploy Azure Bastion and the point-to-site VPN gateway in the primary region.')
+param deployPrimaryAdminAccess bool = true
+
+@description('Deploy Azure Bastion and the point-to-site VPN gateway in the secondary region. Off in steady state; turned on during failover.')
+param deploySecondaryAdminAccess bool = false
+
 
 @description('Relative path probed by App Service health check in every region.')
 param healthCheckPath string = '/'
@@ -115,6 +122,7 @@ module primaryStamp 'modules/regionStamp.bicep' = {
     virtualMachineAdminUsername: virtualMachineAdminUsername
     virtualMachineAdminSshPublicKey: virtualMachineAdminSshPublicKey
     virtualMachineAdminPassword: virtualMachineAdminPassword
+    deployAdminAccess: deployPrimaryAdminAccess
   }
 }
 
@@ -133,6 +141,7 @@ module secondaryStamp 'modules/regionStamp.bicep' = if (deploySecondaryRegion) {
     additionalPrivateEndpointSourceCidrs: additionalPrivateEndpointSourceCidrs
     managementSourceCidrs: managementSourceCidrs
     healthCheckPath: healthCheckPath
+    deployAdminAccess: deploySecondaryAdminAccess
   }
 }
 
@@ -171,3 +180,7 @@ module privateDnsLinks 'modules/privateDnsZoneLinks.bicep' = [for zone in items(
 
 output primaryAppServiceHostName string = primaryStamp.outputs.appServiceHostName
 output secondaryAppServiceHostName string = deploySecondaryRegion ? secondaryStamp!.outputs.appServiceHostName : ''
+output primaryResourceGroupName string = primaryResourceGroupName
+output primaryBastionName string = primaryStamp.outputs.bastionName
+output primaryVpnGatewayName string = primaryStamp.outputs.vpnGatewayName
+output primaryFirewallPrivateIp string = primaryStamp.outputs.firewallPrivateIp

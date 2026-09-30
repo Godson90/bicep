@@ -49,3 +49,17 @@ Describe 'Management subnet naming (Phase 1)' {
         $template.parameters.virtualMachineSubnetName.defaultValue | Should -Be 'management'
     }
 }
+
+Describe 'Lateral traversal (PSRule Azure.NSG.LateralTraversal, Phase 3)' {
+    It 'denies outbound SSH and RDP from every spoke subnet' {
+        $template.variables.denyLateralTraversalRule.properties.access | Should -Be 'Deny'
+        $template.variables.denyLateralTraversalRule.properties.direction | Should -Be 'Outbound'
+        @($template.variables.denyLateralTraversalRule.properties.destinationPortRanges) -join ',' | Should -Be '22,3389'
+        $nsgs = Get-TemplateResource -Template $template -Type 'Microsoft.Network/networkSecurityGroups'
+        $nsgs.Count | Should -Be 3
+        foreach ($nsg in $nsgs) {
+            # Plain NSGs list the variable as an array element; the management NSG compiles to one concat() expression.
+            (@($nsg.properties.securityRules) -join ' ').Contains("variables('denyLateralTraversalRule')") | Should -BeTrue
+        }
+    }
+}
