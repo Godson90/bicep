@@ -356,6 +356,8 @@ gh variable list --env dev-plan --repo Godson90/bicep
   1. Add the role's GUID to `-DelegatableRoleDefinitionIds`.
   2. Delete the existing RBAC Administrator assignment on **each** resource group the environment uses.
   3. Re-run the script. It refuses a mismatched condition on purpose.
+
+  Accepted limitation: the ABAC condition restricts *which role IDs* the pipeline identity can assign, not *which principal* it assigns them to or *at which resource* inside its resource groups. This is accepted because the identity is already `Contributor` on those resource groups (spec §3 "a condition that restricts which roles it can assign").
 - **Quarterly review:** re-run Step 3, including the role-definition drift check. The role list must be unchanged at all three scopes, the credential list must be empty, and the custom role's actions must still be exactly the 9 listed in §1.
 
 ## 9. Troubleshooting

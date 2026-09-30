@@ -103,6 +103,7 @@ resource vpnGateway 'Microsoft.Network/virtualNetworkGateways@2024-07-01' = {
       ]
       aadTenant: '${environment().authentication.loginEndpoint}${tenantId}/'
       aadAudience: vpnClientAudience
+      // https://sts.windows.net/ is the public-cloud Entra issuer; sovereign clouds (e.g. Azure Government, Azure China) need their own issuer.
       aadIssuer: 'https://sts.windows.net/${tenantId}/'
     }
   }

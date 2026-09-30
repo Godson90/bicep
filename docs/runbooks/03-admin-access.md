@@ -45,9 +45,10 @@ This runbook gives administrators a private path into each region stamp, plus a 
 - **Azure roles:**
   - The pipeline identity must be allowed to assign `Virtual Machine Administrator Login` (`1c0163c0-47e6-4577-8991-ea5c82e286e4`). `scripts/New-GitHubDeploymentIdentity.ps1` now delegates it by default, alongside `Storage Blob Data Contributor`. §4 step 3 re-applies the constrained RBAC Administrator assignment.
   - The operator running the validation steps needs `Reader` on the region resource group, plus membership of the admin group.
+  - §5.3 step 4 and §5.4 (reading or setting Key Vault secrets over the VPN) also need Key Vault **data-plane** RBAC — `Key Vault Secrets Officer` (or `Key Vault Secrets User` for read-only) on the region's Key Vault, granted PIM-eligible to the admin group (§5.5). Network access alone returns `403 Forbidden`.
 - **Microsoft Entra roles (tenant, one-time):**
   - `Groups Administrator` (or group owner) to create the admin group.
-  - `Cloud Application Administrator` to require assignment on the Azure VPN Client enterprise application and assign the group.
+  - `Cloud Application Administrator` to require assignment on the Azure VPN Client enterprise application and assign the group. Assigning a group to an enterprise application requires **Microsoft Entra ID P1** on the tenant (or the assigned users).
   - `Privileged Role Administrator` to make the group PIM-eligible (§5.5; needs Microsoft Entra ID P2).
 - **Provider registrations** (`Microsoft.Maintenance` is new in Phase 3):
 
@@ -95,6 +96,15 @@ Every dev example below uses `rg-defenstack-dev-wus3`, `bas-defenstack-dev-wus3`
    Check: a GUID is printed. Record it as the environment's `adminGroupObjectId`. Add the administrators, or make them PIM-eligible (§5.5) instead of permanent members.
 
 2. **Restrict the Azure VPN Client application to the admin group.** The gateway trusts the Microsoft-registered Azure VPN Client app (`c632b3df-fb67-4d84-bdcf-b95ad541b5c8`). Unless you require assignment, **any** user in the tenant can connect.
+
+   **Tenant-wide warning:** there is only **one** Azure VPN Client service principal per tenant, so setting `appRoleAssignmentRequired=true` applies to **every** P2S gateway in the tenant that uses audience `c632b3df-fb67-4d84-bdcf-b95ad541b5c8`, not just this project's. Before running the command below, confirm no other gateway shares that service principal:
+
+   ```powershell
+   az extension add --name resource-graph
+   az graph query -q "resources | where type =~ 'microsoft.network/virtualnetworkgateways' | where properties.vpnClientConfiguration.aadAudience =~ 'c632b3df-fb67-4d84-bdcf-b95ad541b5c8' | project name, resourceGroup, subscriptionId" -o table
+   ```
+
+   Expected: only this project's gateways are listed. If any other gateway appears, **stop** and agree with the tenant owner that every listed gateway's users are already assigned (or are members of an assigned group) before setting the flag — otherwise you lock other teams' admins out. A per-environment custom-audience app registration is the alternative that restricts assignment per gateway; it is deferred to a future ADR.
 
    ```powershell
    $appId = 'c632b3df-fb67-4d84-bdcf-b95ad541b5c8'
@@ -150,6 +160,7 @@ Every dev example below uses `rg-defenstack-dev-wus3`, `bas-defenstack-dev-wus3`
      - The three spoke NSGs (new `deny-ssh-rdp-outbound`; `management` sources now `10.21.0.64/26`, `172.16.210.0/24`; `private-endpoints` sources now include `172.16.210.0/24`).
      - `platform-egress` (new `entra-login` collection).
    - **No Delete** anywhere, and no change to the firewall, App Service, Key Vault or Storage.
+   - If the jump host already exists from before Phase 3, the what-if shows a zone change on the VM: it cannot be applied in place (§9).
 
    Stop if the what-if shows the firewall or the spoke VNet being **recreated**.
 
@@ -298,7 +309,7 @@ What cannot be rolled back automatically: the hub subnets, hub DNS, NSG rules an
 
 **Turn admin access off** (for example, to stop gateway and Bastion charges in dev):
 
-1. Set `param deployPrimaryAdminAccess = false` (or `deploySecondaryAdminAccess = false`) in the environment's param file, and redeploy (§4 steps 5–6). This switches the peerings back to `useRemoteGateways: false`. **Do this first:** Azure refuses to delete a gateway that a peering still uses.
+1. Set `param deployPrimaryAdminAccess = false` (or `deploySecondaryAdminAccess = false`) in the environment's param file, and redeploy (§4 steps 5–6). This switches the peerings back to `useRemoteGateways: false`. **Do this first:** Azure refuses to delete a gateway that a peering still uses. The hub and spoke peering updates can race when turning admin access off; if the deployment fails with a gateway-transit / `UseRemoteGateways` error, re-run the same deployment once (the second run sees the spoke already updated).
 2. Delete the resources the template no longer manages:
 
    ```powershell
@@ -355,3 +366,5 @@ The VM's zone cannot be changed without recreating the VM.
 | A private endpoint is unreachable over the VPN, but DNS is correct | The `private-endpoints` NSG does not list the VPN pool, or the client has stale routes | Check the NSG `allow-approved-https` sources include the pool; disconnect and reconnect the VPN client |
 | Update Manager run `Failed` with `ReadyForPatching` or `NotReady` | The VM was off or the agent was unhealthy during the window | Start the VM before the window, or trigger **One-time update** in Update Manager; check `AzureMonitorLinuxAgent` health |
 | `az rest ... appRoleAssignedTo`: `Permission being assigned already exists on the object` | The group is already assigned | Nothing to do |
+| Deployment error mentioning `allowGatewayTransit` / `UseRemoteGateways` while turning admin access off | The hub and spoke peering updates raced (§7) | Re-run the same deployment once; the second run sees the spoke already updated |
+| Deployment error that `zones` cannot be changed / `PropertyChangeNotAllowed` on the VM | An existing jump host was created before Phase 3; the availability zone is fixed at creation | Delete and recreate the VM (the OS disk has `deleteOption: Delete`; nothing is stored on it by design), then redeploy |
