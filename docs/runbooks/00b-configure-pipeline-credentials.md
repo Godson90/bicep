@@ -87,7 +87,7 @@ this stands.
 | `AZURE_CLIENT_ID` | App registration **Application (client) ID** | GitHub environment variable | No (identifier) |
 | `AZURE_TENANT_ID` | Directory (tenant) ID | GitHub environment variable | No (identifier) |
 | `AZURE_SUBSCRIPTION_ID` | Subscription containing `rg-defenstack-dev-global` and `rg-defenstack-dev-wus3` | GitHub environment variable | No (identifier) |
-| Delegatable role | `Storage Blob Data Contributor` (`ba92f5b4-2d11-453d-a403-e96b0029c9fe`) | RBAC Administrator condition | No |
+| Delegatable roles | `Storage Blob Data Contributor` (`ba92f5b4-2d11-453d-a403-e96b0029c9fe`); `Virtual Machine Administrator Login` (`1c0163c0-47e6-4577-8991-ea5c82e286e4`, Phase 3: admin group on the jump host) | RBAC Administrator condition | No |
 
 The workflows read these values with `vars.*`, so they **must be created as variables, not secrets**. A secret with the same name is ignored.
 
@@ -352,7 +352,7 @@ gh variable list --env dev-plan --repo Godson90/bicep
 
 - **Rotation:** nothing to rotate. There are no stored secrets, and each run gets a fresh token that lasts about an hour.
 - **Renaming the repo, organisation or environment** changes the token subject. Update the federated credential subject in the same change, otherwise login fails with `AADSTS70021`.
-- **Assigning an extra role from Bicep** (for example Key Vault Secrets User in a later phase):
+- **Assigning an extra role from Bicep** (for example Key Vault Secrets User in a later phase). Phase 3 did this for `Virtual Machine Administrator Login`, which is now in the script's default list, so an identity created before Phase 3 needs only steps 2–3 (runbook 03 §4 step 3):
   1. Add the role's GUID to `-DelegatableRoleDefinitionIds`.
   2. Delete the existing RBAC Administrator assignment on **each** resource group the environment uses.
   3. Re-run the script. It refuses a mismatched condition on purpose.

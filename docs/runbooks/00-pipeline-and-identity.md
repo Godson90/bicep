@@ -21,7 +21,7 @@
 | `-GitHubRepository` | none | `Godson90/bicep` | Federated credential subject |
 | `-EnvironmentName` | none | `dev` and `prod` | One identity per environment limits blast radius |
 | `-ResourceGroupNames` | none | `rg-defenstack-prod-global`, `rg-defenstack-prod-wus3`, `rg-defenstack-prod-eus` | Resource groups the identity may deploy resources into; the identity separately gets the custom `DefenStack Subscription Deployment Operator` role at subscription scope so it can run subscription-scope deployments (see ADR-009) |
-| `-DelegatableRoleDefinitionIds` | Storage Blob Data Contributor | extended per phase | Roles the pipeline may assign; `Owner`, `User Access Administrator`, `Role Based Access Control Administrator` and `Contributor` are always refused, and all other roles are blocked by the ABAC condition |
+| `-DelegatableRoleDefinitionIds` | Storage Blob Data Contributor, Virtual Machine Administrator Login (Phase 3) | extended per phase | Roles the pipeline may assign; `Owner`, `User Access Administrator`, `Role Based Access Control Administrator` and `Contributor` are always refused, and all other roles are blocked by the ABAC condition |
 | `-GrantLockManagement` | off | on for prod | Needed only where `CanNotDelete` locks are deployed |
 
 ## 4. Step-by-step setup
