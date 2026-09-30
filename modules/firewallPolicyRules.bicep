@@ -16,6 +16,8 @@ param vpnClientAddressPrefixes array
 @description('Approved outbound FQDNs for application traffic. An empty list deploys no application allowlist.')
 param allowedOutboundFqdns array = []
 
+// Entra ID sign-in host for this cloud, for example login.microsoftonline.com.
+var entraLoginHost = split(environment().authentication.loginEndpoint, '/')[2]
 
 resource firewallPolicy 'Microsoft.Network/firewallPolicies@2025-01-01' existing = {
   name: firewallPolicyName
@@ -182,6 +184,35 @@ resource platformEgress 'Microsoft.Network/firewallPolicies/ruleCollectionGroups
               'security.ubuntu.com'
               'azure.archive.ubuntu.com'
               '*.azure.archive.ubuntu.com'
+            ]
+          }
+        ]
+      }
+      {
+        // Endpoints the AADSSHLoginForLinux / AADLoginForWindows extensions call to sign admins in with Entra ID.
+        name: 'entra-login'
+        priority: 160
+        ruleCollectionType: 'FirewallPolicyFilterRuleCollection'
+        action: {
+          type: 'Allow'
+        }
+        rules: [
+          {
+            ruleType: 'ApplicationRule'
+            name: 'entra-sign-in'
+            sourceAddresses: managementAddressPrefixes
+            protocols: [
+              {
+                protocolType: 'Https'
+                port: 443
+              }
+            ]
+            targetFqdns: [
+              entraLoginHost
+              'device.${entraLoginHost}'
+              'enterpriseregistration.windows.net'
+              'pas.windows.net'
+              'packages.microsoft.com'
             ]
           }
         ]

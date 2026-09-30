@@ -34,7 +34,10 @@ param(
             if ($privileged -contains $_.ToLowerInvariant()) { throw "Role definition $_ is privileged and cannot be delegated to the pipeline." }
             $true
         })]
-    [string[]]$DelegatableRoleDefinitionIds = @('ba92f5b4-2d11-453d-a403-e96b0029c9fe'),
+    [string[]]$DelegatableRoleDefinitionIds = @(
+        'ba92f5b4-2d11-453d-a403-e96b0029c9fe', # Storage Blob Data Contributor (app identity, container scope)
+        '1c0163c0-47e6-4577-8991-ea5c82e286e4'  # Virtual Machine Administrator Login (admin group, jump host; Phase 3)
+    ),
 
     [Parameter()]
     [switch]$GrantLockManagement,

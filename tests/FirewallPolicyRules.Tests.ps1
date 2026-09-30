@@ -61,6 +61,29 @@ Describe 'Admin sessions from VPN clients (Phase 3)' {
     }
 }
 
+Describe 'Entra ID sign-in egress for the jump host (Phase 3)' {
+    BeforeAll {
+        $collection = $platform.properties.ruleCollections | Where-Object { $_.name -eq 'entra-login' }
+        $rule = $collection.rules[0]
+    }
+
+    It 'allows the Entra login endpoints from the management subnet only, over HTTPS' {
+        $rule.sourceAddresses | Should -Be "[parameters('managementAddressPrefixes')]"
+        @($rule.protocols.protocolType) -join ',' | Should -Be 'Https'
+    }
+
+    It 'derives the login host from the cloud environment instead of hardcoding it' {
+        $template.variables.entraLoginHost | Should -Be "[split(environment().authentication.loginEndpoint, '/')[2]]"
+        @($rule.targetFqdns) | Should -Contain "[variables('entraLoginHost')]"
+        @($rule.targetFqdns) | Should -Contain "[format('device.{0}', variables('entraLoginHost'))]"
+    }
+
+    It 'allows the device registration, pas.windows.net and extension package endpoints' {
+        foreach ($fqdn in 'pas.windows.net', 'packages.microsoft.com', 'enterpriseregistration.windows.net') {
+            @($rule.targetFqdns) | Should -Contain $fqdn
+        }
+    }
+}
 
 Describe 'OS update egress for management VMs only' {
     BeforeAll {

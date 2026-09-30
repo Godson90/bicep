@@ -88,6 +88,11 @@ Describe 'Admin access (Phase 3)' {
         $secondary.properties.parameters.deployAdminAccess.value | Should -Be "[parameters('deploySecondaryAdminAccess')]"
     }
 
+    It 'passes the admin group to the primary stamp only (the jump host is primary-only)' {
+        $main.parameters.adminGroupObjectId.defaultValue | Should -Be ''
+        $primary.properties.parameters.adminGroupObjectId.value | Should -Be "[parameters('adminGroupObjectId')]"
+        $secondary.properties.parameters.PSObject.Properties.Name | Should -Not -Contain 'adminGroupObjectId'
+    }
 
     It 'outputs what runbook 03 needs to connect' {
         foreach ($output in 'primaryResourceGroupName', 'primaryBastionName', 'primaryVpnGatewayName', 'primaryFirewallPrivateIp') {

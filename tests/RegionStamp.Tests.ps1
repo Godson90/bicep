@@ -170,6 +170,9 @@ Describe 'Region stamp admin access (Phase 3)' {
         @((Get-ModuleDeployment -Template $stamp -Name 'network-integration').dependsOn) | Should -Contain 'vpnGateway'
     }
 
+    It 'passes the admin group to the management VM' {
+        (Get-StampModuleParameters 'virtual-machine').adminGroupObjectId.value | Should -Be "[parameters('adminGroupObjectId')]"
+    }
 
     It 'outputs the Bastion and gateway names (empty without admin access) and the expected firewall IP' {
         $stamp.outputs.bastionName.value | Should -Be "[if(parameters('deployAdminAccess'), variables('names').bastion, '')]"

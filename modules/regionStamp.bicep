@@ -68,6 +68,8 @@ param virtualMachineAdminPassword string = ''
 @description('Deploy Azure Bastion and the point-to-site VPN gateway in this region. The warm standby leaves it off until failover.')
 param deployAdminAccess bool = false
 
+@description('Object ID of the Entra ID admin security group granted Virtual Machine Administrator Login on the management VM. Empty skips the assignment.')
+param adminGroupObjectId string = ''
 
 var isProd = environmentName == 'prod'
 var isPrimary = regionRole == 'primary'
@@ -219,6 +221,7 @@ module virtualMachine 'virtualMachine.bicep' = if (enableVirtualMachine && isPri
     adminPassword: virtualMachineAdminPassword
     logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
     managementSourceCidrs: adminSourceCidrs
+    adminGroupObjectId: adminGroupObjectId
   }
 }
 

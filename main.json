@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "8028684706263984095"
+      "templateHash": "4836583485239819699"
     }
   },
   "definitions": {
@@ -197,6 +197,13 @@
       "defaultValue": false,
       "metadata": {
         "description": "Deploy Azure Bastion and the point-to-site VPN gateway in the secondary region. Off in steady state; turned on during failover."
+      }
+    },
+    "adminGroupObjectId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Object ID of the Entra ID admin security group granted Virtual Machine Administrator Login on the management VM. Empty skips the assignment."
       }
     },
     "healthCheckPath": {
@@ -622,6 +629,9 @@
           },
           "deployAdminAccess": {
             "value": "[parameters('deployPrimaryAdminAccess')]"
+          },
+          "adminGroupObjectId": {
+            "value": "[parameters('adminGroupObjectId')]"
           }
         },
         "template": {
@@ -632,7 +642,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "7282777787573290969"
+              "templateHash": "43681948909033021"
             }
           },
           "definitions": {
@@ -864,6 +874,13 @@
               "defaultValue": false,
               "metadata": {
                 "description": "Deploy Azure Bastion and the point-to-site VPN gateway in this region. The warm standby leaves it off until failover."
+              }
+            },
+            "adminGroupObjectId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Object ID of the Entra ID admin security group granted Virtual Machine Administrator Login on the management VM. Empty skips the assignment."
               }
             }
           },
@@ -1711,7 +1728,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "8194811478929470243"
+                      "templateHash": "10458303694276730508"
                     }
                   },
                   "parameters": {
@@ -2004,7 +2021,7 @@
                             "_generator": {
                               "name": "bicep",
                               "version": "0.47.16.16243",
-                              "templateHash": "2613963203774291437"
+                              "templateHash": "2762860099593226356"
                             }
                           },
                           "parameters": {
@@ -2039,6 +2056,9 @@
                                 "description": "Approved outbound FQDNs for application traffic. An empty list deploys no application allowlist."
                               }
                             }
+                          },
+                          "variables": {
+                            "entraLoginHost": "[split(environment().authentication.loginEndpoint, '/')[2]]"
                           },
                           "resources": [
                             {
@@ -2189,6 +2209,34 @@
                                           "security.ubuntu.com",
                                           "azure.archive.ubuntu.com",
                                           "*.azure.archive.ubuntu.com"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "name": "entra-login",
+                                    "priority": 160,
+                                    "ruleCollectionType": "FirewallPolicyFilterRuleCollection",
+                                    "action": {
+                                      "type": "Allow"
+                                    },
+                                    "rules": [
+                                      {
+                                        "ruleType": "ApplicationRule",
+                                        "name": "entra-sign-in",
+                                        "sourceAddresses": "[parameters('managementAddressPrefixes')]",
+                                        "protocols": [
+                                          {
+                                            "protocolType": "Https",
+                                            "port": 443
+                                          }
+                                        ],
+                                        "targetFqdns": [
+                                          "[variables('entraLoginHost')]",
+                                          "[format('device.{0}', variables('entraLoginHost'))]",
+                                          "enterpriseregistration.windows.net",
+                                          "pas.windows.net",
+                                          "packages.microsoft.com"
                                         ]
                                       }
                                     ]
@@ -3167,6 +3215,9 @@
                   },
                   "managementSourceCidrs": {
                     "value": "[variables('adminSourceCidrs')]"
+                  },
+                  "adminGroupObjectId": {
+                    "value": "[parameters('adminGroupObjectId')]"
                   }
                 },
                 "template": {
@@ -3176,7 +3227,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "16832090019238527098"
+                      "templateHash": "3538835887109745648"
                     }
                   },
                   "parameters": {
@@ -3252,6 +3303,32 @@
                       "metadata": {
                         "description": "CIDR ranges allowed to reach the VM over SSH (22) and RDP (3389). Must match the management subnet NSG; an empty list denies all administrative inbound traffic."
                       }
+                    },
+                    "availabilityZone": {
+                      "type": "string",
+                      "defaultValue": "1",
+                      "allowedValues": [
+                        "1",
+                        "2",
+                        "3"
+                      ],
+                      "metadata": {
+                        "description": "Availability zone the VM is pinned to. Fixed at creation."
+                      }
+                    },
+                    "adminGroupObjectId": {
+                      "type": "string",
+                      "defaultValue": "",
+                      "metadata": {
+                        "description": "Object ID of the Entra ID admin security group granted Virtual Machine Administrator Login. Empty skips the assignment."
+                      }
+                    },
+                    "patchWindowStartDateTime": {
+                      "type": "string",
+                      "defaultValue": "2026-10-04 02:00",
+                      "metadata": {
+                        "description": "First Update Manager patch window, in UTC (yyyy-MM-dd HH:mm). The window then repeats every Sunday at the same time."
+                      }
                     }
                   },
                   "variables": {
@@ -3264,6 +3341,15 @@
                     "networkInterfaceName": "[format('{0}-nic', parameters('vmName'))]",
                     "networkSecurityGroupName": "[format('{0}-nsg', parameters('vmName'))]",
                     "managementInboundRules": "[if(empty(parameters('managementSourceCidrs')), createArray(), createArray(createObject('name', 'allow-management-ssh-rdp', 'properties', createObject('priority', 100, 'access', 'Allow', 'direction', 'Inbound', 'protocol', 'Tcp', 'sourceAddressPrefixes', parameters('managementSourceCidrs'), 'sourcePortRange', '*', 'destinationAddressPrefix', '*', 'destinationPortRanges', createArray('22', '3389')))))]",
+                    "entraLoginExtensionName": "[if(equals(parameters('osType'), 'Linux'), 'AADSSHLoginForLinux', 'AADLoginForWindows')]",
+                    "virtualMachineAdministratorLoginRoleId": "1c0163c0-47e6-4577-8991-ea5c82e286e4",
+                    "patchSettings": {
+                      "patchMode": "AutomaticByPlatform",
+                      "assessmentMode": "AutomaticByPlatform",
+                      "automaticByPlatformSettings": {
+                        "bypassPlatformSafetyChecksOnUserSchedule": true
+                      }
+                    },
                     "dataCollectionRuleName": "[format('{0}-dcr', parameters('vmName'))]",
                     "azureMonitorAgentName": "[if(equals(parameters('osType'), 'Linux'), 'AzureMonitorLinuxAgent', 'AzureMonitorWindowsAgent')]",
                     "performanceCounterSource": {
@@ -3287,7 +3373,7 @@
                       "name": "[variables('networkSecurityGroupName')]",
                       "location": "[parameters('location')]",
                       "properties": {
-                        "securityRules": "[concat(variables('managementInboundRules'), createArray(createObject('name', 'deny-unsolicited-inbound', 'properties', createObject('priority', 4096, 'access', 'Deny', 'direction', 'Inbound', 'protocol', '*', 'sourceAddressPrefix', '*', 'sourcePortRange', '*', 'destinationAddressPrefix', '*', 'destinationPortRange', '*'))))]"
+                        "securityRules": "[concat(variables('managementInboundRules'), createArray(createObject('name', 'deny-unsolicited-inbound', 'properties', createObject('priority', 4096, 'access', 'Deny', 'direction', 'Inbound', 'protocol', '*', 'sourceAddressPrefix', '*', 'sourcePortRange', '*', 'destinationAddressPrefix', '*', 'destinationPortRange', '*')), createObject('name', 'deny-ssh-rdp-outbound', 'properties', createObject('priority', 4000, 'access', 'Deny', 'direction', 'Outbound', 'protocol', '*', 'sourceAddressPrefix', '*', 'sourcePortRange', '*', 'destinationAddressPrefix', '*', 'destinationPortRanges', createArray('22', '3389')))))]"
                       }
                     },
                     {
@@ -3320,6 +3406,9 @@
                       "apiVersion": "2026-04-01",
                       "name": "[parameters('vmName')]",
                       "location": "[parameters('location')]",
+                      "zones": [
+                        "[parameters('availabilityZone')]"
+                      ],
                       "identity": {
                         "type": "SystemAssigned"
                       },
@@ -3338,7 +3427,7 @@
                             "deleteOption": "Delete"
                           }
                         },
-                        "osProfile": "[if(equals(parameters('osType'), 'Linux'), createObject('computerName', parameters('vmName'), 'adminUsername', parameters('adminUsername'), 'linuxConfiguration', createObject('disablePasswordAuthentication', true(), 'ssh', createObject('publicKeys', createArray(createObject('path', format('/home/{0}/.ssh/authorized_keys', parameters('adminUsername')), 'keyData', parameters('adminSshPublicKey')))))), createObject('computerName', parameters('vmName'), 'adminUsername', parameters('adminUsername'), 'adminPassword', parameters('adminPassword'), 'windowsConfiguration', createObject('enableAutomaticUpdates', true(), 'provisionVMAgent', true())))]",
+                        "osProfile": "[if(equals(parameters('osType'), 'Linux'), createObject('computerName', parameters('vmName'), 'adminUsername', parameters('adminUsername'), 'linuxConfiguration', createObject('disablePasswordAuthentication', true(), 'ssh', createObject('publicKeys', createArray(createObject('path', format('/home/{0}/.ssh/authorized_keys', parameters('adminUsername')), 'keyData', parameters('adminSshPublicKey')))), 'patchSettings', variables('patchSettings'))), createObject('computerName', parameters('vmName'), 'adminUsername', parameters('adminUsername'), 'adminPassword', parameters('adminPassword'), 'windowsConfiguration', createObject('enableAutomaticUpdates', true(), 'provisionVMAgent', true(), 'patchSettings', variables('patchSettings'))))]",
                         "networkProfile": {
                           "networkInterfaces": [
                             {
@@ -3437,6 +3526,85 @@
                       },
                       "dependsOn": [
                         "[resourceId('Microsoft.Insights/dataCollectionRules', variables('dataCollectionRuleName'))]",
+                        "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.Compute/virtualMachines/extensions",
+                      "apiVersion": "2026-04-01",
+                      "name": "[format('{0}/{1}', parameters('vmName'), variables('entraLoginExtensionName'))]",
+                      "location": "[parameters('location')]",
+                      "properties": {
+                        "publisher": "Microsoft.Azure.ActiveDirectory",
+                        "type": "[variables('entraLoginExtensionName')]",
+                        "typeHandlerVersion": "1.0",
+                        "autoUpgradeMinorVersion": true
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Compute/virtualMachines/extensions', parameters('vmName'), variables('azureMonitorAgentName'))]",
+                        "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
+                      ]
+                    },
+                    {
+                      "condition": "[not(empty(parameters('adminGroupObjectId')))]",
+                      "type": "Microsoft.Authorization/roleAssignments",
+                      "apiVersion": "2022-04-01",
+                      "scope": "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]",
+                      "name": "[guid(resourceId('Microsoft.Compute/virtualMachines', parameters('vmName')), parameters('adminGroupObjectId'), variables('virtualMachineAdministratorLoginRoleId'))]",
+                      "properties": {
+                        "principalId": "[parameters('adminGroupObjectId')]",
+                        "principalType": "Group",
+                        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('virtualMachineAdministratorLoginRoleId'))]"
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.Maintenance/maintenanceConfigurations",
+                      "apiVersion": "2023-04-01",
+                      "name": "[format('{0}-patch', parameters('vmName'))]",
+                      "location": "[parameters('location')]",
+                      "properties": {
+                        "maintenanceScope": "InGuestPatch",
+                        "extensionProperties": {
+                          "InGuestPatchMode": "User"
+                        },
+                        "maintenanceWindow": {
+                          "startDateTime": "[parameters('patchWindowStartDateTime')]",
+                          "duration": "03:00",
+                          "timeZone": "UTC",
+                          "recurEvery": "Week Sunday"
+                        },
+                        "installPatches": {
+                          "rebootSetting": "IfRequired",
+                          "linuxParameters": {
+                            "classificationsToInclude": [
+                              "Critical",
+                              "Security"
+                            ]
+                          },
+                          "windowsParameters": {
+                            "classificationsToInclude": [
+                              "Critical",
+                              "Security"
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "type": "Microsoft.Maintenance/configurationAssignments",
+                      "apiVersion": "2023-04-01",
+                      "scope": "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]",
+                      "name": "[format('{0}-patch', parameters('vmName'))]",
+                      "location": "[parameters('location')]",
+                      "properties": {
+                        "maintenanceConfigurationId": "[resourceId('Microsoft.Maintenance/maintenanceConfigurations', format('{0}-patch', parameters('vmName')))]",
+                        "resourceId": "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Maintenance/maintenanceConfigurations', format('{0}-patch', parameters('vmName')))]",
                         "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
                       ]
                     }
@@ -4498,7 +4666,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "7282777787573290969"
+              "templateHash": "43681948909033021"
             }
           },
           "definitions": {
@@ -4730,6 +4898,13 @@
               "defaultValue": false,
               "metadata": {
                 "description": "Deploy Azure Bastion and the point-to-site VPN gateway in this region. The warm standby leaves it off until failover."
+              }
+            },
+            "adminGroupObjectId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Object ID of the Entra ID admin security group granted Virtual Machine Administrator Login on the management VM. Empty skips the assignment."
               }
             }
           },
@@ -5577,7 +5752,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "8194811478929470243"
+                      "templateHash": "10458303694276730508"
                     }
                   },
                   "parameters": {
@@ -5870,7 +6045,7 @@
                             "_generator": {
                               "name": "bicep",
                               "version": "0.47.16.16243",
-                              "templateHash": "2613963203774291437"
+                              "templateHash": "2762860099593226356"
                             }
                           },
                           "parameters": {
@@ -5905,6 +6080,9 @@
                                 "description": "Approved outbound FQDNs for application traffic. An empty list deploys no application allowlist."
                               }
                             }
+                          },
+                          "variables": {
+                            "entraLoginHost": "[split(environment().authentication.loginEndpoint, '/')[2]]"
                           },
                           "resources": [
                             {
@@ -6055,6 +6233,34 @@
                                           "security.ubuntu.com",
                                           "azure.archive.ubuntu.com",
                                           "*.azure.archive.ubuntu.com"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "name": "entra-login",
+                                    "priority": 160,
+                                    "ruleCollectionType": "FirewallPolicyFilterRuleCollection",
+                                    "action": {
+                                      "type": "Allow"
+                                    },
+                                    "rules": [
+                                      {
+                                        "ruleType": "ApplicationRule",
+                                        "name": "entra-sign-in",
+                                        "sourceAddresses": "[parameters('managementAddressPrefixes')]",
+                                        "protocols": [
+                                          {
+                                            "protocolType": "Https",
+                                            "port": 443
+                                          }
+                                        ],
+                                        "targetFqdns": [
+                                          "[variables('entraLoginHost')]",
+                                          "[format('device.{0}', variables('entraLoginHost'))]",
+                                          "enterpriseregistration.windows.net",
+                                          "pas.windows.net",
+                                          "packages.microsoft.com"
                                         ]
                                       }
                                     ]
@@ -7033,6 +7239,9 @@
                   },
                   "managementSourceCidrs": {
                     "value": "[variables('adminSourceCidrs')]"
+                  },
+                  "adminGroupObjectId": {
+                    "value": "[parameters('adminGroupObjectId')]"
                   }
                 },
                 "template": {
@@ -7042,7 +7251,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "16832090019238527098"
+                      "templateHash": "3538835887109745648"
                     }
                   },
                   "parameters": {
@@ -7118,6 +7327,32 @@
                       "metadata": {
                         "description": "CIDR ranges allowed to reach the VM over SSH (22) and RDP (3389). Must match the management subnet NSG; an empty list denies all administrative inbound traffic."
                       }
+                    },
+                    "availabilityZone": {
+                      "type": "string",
+                      "defaultValue": "1",
+                      "allowedValues": [
+                        "1",
+                        "2",
+                        "3"
+                      ],
+                      "metadata": {
+                        "description": "Availability zone the VM is pinned to. Fixed at creation."
+                      }
+                    },
+                    "adminGroupObjectId": {
+                      "type": "string",
+                      "defaultValue": "",
+                      "metadata": {
+                        "description": "Object ID of the Entra ID admin security group granted Virtual Machine Administrator Login. Empty skips the assignment."
+                      }
+                    },
+                    "patchWindowStartDateTime": {
+                      "type": "string",
+                      "defaultValue": "2026-10-04 02:00",
+                      "metadata": {
+                        "description": "First Update Manager patch window, in UTC (yyyy-MM-dd HH:mm). The window then repeats every Sunday at the same time."
+                      }
                     }
                   },
                   "variables": {
@@ -7130,6 +7365,15 @@
                     "networkInterfaceName": "[format('{0}-nic', parameters('vmName'))]",
                     "networkSecurityGroupName": "[format('{0}-nsg', parameters('vmName'))]",
                     "managementInboundRules": "[if(empty(parameters('managementSourceCidrs')), createArray(), createArray(createObject('name', 'allow-management-ssh-rdp', 'properties', createObject('priority', 100, 'access', 'Allow', 'direction', 'Inbound', 'protocol', 'Tcp', 'sourceAddressPrefixes', parameters('managementSourceCidrs'), 'sourcePortRange', '*', 'destinationAddressPrefix', '*', 'destinationPortRanges', createArray('22', '3389')))))]",
+                    "entraLoginExtensionName": "[if(equals(parameters('osType'), 'Linux'), 'AADSSHLoginForLinux', 'AADLoginForWindows')]",
+                    "virtualMachineAdministratorLoginRoleId": "1c0163c0-47e6-4577-8991-ea5c82e286e4",
+                    "patchSettings": {
+                      "patchMode": "AutomaticByPlatform",
+                      "assessmentMode": "AutomaticByPlatform",
+                      "automaticByPlatformSettings": {
+                        "bypassPlatformSafetyChecksOnUserSchedule": true
+                      }
+                    },
                     "dataCollectionRuleName": "[format('{0}-dcr', parameters('vmName'))]",
                     "azureMonitorAgentName": "[if(equals(parameters('osType'), 'Linux'), 'AzureMonitorLinuxAgent', 'AzureMonitorWindowsAgent')]",
                     "performanceCounterSource": {
@@ -7153,7 +7397,7 @@
                       "name": "[variables('networkSecurityGroupName')]",
                       "location": "[parameters('location')]",
                       "properties": {
-                        "securityRules": "[concat(variables('managementInboundRules'), createArray(createObject('name', 'deny-unsolicited-inbound', 'properties', createObject('priority', 4096, 'access', 'Deny', 'direction', 'Inbound', 'protocol', '*', 'sourceAddressPrefix', '*', 'sourcePortRange', '*', 'destinationAddressPrefix', '*', 'destinationPortRange', '*'))))]"
+                        "securityRules": "[concat(variables('managementInboundRules'), createArray(createObject('name', 'deny-unsolicited-inbound', 'properties', createObject('priority', 4096, 'access', 'Deny', 'direction', 'Inbound', 'protocol', '*', 'sourceAddressPrefix', '*', 'sourcePortRange', '*', 'destinationAddressPrefix', '*', 'destinationPortRange', '*')), createObject('name', 'deny-ssh-rdp-outbound', 'properties', createObject('priority', 4000, 'access', 'Deny', 'direction', 'Outbound', 'protocol', '*', 'sourceAddressPrefix', '*', 'sourcePortRange', '*', 'destinationAddressPrefix', '*', 'destinationPortRanges', createArray('22', '3389')))))]"
                       }
                     },
                     {
@@ -7186,6 +7430,9 @@
                       "apiVersion": "2026-04-01",
                       "name": "[parameters('vmName')]",
                       "location": "[parameters('location')]",
+                      "zones": [
+                        "[parameters('availabilityZone')]"
+                      ],
                       "identity": {
                         "type": "SystemAssigned"
                       },
@@ -7204,7 +7451,7 @@
                             "deleteOption": "Delete"
                           }
                         },
-                        "osProfile": "[if(equals(parameters('osType'), 'Linux'), createObject('computerName', parameters('vmName'), 'adminUsername', parameters('adminUsername'), 'linuxConfiguration', createObject('disablePasswordAuthentication', true(), 'ssh', createObject('publicKeys', createArray(createObject('path', format('/home/{0}/.ssh/authorized_keys', parameters('adminUsername')), 'keyData', parameters('adminSshPublicKey')))))), createObject('computerName', parameters('vmName'), 'adminUsername', parameters('adminUsername'), 'adminPassword', parameters('adminPassword'), 'windowsConfiguration', createObject('enableAutomaticUpdates', true(), 'provisionVMAgent', true())))]",
+                        "osProfile": "[if(equals(parameters('osType'), 'Linux'), createObject('computerName', parameters('vmName'), 'adminUsername', parameters('adminUsername'), 'linuxConfiguration', createObject('disablePasswordAuthentication', true(), 'ssh', createObject('publicKeys', createArray(createObject('path', format('/home/{0}/.ssh/authorized_keys', parameters('adminUsername')), 'keyData', parameters('adminSshPublicKey')))), 'patchSettings', variables('patchSettings'))), createObject('computerName', parameters('vmName'), 'adminUsername', parameters('adminUsername'), 'adminPassword', parameters('adminPassword'), 'windowsConfiguration', createObject('enableAutomaticUpdates', true(), 'provisionVMAgent', true(), 'patchSettings', variables('patchSettings'))))]",
                         "networkProfile": {
                           "networkInterfaces": [
                             {
@@ -7303,6 +7550,85 @@
                       },
                       "dependsOn": [
                         "[resourceId('Microsoft.Insights/dataCollectionRules', variables('dataCollectionRuleName'))]",
+                        "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.Compute/virtualMachines/extensions",
+                      "apiVersion": "2026-04-01",
+                      "name": "[format('{0}/{1}', parameters('vmName'), variables('entraLoginExtensionName'))]",
+                      "location": "[parameters('location')]",
+                      "properties": {
+                        "publisher": "Microsoft.Azure.ActiveDirectory",
+                        "type": "[variables('entraLoginExtensionName')]",
+                        "typeHandlerVersion": "1.0",
+                        "autoUpgradeMinorVersion": true
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Compute/virtualMachines/extensions', parameters('vmName'), variables('azureMonitorAgentName'))]",
+                        "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
+                      ]
+                    },
+                    {
+                      "condition": "[not(empty(parameters('adminGroupObjectId')))]",
+                      "type": "Microsoft.Authorization/roleAssignments",
+                      "apiVersion": "2022-04-01",
+                      "scope": "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]",
+                      "name": "[guid(resourceId('Microsoft.Compute/virtualMachines', parameters('vmName')), parameters('adminGroupObjectId'), variables('virtualMachineAdministratorLoginRoleId'))]",
+                      "properties": {
+                        "principalId": "[parameters('adminGroupObjectId')]",
+                        "principalType": "Group",
+                        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('virtualMachineAdministratorLoginRoleId'))]"
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.Maintenance/maintenanceConfigurations",
+                      "apiVersion": "2023-04-01",
+                      "name": "[format('{0}-patch', parameters('vmName'))]",
+                      "location": "[parameters('location')]",
+                      "properties": {
+                        "maintenanceScope": "InGuestPatch",
+                        "extensionProperties": {
+                          "InGuestPatchMode": "User"
+                        },
+                        "maintenanceWindow": {
+                          "startDateTime": "[parameters('patchWindowStartDateTime')]",
+                          "duration": "03:00",
+                          "timeZone": "UTC",
+                          "recurEvery": "Week Sunday"
+                        },
+                        "installPatches": {
+                          "rebootSetting": "IfRequired",
+                          "linuxParameters": {
+                            "classificationsToInclude": [
+                              "Critical",
+                              "Security"
+                            ]
+                          },
+                          "windowsParameters": {
+                            "classificationsToInclude": [
+                              "Critical",
+                              "Security"
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "type": "Microsoft.Maintenance/configurationAssignments",
+                      "apiVersion": "2023-04-01",
+                      "scope": "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]",
+                      "name": "[format('{0}-patch', parameters('vmName'))]",
+                      "location": "[parameters('location')]",
+                      "properties": {
+                        "maintenanceConfigurationId": "[resourceId('Microsoft.Maintenance/maintenanceConfigurations', format('{0}-patch', parameters('vmName')))]",
+                        "resourceId": "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Maintenance/maintenanceConfigurations', format('{0}-patch', parameters('vmName')))]",
                         "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
                       ]
                     }

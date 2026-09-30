@@ -47,6 +47,8 @@ param deployPrimaryAdminAccess bool = true
 @description('Deploy Azure Bastion and the point-to-site VPN gateway in the secondary region. Off in steady state; turned on during failover.')
 param deploySecondaryAdminAccess bool = false
 
+@description('Object ID of the Entra ID admin security group granted Virtual Machine Administrator Login on the management VM. Empty skips the assignment.')
+param adminGroupObjectId string = ''
 
 @description('Relative path probed by App Service health check in every region.')
 param healthCheckPath string = '/'
@@ -123,6 +125,7 @@ module primaryStamp 'modules/regionStamp.bicep' = {
     virtualMachineAdminSshPublicKey: virtualMachineAdminSshPublicKey
     virtualMachineAdminPassword: virtualMachineAdminPassword
     deployAdminAccess: deployPrimaryAdminAccess
+    adminGroupObjectId: adminGroupObjectId
   }
 }
 
