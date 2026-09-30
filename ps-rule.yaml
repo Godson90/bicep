@@ -10,6 +10,8 @@ input:
 
 configuration:
   AZURE_BICEP_PARAMS_FILE_EXPANSION: true
+  # Expanding main.bicep takes ~10 s once Phase 3 modules are included; the 5 s default times out.
+  AZURE_BICEP_FILE_EXPANSION_TIMEOUT: 60
 
 rule:
   # Exclusions apply to every environment and target. Each must name the phase that resolves it or
@@ -18,8 +20,6 @@ rule:
   exclude:
     # Phase 5: storage moves to RA-GZRS.
     - Azure.Storage.UseReplication
-    # Phase 3: NSG lateral-movement (SSH/RDP) outbound rules land with the Bastion/VPN/jump-host admin access redesign.
-    - Azure.NSG.LateralTraversal
     # ADR-002: no organization-wide tagging convention exists yet.
     - Azure.Resource.UseTags
     # ADR-004: zero-trust default-deny-all-inbound is the intended design for these NSGs.

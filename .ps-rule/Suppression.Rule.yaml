@@ -37,3 +37,18 @@ spec:
   if:
     name: '.'
     equals: afwp-defenstack-dev-wus3
+---
+# Synopsis: Bastion must open SSH/RDP sessions to the management subnet; its NSG allows exactly that and denies all other SSH/RDP egress (ADR-013).
+apiVersion: github.com/microsoft/PSRule/v1
+kind: SuppressionGroup
+metadata:
+  name: DefenStack.BastionSessionEgress
+spec:
+  rule:
+    - Azure.NSG.LateralTraversal
+  if:
+    name: '.'
+    in:
+      - vnet-defenstack-dev-wus3-hub-bastion-nsg
+      - vnet-defenstack-prod-wus3-hub-bastion-nsg
+      - vnet-defenstack-prod-eus-hub-bastion-nsg

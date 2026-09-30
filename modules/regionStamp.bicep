@@ -65,6 +65,12 @@ param virtualMachineAdminSshPublicKey string = ''
 @secure()
 param virtualMachineAdminPassword string = ''
 
+@description('Deploy Azure Bastion and the point-to-site VPN gateway in this region. The warm standby leaves it off until failover.')
+param deployAdminAccess bool = false
+
+@description('Object ID of the Entra ID admin security group granted Virtual Machine Administrator Login on the management VM. Empty skips the assignment.')
+param adminGroupObjectId string = ''
+
 var isProd = environmentName == 'prod'
 var isPrimary = regionRole == 'primary'
 var nameSuffix = uniqueString(subscription().id, environmentName, location)
@@ -84,7 +90,19 @@ var names = {
   appServicePlan: 'asp-defenstack-${environmentName}-${regionCode}'
   appService: 'app-defenstack-${environmentName}-${regionCode}-${take(nameSuffix, 6)}'
   virtualMachine: 'vm${regionCode}${take(nameSuffix, 7)}'
+  bastion: 'bas-defenstack-${environmentName}-${regionCode}'
+  bastionPublicIp: 'pip-bas-defenstack-${environmentName}-${regionCode}'
+  vpnGateway: 'vpng-defenstack-${environmentName}-${regionCode}'
+  vpnGatewayPublicIp: 'pip-vpng-defenstack-${environmentName}-${regionCode}'
 }
+// Azure Firewall always takes the first usable address (.4) of AzureFirewallSubnet. The hub needs it before
+// the firewall exists (GatewaySubnet route table); runbook 03 checks it matches the firewall's actual IP.
+var firewallPrivateIp = cidrHost(addressPlan.firewallSubnetPrefix, 3)
+// Admin sessions arrive from Bastion or from VPN clients; managementSourceCidrs adds any extra approved ranges.
+var adminSourceCidrs = concat([
+  addressPlan.bastionSubnetPrefix
+  addressPlan.vpnClientAddressPool
+], managementSourceCidrs)
 var privateEndpointSubnetName = 'private-endpoints'
 var appServiceIntegrationSubnetName = 'appservice-integration'
 
@@ -117,6 +135,13 @@ module hubNetwork 'hubNetwork.bicep' = {
     vnetName: names.hubVnet
     addressSpace: addressPlan.hubAddressSpace
     firewallSubnetAddressPrefix: addressPlan.firewallSubnetPrefix
+    bastionSubnetAddressPrefix: addressPlan.bastionSubnetPrefix
+    gatewaySubnetAddressPrefix: addressPlan.gatewaySubnetPrefix
+    firewallPrivateIp: firewallPrivateIp
+    spokeAddressPrefixes: addressPlan.spokeAddressSpace
+    bastionTargetAddressPrefixes: [
+      addressPlan.managementSubnetPrefix
+    ]
     enableDeleteLock: isProd
   }
 }
@@ -133,6 +158,9 @@ module azureFirewall 'azureFirewall.bicep' = {
     spokeAddressPrefixes: addressPlan.spokeAddressSpace
     managementAddressPrefixes: [
       addressPlan.managementSubnetPrefix
+    ]
+    vpnClientAddressPrefixes: [
+      addressPlan.vpnClientAddressPool
     ]
     allowedOutboundFqdns: allowedOutboundFqdns
     threatIntelMode: isProd ? 'Deny' : 'Alert'
@@ -157,11 +185,12 @@ module spokeNetwork 'spokeNetwork.bicep' = {
     approvedPrivateEndpointSourceCidrs: concat([
       addressPlan.appServiceIntegrationSubnetPrefix
       addressPlan.managementSubnetPrefix
+      addressPlan.vpnClientAddressPool
     ], additionalPrivateEndpointSourceCidrs)
     privateEndpointSubnetName: privateEndpointSubnetName
     appServiceIntegrationSubnetName: appServiceIntegrationSubnetName
     enableDeleteLock: isProd
-    managementSourceCidrs: managementSourceCidrs
+    managementSourceCidrs: adminSourceCidrs
   }
 }
 
@@ -191,8 +220,42 @@ module virtualMachine 'virtualMachine.bicep' = if (enableVirtualMachine && isPri
     adminSshPublicKey: virtualMachineAdminSshPublicKey
     adminPassword: virtualMachineAdminPassword
     logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
-    managementSourceCidrs: managementSourceCidrs
+    managementSourceCidrs: adminSourceCidrs
+    adminGroupObjectId: adminGroupObjectId
   }
+}
+
+module bastion 'bastion.bicep' = if (deployAdminAccess) {
+  name: 'bastion'
+  params: {
+    location: location
+    bastionName: names.bastion
+    publicIpName: names.bastionPublicIp
+    subnetId: hubNetwork.outputs.bastionSubnetId
+    availabilityZones: availabilityZones
+    logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
+  }
+  // The hub resolves DNS through the firewall, so admin access waits for it.
+  dependsOn: [
+    azureFirewall
+  ]
+}
+
+module vpnGateway 'vpnGateway.bicep' = if (deployAdminAccess) {
+  name: 'vpn-gateway'
+  params: {
+    location: location
+    gatewayName: names.vpnGateway
+    publicIpNamePrefix: names.vpnGatewayPublicIp
+    gatewaySubnetId: hubNetwork.outputs.gatewaySubnetId
+    skuName: isProd ? 'VpnGw2AZ' : 'VpnGw1AZ'
+    availabilityZones: availabilityZones
+    vpnClientAddressPool: addressPlan.vpnClientAddressPool
+    logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
+  }
+  dependsOn: [
+    azureFirewall
+  ]
 }
 
 module networkIntegration 'networkIntegration.bicep' = {
@@ -207,7 +270,12 @@ module networkIntegration 'networkIntegration.bicep' = {
     storageContainerName: storage.outputs.blobContainerName
     appServicePrincipalId: appService.outputs.appServicePrincipalId
     appServiceName: names.appService
+    useHubGateway: deployAdminAccess
   }
+  // Gateway transit on the peering needs a provisioned gateway.
+  dependsOn: [
+    vpnGateway
+  ]
 }
 
 module privateConnectivity 'privateConnectivity.bicep' = {
@@ -230,6 +298,9 @@ output hubVnetId string = hubNetwork.outputs.id
 output spokeVnetName string = names.spokeVnet
 output spokeVnetId string = spokeNetwork.outputs.id
 output firewallPrivateIp string = azureFirewall.outputs.privateIp
+output expectedFirewallPrivateIp string = firewallPrivateIp
+output bastionName string = deployAdminAccess ? names.bastion : ''
+output vpnGatewayName string = deployAdminAccess ? names.vpnGateway : ''
 output appServiceName string = names.appService
 output appServiceHostName string = appService.outputs.appServiceAppHostName
 output keyVaultName string = names.keyVault

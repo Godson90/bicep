@@ -38,6 +38,9 @@ param appServiceName string
 @description('Allow forwarded traffic across the hub/spoke peering for firewall service chaining.')
 param allowForwardedTraffic bool = true
 
+@description('Share the hub VPN gateway with the spoke (gateway transit). Only set when the gateway exists; the spoke peering fails otherwise.')
+param useHubGateway bool = false
+
 resource hubVnet 'Microsoft.Network/virtualNetworks@2025-09-01' existing = {
   name: hubVnetName
 }
@@ -58,14 +61,14 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2026-04-01' existing 
   }
 }
 
-// Hub-side peering for centralized firewall service chaining.
+// Hub-side peering for centralized firewall service chaining; offers the VPN gateway when it exists.
 resource hubToSpokePeering 'Microsoft.Network/virtualNetworks/virtualNetworkPeerings@2024-07-01' = {
   parent: hubVnet
   name: 'hub-to-spoke'
   properties: {
     allowVirtualNetworkAccess: true
     allowForwardedTraffic: allowForwardedTraffic
-    allowGatewayTransit: false
+    allowGatewayTransit: useHubGateway
     useRemoteGateways: false
     remoteVirtualNetwork: {
       id: spokeVnetId
@@ -73,7 +76,7 @@ resource hubToSpokePeering 'Microsoft.Network/virtualNetworks/virtualNetworkPeer
   }
 }
 
-// Spoke-side reciprocal peering.
+// Spoke-side reciprocal peering; learns the VPN client pool through the hub gateway.
 resource spokeToHubPeering 'Microsoft.Network/virtualNetworks/virtualNetworkPeerings@2024-07-01' = {
   parent: spokeVnet
   name: 'spoke-to-hub'
@@ -81,7 +84,7 @@ resource spokeToHubPeering 'Microsoft.Network/virtualNetworks/virtualNetworkPeer
     allowVirtualNetworkAccess: true
     allowForwardedTraffic: allowForwardedTraffic
     allowGatewayTransit: false
-    useRemoteGateways: false
+    useRemoteGateways: useHubGateway
     remoteVirtualNetwork: {
       id: hubVnetId
     }

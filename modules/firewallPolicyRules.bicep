@@ -10,8 +10,14 @@ param spokeAddressPrefixes array
 @description('Management subnet CIDR ranges permitted to reach OS update endpoints (Windows Update, Ubuntu archives).')
 param managementAddressPrefixes array
 
+@description('Point-to-site VPN client pools permitted to open SSH/RDP sessions to the management subnet.')
+param vpnClientAddressPrefixes array
+
 @description('Approved outbound FQDNs for application traffic. An empty list deploys no application allowlist.')
 param allowedOutboundFqdns array = []
+
+// Entra ID sign-in host for this cloud, for example login.microsoftonline.com.
+var entraLoginHost = split(environment().authentication.loginEndpoint, '/')[2]
 
 resource firewallPolicy 'Microsoft.Network/firewallPolicies@2025-01-01' existing = {
   name: firewallPolicyName
@@ -88,6 +94,44 @@ resource dnsEgress 'Microsoft.Network/firewallPolicies/ruleCollectionGroups@2025
   }
 }
 
+// Admin sessions from VPN clients to the management subnet. GatewaySubnet routes spoke traffic here, so
+// the firewall logs every SSH/RDP session. Private endpoint traffic is direct and NSG-enforced (ADR-013).
+resource adminAccess 'Microsoft.Network/firewallPolicies/ruleCollectionGroups@2025-01-01' = {
+  parent: firewallPolicy
+  name: 'admin-access'
+  properties: {
+    priority: 120
+    ruleCollections: [
+      {
+        name: 'vpn-to-management'
+        priority: 120
+        ruleCollectionType: 'FirewallPolicyFilterRuleCollection'
+        action: {
+          type: 'Allow'
+        }
+        rules: [
+          {
+            ruleType: 'NetworkRule'
+            name: 'vpn-ssh-rdp'
+            ipProtocols: [
+              'TCP'
+            ]
+            sourceAddresses: vpnClientAddressPrefixes
+            destinationAddresses: managementAddressPrefixes
+            destinationPorts: [
+              '22'
+              '3389'
+            ]
+          }
+        ]
+      }
+    ]
+  }
+  dependsOn: [
+    dnsEgress
+  ]
+}
+
 // OS update endpoints for management VMs only; the App Service subnet never gets these.
 resource platformEgress 'Microsoft.Network/firewallPolicies/ruleCollectionGroups@2025-01-01' = {
   parent: firewallPolicy
@@ -144,10 +188,39 @@ resource platformEgress 'Microsoft.Network/firewallPolicies/ruleCollectionGroups
           }
         ]
       }
+      {
+        // Endpoints the AADSSHLoginForLinux / AADLoginForWindows extensions call to sign admins in with Entra ID.
+        name: 'entra-login'
+        priority: 160
+        ruleCollectionType: 'FirewallPolicyFilterRuleCollection'
+        action: {
+          type: 'Allow'
+        }
+        rules: [
+          {
+            ruleType: 'ApplicationRule'
+            name: 'entra-sign-in'
+            sourceAddresses: managementAddressPrefixes
+            protocols: [
+              {
+                protocolType: 'Https'
+                port: 443
+              }
+            ]
+            targetFqdns: [
+              entraLoginHost
+              'device.${entraLoginHost}'
+              'enterpriseregistration.windows.net'
+              'pas.windows.net'
+              'packages.microsoft.com'
+            ]
+          }
+        ]
+      }
     ]
   }
   dependsOn: [
-    dnsEgress
+    adminAccess
   ]
 }
 

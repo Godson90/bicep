@@ -49,8 +49,8 @@ Describe 'Region stamp availability' {
 }
 
 Describe 'Region stamp wiring carried from Phase 0' {
-    It 'passes managementSourceCidrs to <_> (F1)' -ForEach 'spoke-network', 'virtual-machine' {
-        (Get-StampModuleParameters $_).managementSourceCidrs.value | Should -Be "[parameters('managementSourceCidrs')]"
+    It 'passes the admin source ranges (Bastion subnet, VPN pool, extra managementSourceCidrs) to <_> (F1, Phase 3)' -ForEach 'spoke-network', 'virtual-machine' {
+        (Get-StampModuleParameters $_).managementSourceCidrs.value | Should -Be "[variables('adminSourceCidrs')]"
     }
 
     It 'uses the address plan spoke range for both the spoke VNet and firewall sources (F5)' {
@@ -62,6 +62,7 @@ Describe 'Region stamp wiring carried from Phase 0' {
         $value = (Get-StampModuleParameters 'spoke-network').approvedPrivateEndpointSourceCidrs.value
         $value | Should -Match "addressPlan'\)\.appServiceIntegrationSubnetPrefix"
         $value | Should -Match "addressPlan'\)\.managementSubnetPrefix"
+        $value | Should -Match "addressPlan'\)\.vpnClientAddressPool"
         $value | Should -Match 'additionalPrivateEndpointSourceCidrs'
     }
 
@@ -111,5 +112,77 @@ Describe 'Region stamp firewall security (Phase 2)' {
 
     It 'locks the hub VNet, Key Vault and firewall resources in prod only (<_>)' -ForEach 'hub-network', 'key-vault', 'azure-firewall' {
         (Get-StampModuleParameters $_).enableDeleteLock.value | Should -Be "[variables('isProd')]"
+    }
+}
+
+Describe 'Region stamp admin access (Phase 3)' {
+    It 'derives admin sources from the Bastion subnet and VPN client pool, plus any extra managementSourceCidrs' {
+        $stamp.variables.adminSourceCidrs |
+            Should -Be "[concat(createArray(parameters('addressPlan').bastionSubnetPrefix, parameters('addressPlan').vpnClientAddressPool), parameters('managementSourceCidrs'))]"
+    }
+
+    It 'deploys <_> only when deployAdminAccess is true' -ForEach 'bastion', 'vpn-gateway' {
+        (Get-ModuleDeployment -Template $stamp -Name $_).condition | Should -Be "[parameters('deployAdminAccess')]"
+        $stamp.parameters.deployAdminAccess.defaultValue | Should -BeExactly $false
+    }
+
+    It 'uses VpnGw2AZ in prod and VpnGw1AZ in dev' {
+        (Get-StampModuleParameters 'vpn-gateway').skuName |
+            Should -Be "[if(variables('isProd'), createObject('value', 'VpnGw2AZ'), createObject('value', 'VpnGw1AZ'))]"
+    }
+
+    It 'deploys <_> after the firewall, whose DNS proxy the hub uses' -ForEach 'bastion', 'vpn-gateway' {
+        @((Get-ModuleDeployment -Template $stamp -Name $_).dependsOn) | Should -Contain 'azureFirewall'
+    }
+
+    It 'spreads <_> across zones 1-3' -ForEach 'bastion', 'vpn-gateway' {
+        (Get-StampModuleParameters $_).availabilityZones.value | Should -Be "[variables('availabilityZones')]"
+    }
+
+    It 'gives the gateway the region VPN client pool' {
+        (Get-StampModuleParameters 'vpn-gateway').vpnClientAddressPool.value | Should -Be "[parameters('addressPlan').vpnClientAddressPool]"
+    }
+
+    It 'routes GatewaySubnet spoke traffic to the first usable firewall address, computed before the firewall exists' {
+        $stamp.variables.firewallPrivateIp | Should -Be "[cidrHost(parameters('addressPlan').firewallSubnetPrefix, 3)]"
+        $hub = Get-StampModuleParameters 'hub-network'
+        $hub.firewallPrivateIp.value | Should -Be "[variables('firewallPrivateIp')]"
+        $hub.spokeAddressPrefixes.value | Should -Be "[parameters('addressPlan').spokeAddressSpace]"
+        @((Get-ModuleDeployment -Template $stamp -Name 'hub-network').dependsOn) | Should -Not -Contain 'azureFirewall'
+    }
+
+    It 'lets Bastion reach only the management subnet' {
+        @((Get-StampModuleParameters 'hub-network').bastionTargetAddressPrefixes.value) | Should -Be @("[parameters('addressPlan').managementSubnetPrefix]")
+    }
+
+    It 'passes the Bastion and gateway subnet prefixes from the address plan' {
+        $hub = Get-StampModuleParameters 'hub-network'
+        $hub.bastionSubnetAddressPrefix.value | Should -Be "[parameters('addressPlan').bastionSubnetPrefix]"
+        $hub.gatewaySubnetAddressPrefix.value | Should -Be "[parameters('addressPlan').gatewaySubnetPrefix]"
+    }
+
+    It 'allows the VPN client pool through the firewall admin-access rules' {
+        @((Get-StampModuleParameters 'azure-firewall').vpnClientAddressPrefixes.value) | Should -Be @("[parameters('addressPlan').vpnClientAddressPool]")
+    }
+
+    It 'turns on gateway transit only with admin access, after the gateway is provisioned' {
+        (Get-StampModuleParameters 'network-integration').useHubGateway.value | Should -Be "[parameters('deployAdminAccess')]"
+        @((Get-ModuleDeployment -Template $stamp -Name 'network-integration').dependsOn) | Should -Contain 'vpnGateway'
+    }
+
+    It 'passes the admin group to the management VM' {
+        (Get-StampModuleParameters 'virtual-machine').adminGroupObjectId.value | Should -Be "[parameters('adminGroupObjectId')]"
+    }
+
+    It 'outputs the Bastion and gateway names (empty without admin access) and the expected firewall IP' {
+        $stamp.outputs.bastionName.value | Should -Be "[if(parameters('deployAdminAccess'), variables('names').bastion, '')]"
+        $stamp.outputs.vpnGatewayName.value | Should -Be "[if(parameters('deployAdminAccess'), variables('names').vpnGateway, '')]"
+        $stamp.outputs.expectedFirewallPrivateIp.value | Should -Be "[variables('firewallPrivateIp')]"
+    }
+
+    It 'names Bastion and the gateway with environment and region' {
+        foreach ($key in 'bastion', 'bastionPublicIp', 'vpnGateway', 'vpnGatewayPublicIp') {
+            $stamp.variables.names.$key | Should -Match "parameters\('environmentName'\), parameters\('regionCode'\)"
+        }
     }
 }

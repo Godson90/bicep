@@ -29,3 +29,6 @@ Accept the risk: keep the single firewall private IP as the VNet's DNS server. E
   firewall's forced-tunnel default route, so it is not a new failure mode.
 - If a future phase introduces Azure DNS Private Resolver or a second firewall
   instance for DNS redundancy, revisit this ADR and remove the exclusion.
+
+## Amendment (Phase 3): the hub VNet uses the firewall DNS proxy too
+Phase 3 sets the **hub** VNet's DNS server to the same single firewall IP (`modules/hubNetwork.bicep`, `dhcpOptions.dnsServers`). Point-to-site VPN clients receive the hub's DNS servers, and this is how they resolve `privatelink.*` names to private endpoint IPs (spec §3: "The VPN client profile uses the firewall private IP as its DNS server"). The hub is created before the firewall, so the stamp computes the address as `cidrHost(firewallSubnetPrefix, 3)`, the firewall's `.4` address (`ADR-013`). Bastion and the VPN gateway deploy only after the firewall exists. The same single-server trade-off applies: while the firewall is unavailable, VPN clients cannot resolve private names, which matches their SSH/RDP path through the firewall. The `Azure.VNET.SingleDNS` exclusion covers the hub as well.

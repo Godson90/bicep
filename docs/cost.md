@@ -82,11 +82,32 @@ on Premium for a representative period to measure actual data-processing
 volume (`AZFWApplicationRule`/`AZFWNetworkRule`/`AZFWIdpsSignature` ingestion
 via the same `Usage` KQL pattern as the Phase 0 table above).
 
+## Phase 3 delta
+Phase 3 adds admin access to every stamp with `deployAdminAccess = true`: dev
+and the prod primary region. The East US warm standby gets it only during
+failover. As with every phase, **fill in the actual dollar estimate from the
+Pricing Calculator; do not invent prices.**
+
+| Environment | Cost driver | What changed / why it costs more |
+|---|---|---|
+| Dev | VPN gateway `VpnGw1AZ` ×1 (active-active) | Billed hourly per gateway, whether or not a client is connected (`ADR-015`); active-active does not change the hourly rate |
+| Dev | Azure Bastion Standard ×1, 2 scale units | Billed hourly per Bastion plus per scale unit above the base 2 |
+| Dev | Standard public IPs ×3 (Bastion, two for the gateway) | Billed hourly per static IP |
+| Prod | VPN gateway `VpnGw2AZ` ×1, Bastion Standard ×1, public IPs ×3 | West US 3 only; the same drivers as dev at the `VpnGw2AZ` rate |
+| Prod (failover only) | The same set in East US | Billed only from the moment `deploySecondaryAdminAccess = true` is deployed |
+| Both | Outbound data for admin sessions; Bastion and P2S diagnostic log ingestion | Small; measured with the `Usage` KQL pattern (tables `MicrosoftAzureBastionAuditLogs`, `AzureDiagnostics` for `P2SDiagnosticLog`/`GatewayDiagnosticLog`) |
+| Both | Jump host: no new resource cost | Update Manager for Azure VMs is free; the Entra login extension and maintenance configuration have no charge |
+
+**Estimate:** fill in from the Pricing Calculator (VPN Gateway: SKU `VpnGw1AZ`
+or `VpnGw2AZ`, 730 hours; Azure Bastion: Standard, 2 scale units, 730 hours;
+Public IP: 3 × Standard static). In dev, turning admin access off between test
+windows (runbook 03 §7) removes the gateway and Bastion charges, which are the
+two largest items.
+
 ## Dominant future cost drivers
 From `docs/superpowers/specs/2026-09-25-secure-connectivity-design.md` §6, the
-resources expected to dominate spend in later phases (not present in Phase 0):
-- VPN gateway
-- Azure Bastion
+resources expected to dominate spend in later phases (not present in Phase 0).
+The VPN gateway and Azure Bastion arrived in Phase 3 (see "Phase 3 delta"):
 - Azure Front Door Premium
 - Microsoft Sentinel ingestion
 - Microsoft Defender plans

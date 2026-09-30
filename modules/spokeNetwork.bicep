@@ -69,6 +69,23 @@ var managementInboundRules = empty(managementSourceCidrs) ? [] : [
     }
   }
 ]
+// No spoke subnet opens SSH/RDP sessions to other hosts (PSRule Azure.NSG.LateralTraversal).
+var denyLateralTraversalRule = {
+  name: 'deny-ssh-rdp-outbound'
+  properties: {
+    priority: 4000
+    access: 'Deny'
+    direction: 'Outbound'
+    protocol: '*'
+    sourceAddressPrefix: '*'
+    sourcePortRange: '*'
+    destinationAddressPrefix: '*'
+    destinationPortRanges: [
+      '22'
+      '3389'
+    ]
+  }
+}
 
 // NSG for the private endpoint subnet; source CIDRs are explicit deployment inputs.
 resource privateEndpointNsg 'Microsoft.Network/networkSecurityGroups@2024-07-01' = {
@@ -102,6 +119,7 @@ resource privateEndpointNsg 'Microsoft.Network/networkSecurityGroups@2024-07-01'
           destinationPortRange: '*'
         }
       }
+      denyLateralTraversalRule
     ]
   }
 }
@@ -125,6 +143,7 @@ resource appServiceIntegrationNsg 'Microsoft.Network/networkSecurityGroups@2024-
           destinationPortRange: '*'
         }
       }
+      denyLateralTraversalRule
     ]
   }
 }
@@ -167,6 +186,7 @@ resource virtualMachineNsg 'Microsoft.Network/networkSecurityGroups@2024-07-01' 
           destinationPortRange: '*'
         }
       }
+      denyLateralTraversalRule
     ])
   }
 }

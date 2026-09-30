@@ -72,3 +72,37 @@ Describe 'Phase 2 documentation' {
         $text | Should -Match 'no `?prod-plan`? environment'
     }
 }
+
+Describe 'Phase 3 documentation' {
+    It '<_> exists' -ForEach 'docs/runbooks/03-admin-access.md', 'docs/decisions/ADR-013-admin-access-network-paths.md', 'docs/decisions/ADR-014-jit-access-deferred-to-phase-7.md', 'docs/decisions/ADR-015-vpn-gateway-sku-and-active-active.md' {
+        Get-RepoPath $_ | Should -Exist
+    }
+
+    It 'the admin access runbook follows the 9-section template' {
+        $text = Get-Content (Get-RepoPath 'docs/runbooks/03-admin-access.md') -Raw
+        foreach ($section in '## 1. Purpose and scope', '## 2. Prerequisites', '## 3. Parameters', '## 4. Step-by-step', '## 5. Manual and post-deployment steps', '## 6. Validation', '## 7. Rollback', '## 8. Operations', '## 9. Troubleshooting') {
+            $text | Should -Match ([regex]::Escape($section))
+        }
+    }
+
+    It 'the admin access runbook covers VPN client setup per OS, Bastion connect, and break-glass (spec §5 Phase 3)' {
+        $text = Get-Content (Get-RepoPath 'docs/runbooks/03-admin-access.md') -Raw
+        foreach ($topic in 'Windows 10/11', 'macOS', 'Linux (Ubuntu', 'Connect through Bastion', 'Break-glass') {
+            $text | Should -Match ([regex]::Escape($topic))
+        }
+    }
+
+    It 'the admin access runbook restricts the VPN app to the admin group' {
+        Get-Content (Get-RepoPath 'docs/runbooks/03-admin-access.md') -Raw | Should -Match 'appRoleAssignmentRequired=true'
+    }
+
+    It 'the architecture overview draws the admin flow and lists the Phase 3 ADRs' {
+        $text = Get-Content (Get-RepoPath 'docs/architecture/overview.md') -Raw
+        $text | Should -Match 'VPN gateway \(GatewaySubnet'
+        foreach ($adr in 'ADR-013', 'ADR-014', 'ADR-015') { $text | Should -Match $adr }
+    }
+
+    It 'the cost document has a Phase 3 delta' {
+        Get-Content (Get-RepoPath 'docs/cost.md') -Raw | Should -Match '## Phase 3 delta'
+    }
+}

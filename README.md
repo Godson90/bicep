@@ -6,7 +6,7 @@ This deployment is a **subscription-scope**, multi-region stack: `main.bicep` (`
 
 - Design: `docs/superpowers/specs/2026-09-25-secure-connectivity-design.md`
 - Architecture: `docs/architecture/overview.md` - topology, traffic flows, address plan, naming convention, and resource inventory
-- Runbooks: `docs/runbooks/` - start with `00-pipeline-and-identity.md`, `00b-configure-pipeline-credentials.md` (pipeline Azure login via OIDC), `00a-apply-phase0-fixes.md`, `01-deploy-stack.md` (deploy dev or prod), `01a-migrate-from-defenstack.md` (retire the Phase 0 resource group), and `02-firewall.md` (Premium firewall rule changes and allowlist requests)
+- Runbooks: `docs/runbooks/` - start with `00-pipeline-and-identity.md`, `00b-configure-pipeline-credentials.md` (pipeline Azure login via OIDC), `00a-apply-phase0-fixes.md`, `01-deploy-stack.md` (deploy dev or prod), `01a-migrate-from-defenstack.md` (retire the Phase 0 resource group), `02-firewall.md` (Premium firewall rule changes and allowlist requests), and `03-admin-access.md` (Bastion, point-to-site VPN client setup, jump host sign-in, break-glass)
 - Runbook structure (mandatory for every change): `docs/runbooks/_template.md`
 
 ### Module layout
@@ -241,7 +241,7 @@ The VM module is disabled by default through `enableVirtualMachine=false`. When 
 - Forwarded traffic is enabled on the reciprocal peerings for firewall service chaining. Gateway transit and remote gateways remain disabled.
 - **Prod locks:** in prod (`enableDeleteLock: true`), `CanNotDelete` locks are applied to the hub VNet, the spoke VNet, the Key Vault, the firewall, the firewall policy, and the firewall public IP — see `docs/runbooks/02-firewall.md` §6/§7 for the validation and removal procedure.
 
-Azure Firewall Premium has ongoing hourly and data-processing charges, higher than Standard's (`docs/cost.md` "Phase 2 delta"). Regional VNet peering and Log Analytics ingestion also incur charges. This design intentionally avoids global peering, NAT gateways, VPN/ExpressRoute gateways, extra public IPs, and Azure Firewall Manager unless separately approved.
+Azure Firewall Premium has ongoing hourly and data-processing charges, higher than Standard's (`docs/cost.md` "Phase 2 delta"). Regional VNet peering and Log Analytics ingestion also incur charges. Phase 3 adds a point-to-site VPN gateway, Azure Bastion and their three public IPs in each region with admin access (`docs/cost.md` "Phase 3 delta"). This design intentionally avoids global peering, NAT gateways, site-to-site VPN or ExpressRoute, other public IPs, and Azure Firewall Manager unless separately approved.
 
 ### Validate and build
 

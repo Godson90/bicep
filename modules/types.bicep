@@ -1,13 +1,22 @@
 // Shared parameter contracts between the subscription entry point, the global layer, and region stamps.
 
 @export()
-@description('Address plan for one region: hub VNet with the firewall subnet, and spoke VNet with its three subnets.')
+@description('Address plan for one region: hub VNet with the firewall, Bastion and gateway subnets, spoke VNet with its three subnets, and the P2S VPN client pool.')
 type regionAddressPlan = {
   @description('Hub VNet address space.')
   hubAddressSpace: string[]
 
   @description('AzureFirewallSubnet prefix (at least /26) inside hubAddressSpace.')
   firewallSubnetPrefix: string
+
+  @description('AzureBastionSubnet prefix (at least /26) inside hubAddressSpace.')
+  bastionSubnetPrefix: string
+
+  @description('GatewaySubnet prefix (at least /27) inside hubAddressSpace.')
+  gatewaySubnetPrefix: string
+
+  @description('Point-to-site VPN client address pool. Must not overlap any VNet in any region or environment.')
+  vpnClientAddressPool: string
 
   @description('Spoke VNet address space. Also the firewall source range for spoke egress rules.')
   spokeAddressSpace: string[]
