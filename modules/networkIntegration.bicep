@@ -80,6 +80,10 @@ resource hubToSpokePeering 'Microsoft.Network/virtualNetworks/virtualNetworkPeer
 resource spokeToHubPeering 'Microsoft.Network/virtualNetworks/virtualNetworkPeerings@2024-07-01' = {
   parent: spokeVnet
   name: 'spoke-to-hub'
+  // The spoke's useRemoteGateways needs the hub side's allowGatewayTransit in place first.
+  dependsOn: [
+    hubToSpokePeering
+  ]
   properties: {
     allowVirtualNetworkAccess: true
     allowForwardedTraffic: allowForwardedTraffic

@@ -28,4 +28,8 @@ Describe 'Gateway transit (Phase 3)' {
         $spokeToHub.properties.useRemoteGateways | Should -Be "[parameters('useHubGateway')]"
         $spokeToHub.properties.allowGatewayTransit | Should -BeExactly $false
     }
+
+    It 'updates the spoke peering only after the hub peering (so allowGatewayTransit is in place before useRemoteGateways)' {
+        @($spokeToHub.dependsOn) | Should -Contain "[resourceId('Microsoft.Network/virtualNetworks/virtualNetworkPeerings', parameters('hubVnetName'), 'hub-to-spoke')]"
+    }
 }

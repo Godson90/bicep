@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "4836583485239819699"
+      "templateHash": "10345088740497350405"
     }
   },
   "definitions": {
@@ -642,7 +642,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "43681948909033021"
+              "templateHash": "8225818268337419252"
             }
           },
           "definitions": {
@@ -4131,7 +4131,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "8156763654850952950"
+                      "templateHash": "8343902559946606117"
                     }
                   },
                   "parameters": {
@@ -4241,7 +4241,10 @@
                         "remoteVirtualNetwork": {
                           "id": "[parameters('hubVnetId')]"
                         }
-                      }
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/virtualNetworks/virtualNetworkPeerings', parameters('hubVnetName'), 'hub-to-spoke')]"
+                      ]
                     },
                     {
                       "type": "Microsoft.Authorization/roleAssignments",
@@ -4666,7 +4669,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "43681948909033021"
+              "templateHash": "8225818268337419252"
             }
           },
           "definitions": {
@@ -8155,7 +8158,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "8156763654850952950"
+                      "templateHash": "8343902559946606117"
                     }
                   },
                   "parameters": {
@@ -8265,7 +8268,10 @@
                         "remoteVirtualNetwork": {
                           "id": "[parameters('hubVnetId')]"
                         }
-                      }
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/virtualNetworks/virtualNetworkPeerings', parameters('hubVnetName'), 'hub-to-spoke')]"
+                      ]
                     },
                     {
                       "type": "Microsoft.Authorization/roleAssignments",
