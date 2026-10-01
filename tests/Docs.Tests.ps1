@@ -106,3 +106,39 @@ Describe 'Phase 3 documentation' {
         Get-Content (Get-RepoPath 'docs/cost.md') -Raw | Should -Match '## Phase 3 delta'
     }
 }
+
+Describe 'Phase 4 documentation' {
+    It '<_> exists' -ForEach 'docs/runbooks/04-ingress.md', 'docs/decisions/ADR-016-front-door-over-application-gateway.md', 'docs/decisions/ADR-017-ddos-network-protection-not-selected.md', 'docs/decisions/ADR-018-front-door-placement-and-private-link-approval.md' {
+        Get-RepoPath $_ | Should -Exist
+    }
+
+    It 'the ingress runbook follows the 9-section template' {
+        $text = Get-Content (Get-RepoPath 'docs/runbooks/04-ingress.md') -Raw
+        foreach ($section in '## 1. Purpose and scope', '## 2. Prerequisites', '## 3. Parameters', '## 4. Step-by-step', '## 5. Manual and post-deployment steps', '## 6. Validation', '## 7. Rollback', '## 8. Operations', '## 9. Troubleshooting') {
+            $text | Should -Match ([regex]::Escape($section))
+        }
+    }
+
+    It 'the ingress runbook covers DNS cutover, WAF tuning and exclusions, and PE approval (spec §5 Phase 4)' {
+        $text = Get-Content (Get-RepoPath 'docs/runbooks/04-ingress.md') -Raw
+        foreach ($topic in 'Custom domain and DNS cutover', 'WAF tuning and exclusions', 'Approving a private endpoint connection by hand', 'az network private-endpoint-connection approve', 'The request message is not proof') {
+            $text | Should -Match ([regex]::Escape($topic))
+        }
+    }
+
+    It 'the ingress runbook validates the spec checks: Front Door 200, WAF 403, direct App Service 403' {
+        $text = Get-Content (Get-RepoPath 'docs/runbooks/04-ingress.md') -Raw
+        $text | Should -Match ([regex]::Escape('?q=<script>alert(1)</script>'))
+        $text | Should -Match ([regex]::Escape('https://<app>.azurewebsites.net/'))
+    }
+
+    It 'the architecture overview draws the ingress flow and lists the Phase 4 ADRs' {
+        $text = Get-Content (Get-RepoPath 'docs/architecture/overview.md') -Raw
+        $text | Should -Match 'Azure Front Door Premium \(global'
+        foreach ($adr in 'ADR-016', 'ADR-017', 'ADR-018') { $text | Should -Match $adr }
+    }
+
+    It 'the cost document has a Phase 4 delta' {
+        Get-Content (Get-RepoPath 'docs/cost.md') -Raw | Should -Match '## Phase 4 delta'
+    }
+}

@@ -1,6 +1,6 @@
-# Architecture overview: Phase 1-3 (subscription-scope, multi-region, Premium firewall, admin access)
+# Architecture overview: Phase 1-4 (subscription-scope, multi-region, Premium firewall, admin access, public ingress)
 
-> Owning files: `main.bicep`, `modules/global.bicep`, `modules/regionStamp.bicep`, `modules/privateDnsZoneLinks.bicep`, `modules/types.bicep`, `modules/azureFirewall.bicep`, `modules/firewallPolicyRules.bicep`, `modules/hubNetwork.bicep`, `modules/bastion.bicep`, `modules/vpnGateway.bicep`. Spec: `docs/superpowers/specs/2026-09-25-secure-connectivity-design.md` §1, §3, §5.
+> Owning files: `main.bicep`, `modules/global.bicep`, `modules/regionStamp.bicep`, `modules/privateDnsZoneLinks.bicep`, `modules/types.bicep`, `modules/azureFirewall.bicep`, `modules/firewallPolicyRules.bicep`, `modules/hubNetwork.bicep`, `modules/bastion.bicep`, `modules/vpnGateway.bicep`, `modules/frontDoor.bicep`. Spec: `docs/superpowers/specs/2026-09-25-secure-connectivity-design.md` §1, §3, §5.
 
 ## 1. Purpose and status
 
@@ -36,11 +36,19 @@ firewall DNS proxy. The jump host signs admins in with Entra ID and is patched
 by Update Manager. Every spoke NSG now denies outbound SSH/RDP. See §3
 "Admin access" and [runbook 03](../runbooks/03-admin-access.md).
 
-What later phases add (not present after Phase 3):
+**Phase 4** added public ingress: one Azure Front Door Premium profile per
+environment in the global resource group, with a WAF in Prevention mode
+(Default Rule Set 2.1, Bot Manager 1.1, per-IP rate limit). It reaches each
+region's App Service over Private Link: the primary first (priority 1), then
+the warm standby (priority 2). App Service public access stays disabled. The
+deploy pipeline approves Front Door's private endpoint connections
+(`ADR-016`, `ADR-018`). See §3 "Ingress" and
+[runbook 04](../runbooks/04-ingress.md).
+
+What later phases add (not present after Phase 4):
 
 | Phase | Adds |
 |---|---|
-| 4 | Azure Front Door Premium + WAF (public ingress) |
 | 5 | RA-GZRS storage, Application Insights |
 | 6 | Azure Monitor Private Link Scope (AMPLS), alerts, Microsoft Sentinel |
 | 7 | Microsoft Defender for Cloud plans, Azure Policy assignments |
@@ -188,7 +196,33 @@ Every deployed stamp's hub **and** spoke VNet is linked to each shared zone (`mo
 
 ### Ingress
 
-None yet. There is no public entry point in Phase 1 — App Service, Key Vault and Storage all have public network access disabled and only private endpoints reach them. The app remains private-only until Phase 4 adds Azure Front Door Premium with WAF.
+Public users reach the app only through Azure Front Door Premium (`ADR-016`); full procedures are in [runbook 04](../runbooks/04-ingress.md).
+
+```mermaid
+flowchart LR
+    USER["Internet user"]
+    subgraph EDGE["Azure Front Door Premium (global, rg-defenstack-env-global)"]
+        EP["Endpoint fde-defenstack-env (custom domain optional)"]
+        WAF["WAF wafdefenstackenv: Prevention, DRS 2.1, Bot Manager 1.1, rate limit"]
+        OG["Origin group app: health probe on healthCheckPath"]
+    end
+    subgraph WUS3["West US 3 (primary)"]
+        APP1["App Service (public access disabled)"]
+    end
+    subgraph EUS["East US (warm standby, prod only)"]
+        APP2["App Service (public access disabled)"]
+    end
+    USER -->|"HTTPS (HTTP redirected)"| EP
+    EP --> WAF
+    WAF --> OG
+    OG -->|"priority 1, Private Link (sites)"| APP1
+    OG -.->|"priority 2, Private Link (sites)"| APP2
+    USER -.->|"direct *.azurewebsites.net: 403"| APP1
+```
+
+- Each origin's private endpoint connection on its App Service is approved by the deploy pipeline (`scripts/Approve-FrontDoorPrivateEndpoints.ps1`), which approves only requests with the message `defenstack-frontdoor` (`ADR-018`).
+- The custom domain (`customDomainHostName`) is hosted at an external DNS provider. It is empty until the domain exists; runbook 04 §5.1 covers the TXT validation and CNAME cutover.
+- No region has an inbound public IP for the app, and DDoS Network Protection is not deployed (`ADR-017`).
 
 ### Admin access
 
@@ -258,6 +292,10 @@ One row per `names.*` key in `modules/regionStamp.bicep`, plus the resource grou
 | `names.bastionPublicIp` | `pip-bas-defenstack-<env>-<regionCode>` | `pip-bas-defenstack-dev-wus3` |
 | `names.vpnGateway` | `vpng-defenstack-<env>-<regionCode>` | `vpng-defenstack-dev-wus3` |
 | `names.vpnGatewayPublicIp` | `pip-vpng-defenstack-<env>-<regionCode>-<1\|2>` (one per active-active instance) | `pip-vpng-defenstack-dev-wus3-1` |
+| Front Door profile (`main.bicep`) | `afd-defenstack-<env>` | `afd-defenstack-dev` |
+| Front Door endpoint | `fde-defenstack-<env>` (hostname `fde-defenstack-<env>-<hash>.z01.azurefd.net`) | `fde-defenstack-dev-<hash>.z01.azurefd.net` |
+| WAF policy | `wafdefenstack<env>` | `wafdefenstackdev` |
+| Front Door origin | `app-<regionCode>` | `app-wus3` |
 
 ## 6. Resource inventory per resource group
 
@@ -265,14 +303,14 @@ One row per `names.*` key in `modules/regionStamp.bicep`, plus the resource grou
 
 | Resource group | Contents |
 |---|---|
-| `rg-defenstack-dev-global` | Log Analytics workspace `log-defenstack-dev` (`replication.enabled: false`); private DNS zones `privatelink.blob...`, `privatelink.azurewebsites.net`, `privatelink.vaultcore.azure.net`, each with 2 VNet links (dev-wus3 hub and spoke) |
+| `rg-defenstack-dev-global` | Log Analytics workspace `log-defenstack-dev` (`replication.enabled: false`); private DNS zones `privatelink.blob...`, `privatelink.azurewebsites.net`, `privatelink.vaultcore.azure.net`, each with 2 VNet links (dev-wus3 hub and spoke); Front Door Premium `afd-defenstack-dev` (endpoint `fde-defenstack-dev`, origin `app-wus3`, route `app`, security policy `waf`) and WAF policy `wafdefenstackdev` |
 | `rg-defenstack-dev-wus3` | Hub VNet with `AzureFirewallSubnet`, `AzureBastionSubnet` (Bastion NSG) and `GatewaySubnet` (route table spoke → firewall), DNS server = firewall IP; Bastion Standard `bas-defenstack-dev-wus3` and active-active VPN gateway `vpng-defenstack-dev-wus3` (`VpnGw1AZ`, `ADR-015`) with three public IPs and a gateway maintenance configuration; Firewall **Premium** `afw-defenstack-dev-wus3` (zones 1/2/3, IDPS `Alert`, `threatIntelMode: Alert`, `ADR-003`); firewall policy with four rule collection groups — `dns-egress`, `admin-access`, `platform-egress`, and `approved-https-egress` when `allowedOutboundFqdns` is non-empty (`ADR-010`) — and public IP; spoke VNet with `private-endpoints`, `appservice-integration`, `management` subnets, their NSGs, and two route tables (App Service and management egress through the firewall); App Service Plan `asp-defenstack-dev-wus3` (S1-equivalent, 1 instance, non-zonal); App Service with system-assigned identity and private endpoint; Key Vault (RBAC, purge protection on, 90-day soft delete) with private endpoint; Storage account (`Standard_LRS`) with private endpoint; hub↔spoke peering with gateway transit; when `enableVirtualMachine = true`, the jump host (zone 1, Entra login extension, Update Manager schedule `<vm>-patch`) |
 
 ### prod
 
 | Resource group | Contents |
 |---|---|
-| `rg-defenstack-prod-global` | Log Analytics workspace `log-defenstack-prod` (`replication.enabled: true, location: eastus`); the same three private DNS zones, each with 4 VNet links (wus3 hub, wus3 spoke, eus hub, eus spoke); `enableDeleteLock: true` on the zones and the workspace |
+| `rg-defenstack-prod-global` | Log Analytics workspace `log-defenstack-prod` (`replication.enabled: true, location: eastus`); the same three private DNS zones, each with 4 VNet links (wus3 hub, wus3 spoke, eus hub, eus spoke); Front Door Premium `afd-defenstack-prod` with origins `app-wus3` (priority 1) and `app-eus` (priority 2), and WAF policy `wafdefenstackprod`; `enableDeleteLock: true` on the zones, the workspace, the Front Door profile and the WAF policy |
 | `rg-defenstack-prod-wus3` (primary) | Same shape as dev's region resource group, but: VPN gateway `VpnGw2AZ`; Firewall Premium with IDPS `Deny`, `threatIntelMode: Deny`; App Service Plan `asp-defenstack-prod-wus3` zone-redundant, 3 instances (`isProd && isPrimary`); Storage account `Standard_GRS`; `enableDeleteLock: true` on the hub VNet, spoke VNet, Key Vault, firewall, firewall policy, and firewall public IP |
 | `rg-defenstack-prod-eus` (secondary, warm standby) | Same resource types as `rg-defenstack-prod-wus3`, deployed only when `deploySecondaryRegion = true`, except Bastion and the VPN gateway (their subnets exist; the resources arrive with `deploySecondaryAdminAccess = true` during failover): App Service Plan `asp-defenstack-prod-eus`, 1 instance, non-zonal (no scale-out until failover, `ADR-008`); Storage account `Standard_GRS`; hub↔spoke peering local to this region; `enableDeleteLock: true` on the same set of resources as the primary (hub VNet, spoke VNet, Key Vault, firewall, firewall policy, firewall public IP) |
 
@@ -291,3 +329,6 @@ One row per `names.*` key in `modules/regionStamp.bicep`, plus the resource grou
 - [ADR-013: Admin access network paths: SSH/RDP through the firewall, private endpoints direct](../decisions/ADR-013-admin-access-network-paths.md)
 - [ADR-014: Defender just-in-time VM access deferred to Phase 7](../decisions/ADR-014-jit-access-deferred-to-phase-7.md)
 - [ADR-015: VPN gateway: VpnGw1AZ in dev, VpnGw2AZ in prod, always active-active](../decisions/ADR-015-vpn-gateway-sku-and-active-active.md)
+- [ADR-016: Azure Front Door Premium for public ingress, not Application Gateway](../decisions/ADR-016-front-door-over-application-gateway.md)
+- [ADR-017: Azure DDoS Network Protection not selected](../decisions/ADR-017-ddos-network-protection-not-selected.md)
+- [ADR-018: Front Door deploys from main.bicep after the stamps; the pipeline approves its Private Link connections](../decisions/ADR-018-front-door-placement-and-private-link-approval.md)

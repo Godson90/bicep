@@ -104,13 +104,30 @@ Public IP: 3 × Standard static). In dev, turning admin access off between test
 windows (runbook 03 §7) removes the gateway and Bastion charges, which are the
 two largest items.
 
+## Phase 4 delta
+Phase 4 adds one Azure Front Door Premium profile per environment, in the
+global resource group, serving both regions. As with every phase, **fill in
+the actual dollar estimate from the Pricing Calculator; do not invent prices.**
+
+| Environment | Cost driver | What changed / why it costs more |
+|---|---|---|
+| Dev | Front Door **Premium** base fee ×1 | A fixed monthly fee per profile, billed even with no traffic. Dev needs it to run runbook 04 (`ADR-016`) |
+| Dev | Requests and data transfer out from the edge | Per 10,000 requests and per GB out; small in dev |
+| Prod | Front Door Premium base fee ×1 (one profile covers both regions) | The East US origin adds no Front Door fee; it is the same profile |
+| Prod | Requests and data transfer out from the edge | Scales with user traffic; measure with the access log (`AzureDiagnostics`, `Category == "FrontDoorAccessLog"`) |
+| Both | WAF managed rule sets, Bot Manager, Private Link origins | Included in the Premium SKU; no separate WAF policy or rule charges |
+| Both | Front Door log ingestion into Log Analytics | Access, health probe and WAF logs (`allLogs`); measure with the `Usage` KQL pattern on `AzureDiagnostics` |
+| Both | DDoS Network Protection | Not deployed (`ADR-017`), so no fee |
+
+**Estimate:** fill in from the Pricing Calculator (Azure Front Door: Premium
+tier, one profile; requests and outbound data from a week of dev access logs,
+scaled to expected prod traffic).
+
 ## Dominant future cost drivers
 From `docs/superpowers/specs/2026-09-25-secure-connectivity-design.md` §6, the
 resources expected to dominate spend in later phases (not present in Phase 0).
-The VPN gateway and Azure Bastion arrived in Phase 3 (see "Phase 3 delta"):
-- Azure Front Door Premium
-- Microsoft Sentinel ingestion
-- Microsoft Defender plans
+The VPN gateway and Azure Bastion arrived in Phase 3, and Azure Front Door
+Premium in Phase 4 (see their deltas):
 
 ## Budget thresholds
 Resource-group budgets and their alert thresholds are created and updated through
