@@ -1,0 +1,65 @@
+BeforeAll {
+    Import-Module (Join-Path $PSScriptRoot 'Bicep.TestHelpers.psm1') -Force
+    $template = Get-BicepTemplate -RelativePath 'modules/spokeNetwork.bicep'
+    $routeTables = Get-TemplateResource -Template $template -Type 'Microsoft.Network/routeTables'
+    $vnetModule = Get-TemplateResource -Template $template -Type 'Microsoft.Resources/deployments' | Select-Object -First 1
+    # Subnet order in spokeNetwork.bicep: 0 private-endpoints, 1 appservice-integration, 2 management.
+    $subnets = @($vnetModule.properties.parameters.subnets.value)
+}
+
+Describe 'Spoke routing (F2)' {
+    It 'has one route table for App Service and one for the management subnet' {
+        $routeTables.Count | Should -Be 2
+    }
+
+    It 'disables BGP route propagation on every spoke route table so gateway routes cannot bypass the firewall' {
+        foreach ($routeTable in $routeTables) {
+            $routeTable.properties.disableBgpRoutePropagation | Should -BeTrue
+        }
+    }
+}
+
+Describe 'Management subnet isolation (F1)' {
+    It 'uses its own NSG, not the App Service integration NSG' {
+        $subnets[2].nsgId | Should -Not -Be $subnets[1].nsgId
+    }
+
+    It 'uses its own route table, not the App Service route table' {
+        $subnets[2].udrId | Should -Not -Be $subnets[1].udrId
+    }
+
+    It 'defaults to no management source CIDRs (deny all admin inbound)' {
+        @($template.parameters.managementSourceCidrs.defaultValue).Count | Should -Be 0
+    }
+}
+
+Describe 'Subnet default outbound access (PSRule Azure.VNET.PrivateSubnet)' {
+    It 'disables default outbound internet access on the private endpoint and management subnets' {
+        $subnets[0].defaultOutboundAccess | Should -Be $false
+        $subnets[2].defaultOutboundAccess | Should -Be $false
+    }
+
+    It 'leaves the delegated App Service integration subnet unset (delegation manages its own egress)' {
+        $subnets[1].PSObject.Properties.Name | Should -Not -Contain 'defaultOutboundAccess'
+    }
+}
+
+Describe 'Management subnet naming (Phase 1)' {
+    It 'names the third subnet management' {
+        $template.parameters.virtualMachineSubnetName.defaultValue | Should -Be 'management'
+    }
+}
+
+Describe 'Lateral traversal (PSRule Azure.NSG.LateralTraversal, Phase 3)' {
+    It 'denies outbound SSH and RDP from every spoke subnet' {
+        $template.variables.denyLateralTraversalRule.properties.access | Should -Be 'Deny'
+        $template.variables.denyLateralTraversalRule.properties.direction | Should -Be 'Outbound'
+        @($template.variables.denyLateralTraversalRule.properties.destinationPortRanges) -join ',' | Should -Be '22,3389'
+        $nsgs = Get-TemplateResource -Template $template -Type 'Microsoft.Network/networkSecurityGroups'
+        $nsgs.Count | Should -Be 3
+        foreach ($nsg in $nsgs) {
+            # Plain NSGs list the variable as an array element; the management NSG compiles to one concat() expression.
+            (@($nsg.properties.securityRules) -join ' ').Contains("variables('denyLateralTraversalRule')") | Should -BeTrue
+        }
+    }
+}

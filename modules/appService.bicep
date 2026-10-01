@@ -22,7 +22,23 @@ param logAnalyticsWorkspaceId string
 
 @description('Deployment environment that controls App Service plan sizing.')
 param environmentType string
-var appServicePlanName string = 'defenstack-${environmentType}-plan'
+
+@description('Relative path probed by App Service health check; it must return 200-299 when the instance is healthy.')
+param healthCheckPath string = '/'
+
+@description('Spread plan instances across availability zones. Zone redundancy is set when a plan is created, so enable it only for new plans.')
+param zoneRedundant bool = false
+
+@description('Number of plan instances. Zone-redundant plans require at least 3.')
+@minValue(1)
+@maxValue(30)
+param instanceCount int = 1
+
+@description('App Service plan name. Include the environment and region so every stamp gets its own plan.')
+@minLength(1)
+@maxLength(60)
+param appServicePlanName string
+
 var appServicePlanSkuName = (environmentType == 'prod') ? 'P2V3' : 'S1'
 var appServicePlanSkuTier = (environmentType == 'prod') ? 'PremiumV3' : 'Standard'
 
@@ -34,6 +50,10 @@ resource appServiceplan 'Microsoft.Web/serverfarms@2025-03-01' = {
   sku: {
     name: appServicePlanSkuName
     tier: appServicePlanSkuTier
+    capacity: instanceCount
+  }
+  properties: {
+    zoneRedundant: zoneRedundant
   }
 }
 
@@ -49,13 +69,35 @@ resource appServiceApp 'Microsoft.Web/sites@2025-03-01' = {
     serverFarmId: appServiceplan.id
     httpsOnly: true
     publicNetworkAccess: 'Disabled'
+    clientAffinityEnabled: false
     virtualNetworkSubnetId: empty(vnetIntegrationSubnetId) ? null : vnetIntegrationSubnetId
     siteConfig: {
       ftpsState: 'Disabled'
       http20Enabled: true
       minTlsVersion: '1.2'
       vnetRouteAllEnabled: true
+      alwaysOn: true
+      healthCheckPath: healthCheckPath
+      scmMinTlsVersion: '1.2'
+      remoteDebuggingEnabled: false
     }
+  }
+}
+
+// Basic (username/password) publishing is disabled; deployments use Entra ID tokens.
+resource ftpBasicPublishing 'Microsoft.Web/sites/basicPublishingCredentialsPolicies@2025-03-01' = {
+  parent: appServiceApp
+  name: 'ftp'
+  properties: {
+    allow: false
+  }
+}
+
+resource scmBasicPublishing 'Microsoft.Web/sites/basicPublishingCredentialsPolicies@2025-03-01' = {
+  parent: appServiceApp
+  name: 'scm'
+  properties: {
+    allow: false
   }
 }
 

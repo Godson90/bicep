@@ -1,0 +1,54 @@
+---
+# Synopsis: Dev and the East US warm standby run one App Service instance without zone redundancy (ADR-008).
+apiVersion: github.com/microsoft/PSRule/v1
+kind: SuppressionGroup
+metadata:
+  name: DefenStack.SingleInstanceAppServicePlans
+spec:
+  rule:
+    - Azure.AppService.AvailabilityZone
+    - Azure.AppService.PlanInstanceCount
+  if:
+    name: '.'
+    in:
+      - asp-defenstack-dev-wus3
+      - asp-defenstack-prod-eus
+---
+# Synopsis: The dev workspace is single-region; only prod replicates to the secondary region (ADR-008).
+apiVersion: github.com/microsoft/PSRule/v1
+kind: SuppressionGroup
+metadata:
+  name: DefenStack.DevWorkspaceReplication
+spec:
+  rule:
+    - Azure.Log.Replication
+  if:
+    name: '.'
+    equals: log-defenstack-dev
+---
+# Synopsis: Dev firewall policy runs threat intelligence in Alert mode; prod runs Deny (ADR-003).
+apiVersion: github.com/microsoft/PSRule/v1
+kind: SuppressionGroup
+metadata:
+  name: DefenStack.DevFirewallAlertMode
+spec:
+  rule:
+    - Azure.Firewall.PolicyMode
+  if:
+    name: '.'
+    equals: afwp-defenstack-dev-wus3
+---
+# Synopsis: Bastion must open SSH/RDP sessions to the management subnet; its NSG allows exactly that and denies all other SSH/RDP egress (ADR-013).
+apiVersion: github.com/microsoft/PSRule/v1
+kind: SuppressionGroup
+metadata:
+  name: DefenStack.BastionSessionEgress
+spec:
+  rule:
+    - Azure.NSG.LateralTraversal
+  if:
+    name: '.'
+    in:
+      - vnet-defenstack-dev-wus3-hub-bastion-nsg
+      - vnet-defenstack-prod-wus3-hub-bastion-nsg
+      - vnet-defenstack-prod-eus-hub-bastion-nsg
