@@ -132,6 +132,11 @@ Describe 'Phase 4 documentation' {
         $text | Should -Match ([regex]::Escape('https://<app>.azurewebsites.net/'))
     }
 
+    It 'the ingress runbook documents that success is Front Door''s own origin status (final review A)' {
+        $text = Get-Content (Get-RepoPath 'docs/runbooks/04-ingress.md') -Raw
+        $text | Should -Match ([regex]::Escape('sharedPrivateLinkResource.status'))
+    }
+
     It 'the architecture overview draws the ingress flow and lists the Phase 4 ADRs' {
         $text = Get-Content (Get-RepoPath 'docs/architecture/overview.md') -Raw
         $text | Should -Match 'Azure Front Door Premium \(global'

@@ -85,20 +85,26 @@ This runbook makes the private App Service reachable by **public internet users*
 
 3. **Deploy through the pipeline**: GitHub → Actions → `deploy` → **Run workflow** → environment `dev` (prod: the two-approval flow in `ADR-012`). Expect 10–20 minutes for the Front Door resources.
 
-4. **Approval runs automatically.** After `Deploy`, the job runs **Approve Front Door private endpoint connections**. It reads `appServiceIds` from the deployment outputs and calls the approval script, which:
-   - waits, by default for up to 15 minutes, for Front Door to create its connection on each app;
-   - approves a connection whose request message is `defenstack-frontdoor` only when the app has no approved Front Door connection yet and exactly one such request is pending;
+4. **Approval runs automatically.** After `Deploy`, a second `azure/login` step refreshes the pipeline's token (the approval wait can outlast the first one), then the job runs **Approve Front Door private endpoint connections**. It reads `appServiceIds`, `frontDoorProfileName` and `globalResourceGroupName` from the deployment outputs and calls the approval script, which:
+   - waits, by default for up to 15 minutes per app, for Front Door to create its connection on each app;
+   - approves a connection whose request message is `defenstack-frontdoor` only when the app has no approved Front Door connection yet and exactly one such request is pending (the message match is case-sensitive, so a different-case message is never treated as a match);
    - reports and leaves alone every other pending connection;
-   - **approves nothing and fails the step** when a `defenstack-frontdoor` request is pending while a Front Door connection is already approved, or when more than one such request is pending. Anyone can put that text on a private endpoint request, so either case may be a spoofed request: follow §5.2.
+   - **approves nothing and fails the step** when a `defenstack-frontdoor` request is pending while a Front Door connection is already approved, or when more than one such request is pending. Anyone can put that text on a private endpoint request, so either case may be a spoofed request: follow §5.2;
+   - **finishes only when Front Door's own origin reports its private link `Approved`** (read with `az afd origin list`, field `sharedPrivateLinkResource.status`), not merely when a connection is Approved. If it approved a connection but the origin never reaches `Approved` within the timeout, it fails with a distinct message, because that connection may not be the one Front Door is actually using (§5.2).
 
-   Check: the step log shows `<app>: approved Front Door connection '<name>' (private endpoint <id>).` on the first deployment, and ends with `<app>: 1 Front Door connection(s) approved.` for each app.
+   Check: the step log shows `<app>: approved Front Door connection '<name>' (private endpoint <id>).` on the first deployment, and ends with `<app>: Front Door origin '<origin>' reports its private link Approved.` for each app.
 
    **Deploying from a workstation instead** (or if the step failed), run the same script by hand:
 
    ```powershell
-   $d = az deployment sub list --query "sort_by([?properties.outputs.appServiceIds], &properties.timestamp)[-1].name" -o tsv
-   $ids = az deployment sub show --name $d --query properties.outputs.appServiceIds.value -o json | ConvertFrom-Json
-   ./scripts/Approve-FrontDoorPrivateEndpoints.ps1 -AppServiceId $ids
+   $d = az deployment sub list --query "sort_by([?properties.outputs.appServiceIds && properties.parameters.environmentName.value=='dev'], &properties.timestamp)[-1].name" -o tsv
+   # Replace `dev` with `prod` for prod. If you have the Actions run, the pipeline's own deployment name,
+   # `gh-<run id>-<attempt>`, is the most precise choice and skips this lookup entirely.
+   $outputs = az deployment sub show --name $d --query properties.outputs -o json | ConvertFrom-Json
+   ./scripts/Approve-FrontDoorPrivateEndpoints.ps1 `
+     -AppServiceId $outputs.appServiceIds.value `
+     -FrontDoorProfileName $outputs.frontDoorProfileName.value `
+     -FrontDoorResourceGroupName $outputs.globalResourceGroupName.value
    ```
 
    Preview it first with `-WhatIf`, which approves nothing and does not wait.
@@ -172,10 +178,18 @@ Approve only rows whose `message` is `defenstack-frontdoor`. Keep that text as t
 az network private-endpoint-connection approve --id "$appId/privateEndpointConnections/<name>" --description "defenstack-frontdoor approved manually by <you>"
 ```
 
+**Confirm Front Door's own view afterwards**, the same thing the script waits for:
+
+```powershell
+az afd origin show --profile-name afd-defenstack-dev --resource-group rg-defenstack-dev-global --origin-group-name app --origin-name app-wus3 --query sharedPrivateLinkResource.status -o tsv
+```
+
+If it still shows `Pending` a few minutes after you approved, the connection you approved is not Front Door's: reject it immediately and treat it as a security incident (see item 1 below). Approving a connection in the portal without the `defenstack-frontdoor` prefix is fine now, because the script (and this check) trust the origin's status, not the connection's description — but prefer running the script, which does this check for you.
+
 **The request message is not proof.** Whoever creates a private endpoint chooses its request message, so a third party can also send `defenstack-frontdoor`. This is why the script refuses to choose between several matching requests, or to approve one while Front Door's connection is already approved. When the step fails that way:
 
 1. If a Front Door connection is already `Approved` and the origin is healthy (the §6 origin health row shows `100`), Front Door does not need another one. Reject every pending matching request: `az network private-endpoint-connection reject --id "$appId/privateEndpointConnections/<name>" --description "unexpected request"`. Then raise a security incident and re-run the pipeline.
-2. If several matching requests are pending and none is approved (a first deployment), you cannot tell which one is Front Door's. Reject them all. Then delete and recreate the origin so that Front Door sends a fresh request: `az afd origin delete --profile-name afd-defenstack-<env> --resource-group rg-defenstack-<env>-global --origin-group-name app --origin-name app-<regionCode> --yes`, then redeploy. If more than one matching request appears again, treat it as an incident.
+2. If several matching requests are pending and none is approved (a first deployment), you cannot tell which one is Front Door's. Reject them all. Then delete and recreate the origin so that Front Door sends a fresh request: `az afd origin delete --profile-name afd-defenstack-<env> --resource-group rg-defenstack-<env>-global --origin-group-name app --origin-name app-<regionCode> --yes`, then redeploy. If more than one matching request appears again, treat it as an incident. Prod: the profile's `CanNotDelete` lock blocks deleting the origin (`ScopeLocked`). Delete the lock first (`az lock list -g rg-defenstack-prod-global -o table`, then `az lock delete --ids <id>`); the next deployment recreates it.
 3. Record the approved connection's private endpoint ID from the step log (`(private endpoint <id>)`) in the PR. Compare later approvals against it.
 
 **Never approve a pending connection with any other message.** Nothing in this project creates one, so it is an unknown party asking for private access to the app. Reject it (`az network private-endpoint-connection reject --id ... --description "unexpected request"`) and raise a security incident.
@@ -242,7 +256,7 @@ Run from any internet-connected workstation. `$fd` is the endpoint hostname from
 | Origins and priorities | `az afd origin list --profile-name afd-defenstack-dev --resource-group rg-defenstack-dev-global --origin-group-name app --query "[].{name:name, priority:priority, enabled:enabledState, privateLink:sharedPrivateLinkResource.status}" -o table` | `app-wus3`, priority `1`, `Enabled`, `Approved` (prod adds `app-eus`, priority `2`) |
 | Origin health | `az monitor metrics list --resource $(az afd profile show -n afd-defenstack-dev -g rg-defenstack-dev-global --query id -o tsv) --metric OriginHealthPercentage --interval PT5M --query "value[0].timeseries[0].data[-1].average"` | `100` |
 | WAF policy settings | `az network front-door waf-policy show -n wafdefenstackdev -g rg-defenstack-dev-global --query "{mode:policySettings.mode, sets:managedRules.managedRuleSets[].[ruleSetType, ruleSetVersion]}" -o json` | `"mode": "Prevention"`; `sets` lists `["Microsoft_DefaultRuleSet", "2.1"]` and `["Microsoft_BotManagerRuleSet", "1.1"]` |
-| Logs arrive | KQL: `AzureDiagnostics \| where Category == "FrontDoorAccessLog" and TimeGenerated > ago(1h) \| summarize count() by httpStatusCode_d` | `200`, `403` and `307` rows from the checks above |
+| Logs arrive | KQL: `AzureDiagnostics \| where Category == "FrontDoorAccessLog" and TimeGenerated > ago(1h) \| summarize count() by httpStatusCode_s` (confirm the column suffix in dev; Front Door logs it as a string) | `200`, `403` and `307` rows from the checks above |
 | Custom domain (when set) | `az afd custom-domain show ... --query "{validation:domainValidationState, tls:tlsSettings.minimumTlsVersion}" -o table` and `Resolve-DnsName app.example.com` | `Approved`, `TLS12`; the name resolves through a CNAME to `$fd` |
 
 Paste every output into the Phase 4 PR (spec §6 definition of done).
@@ -250,11 +264,11 @@ Paste every output into the Phase 4 PR (spec §6 definition of done).
 ## 7. Rollback
 
 - **Remove the custom domain:**
-  1. Set `customDomainHostName = ''` and redeploy, which detaches the domain from the route and the security policy.
-  2. Delete the domain resource, because incremental deployments do not delete it: `az afd custom-domain delete --profile-name afd-defenstack-<env> --resource-group rg-defenstack-<env>-global --custom-domain-name <name> --yes`.
-  3. Point the CNAME back at the previous target **first**, if one existed, so users never hit a dead name.
+  1. Point the CNAME back at the previous target, if one existed, so users never hit a dead name.
+  2. Set `customDomainHostName = ''` and redeploy, which detaches the domain from the route and the security policy.
+  3. Delete the domain resource, because incremental deployments do not delete it: `az afd custom-domain delete --profile-name afd-defenstack-<env> --resource-group rg-defenstack-<env>-global --custom-domain-name <name> --yes`. Prod: the profile's `CanNotDelete` lock blocks this (`ScopeLocked`). Delete the lock first (`az lock list -g rg-defenstack-prod-global -o table`, then `az lock delete --ids <id>`); the next deployment recreates it.
 - **Take public ingress down entirely**, which makes the app private-only again:
-  1. In prod, delete the two locks (`az lock list -g rg-defenstack-prod-global -o table`, then `az lock delete --ids <id>`).
+  1. In prod, delete the two locks (`az lock list -g rg-defenstack-prod-global -o table`, then `az lock delete --ids <id>`); the next deployment recreates them.
   2. Run `az afd profile delete --profile-name afd-defenstack-<env> --resource-group rg-defenstack-<env>-global` and `az network front-door waf-policy delete -n wafdefenstack<env> -g rg-defenstack-<env>-global`.
   3. Deleting the profile removes Front Door's private endpoints. Each App Service connection becomes `Disconnected`. Delete those with `az network private-endpoint-connection delete --id <connection id>`.
   4. A later deployment of a Phase 4 commit recreates everything. The new endpoint gets a **new hash**, so update any CNAME.
@@ -282,6 +296,8 @@ Paste every output into the Phase 4 PR (spec §6 definition of done).
 | Approval script warns `leaving pending connection ... not a Front Door request` | An unexpected private endpoint request on the app | Follow §5.2: reject it and raise a security incident |
 | Pipeline step fails with `a Front Door connection is already approved, but a pending connection with the same request message ... also exists` | Someone sent a private endpoint request carrying Front Door's request message after Front Door's connection was approved: a possible spoofed request | §5.2 step 1: reject the pending request(s), raise an incident, re-run |
 | Pipeline step fails with `multiple pending connections share the request message` | More than one request carries Front Door's message before any approval, so the real one cannot be told apart | §5.2 step 2: reject them all, recreate the origin, redeploy |
+| Pipeline step fails with `did not bring Front Door's origin ... to Approved ... it may not be Front Door's request` | The script approved a connection, but Front Door's origin never reported `sharedPrivateLinkResource.status` as `Approved` within the timeout: the connection it approved may not be Front Door's | §5.2: reject the connection named in the message and treat it as a security incident |
+| Pipeline step fails with `no Front Door origin in <profile>/<originGroup> references this App Service` | No origin in the origin group has a `sharedPrivateLinkResource.privateLink.id` matching this app, so Front Door never created a request for it | Check the origin exists (`az afd origin list ...`); if missing or misconfigured, redeploy |
 | `MissingSubscriptionRegistration ... Microsoft.Cdn` | Provider not registered | §2 |
 | `403` for legitimate requests; the WAF log shows `Block` | WAF false positive | §5.3 |
 | `429` or `403` from `RateLimitPerClientIp` for a legitimate client | The client exceeds 1000 requests per minute (shared NAT, load test) | Raise `rateLimitThresholdPerMinute` from measured traffic (§8) |

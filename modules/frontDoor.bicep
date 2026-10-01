@@ -45,6 +45,8 @@ var privateLinkRequestMessage = 'defenstack-frontdoor'
 var hasCustomDomain = !empty(customDomainHostName)
 var customDomainName = replace(customDomainHostName, '.', '-')
 
+// Counts per TCP peer (socket) IP, not any client-supplied header, so it cannot be inflated or evaded by forging
+// X-Forwarded-For.
 var rateLimitRule = {
   name: 'RateLimitPerClientIp'
   priority: 100
@@ -73,6 +75,8 @@ var geoFilterRules = empty(allowedCountryCodes) ? [] : [
     ruleType: 'MatchRule'
     matchConditions: [
       {
+        // SocketAddr is the TCP peer address Front Door itself observed, not a client-supplied header, so it
+        // cannot be spoofed via X-Forwarded-For.
         matchVariable: 'SocketAddr'
         operator: 'GeoMatch'
         negateCondition: true
