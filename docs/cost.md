@@ -128,6 +128,8 @@ From `docs/superpowers/specs/2026-09-25-secure-connectivity-design.md` §6, the
 resources expected to dominate spend in later phases (not present in Phase 0).
 The VPN gateway and Azure Bastion arrived in Phase 3, and Azure Front Door
 Premium in Phase 4 (see their deltas):
+- Microsoft Sentinel ingestion
+- Microsoft Defender plans
 
 ## Budget thresholds
 Resource-group budgets and their alert thresholds are created and updated through
