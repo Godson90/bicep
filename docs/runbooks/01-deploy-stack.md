@@ -46,11 +46,14 @@ Every `main.bicep` parameter, with the value each committed `.bicepparam` file s
 | `primaryLocation` | `westus3` | *(default)* | *(default)* | Active region for both environments |
 | `secondaryLocation` | `eastus` | *(default)* | *(default)* | Warm-standby region pair; only used when `deploySecondaryRegion` is `true` |
 | `deploySecondaryRegion` | `false` | `false` | `true` | Dev runs primary-only to halve cost (`ADR-008`); prod runs both regions |
-| `primaryAddressPlan` | *(required)* | `10.21.0.0/16` hub / `10.20.0.0/16` spoke | `10.1.0.0/16` hub / `10.0.0.0/16` spoke | See `docs/architecture/overview.md` §4 |
-| `secondaryAddressPlan` | *(none)* | not set | `10.11.0.0/16` hub / `10.10.0.0/16` spoke | Required only when `deploySecondaryRegion = true` (§9) |
+| `primaryAddressPlan` | *(required)* | `10.21.0.0/16` hub / `10.20.0.0/16` spoke / VPN pool `172.16.210.0/24` | `10.1.0.0/16` hub / `10.0.0.0/16` spoke / VPN pool `172.16.200.0/24` | Includes the Bastion and gateway subnets and the VPN client pool (Phase 3). See `docs/architecture/overview.md` §4 |
+| `secondaryAddressPlan` | *(none)* | not set | `10.11.0.0/16` hub / `10.10.0.0/16` spoke / VPN pool `172.16.201.0/24` | Required only when `deploySecondaryRegion = true` (§9) |
 | `allowedOutboundFqdns` | `[]` | `[]` | `[]` | Empty denies all application egress until an operator allowlists FQDNs |
 | `additionalPrivateEndpointSourceCidrs` | `[]` | *(default)* | *(default)* | Extra CIDRs allowed to reach private endpoints, beyond the two spoke subnets |
-| `managementSourceCidrs` | `[]` | *(default)* | *(default)* | Empty denies all admin SSH/RDP inbound; populated in Phase 3 |
+| `managementSourceCidrs` | `[]` | *(default)* | *(default)* | Extra admin sources only. The Bastion subnet and VPN client pool are always allowed (Phase 3, `ADR-013`) |
+| `deployPrimaryAdminAccess` | `true` | *(default)* | *(default)* | Bastion and the VPN gateway in the primary region ([runbook 03](03-admin-access.md)) |
+| `deploySecondaryAdminAccess` | `false` | *(default)* | *(default)* | Turned on only during failover |
+| `adminGroupObjectId` | `''` | dev admin group | prod admin group | Entra group granted `Virtual Machine Administrator Login` on the jump host (runbook 03 §4) |
 | `healthCheckPath` | `/` | *(default)* | *(default)* | No application code yet (`ADR-006`) |
 | `enableVirtualMachine` | `false` | *(default)* | *(default)* | Optional management VM, primary region only |
 | `virtualMachineOsType` | `Linux` | *(default)* | *(default)* | Only relevant if `enableVirtualMachine = true` |

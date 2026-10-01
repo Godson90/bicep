@@ -79,3 +79,24 @@ Describe 'Shared private DNS' {
         $value | Should -Match "parameters\('deploySecondaryRegion'\)"
     }
 }
+
+Describe 'Admin access (Phase 3)' {
+    It 'deploys admin access in the primary region by default and keeps the warm standby off until failover' {
+        $main.parameters.deployPrimaryAdminAccess.defaultValue | Should -BeExactly $true
+        $main.parameters.deploySecondaryAdminAccess.defaultValue | Should -BeExactly $false
+        $primary.properties.parameters.deployAdminAccess.value | Should -Be "[parameters('deployPrimaryAdminAccess')]"
+        $secondary.properties.parameters.deployAdminAccess.value | Should -Be "[parameters('deploySecondaryAdminAccess')]"
+    }
+
+    It 'passes the admin group to the primary stamp only (the jump host is primary-only)' {
+        $main.parameters.adminGroupObjectId.defaultValue | Should -Be ''
+        $primary.properties.parameters.adminGroupObjectId.value | Should -Be "[parameters('adminGroupObjectId')]"
+        $secondary.properties.parameters.PSObject.Properties.Name | Should -Not -Contain 'adminGroupObjectId'
+    }
+
+    It 'outputs what runbook 03 needs to connect' {
+        foreach ($output in 'primaryResourceGroupName', 'primaryBastionName', 'primaryVpnGatewayName', 'primaryFirewallPrivateIp') {
+            $main.outputs.PSObject.Properties.Name | Should -Contain $output
+        }
+    }
+}

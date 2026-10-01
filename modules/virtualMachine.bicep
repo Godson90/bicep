@@ -37,6 +37,20 @@ param logAnalyticsWorkspaceId string
 @description('CIDR ranges allowed to reach the VM over SSH (22) and RDP (3389). Must match the management subnet NSG; an empty list denies all administrative inbound traffic.')
 param managementSourceCidrs array = []
 
+@description('Availability zone the VM is pinned to. Fixed at creation.')
+@allowed([
+  '1'
+  '2'
+  '3'
+])
+param availabilityZone string = '1'
+
+@description('Object ID of the Entra ID admin security group granted Virtual Machine Administrator Login. Empty skips the assignment.')
+param adminGroupObjectId string = ''
+
+@description('First Update Manager patch window, in UTC (yyyy-MM-dd HH:mm). The window then repeats every Sunday at the same time.')
+param patchWindowStartDateTime string = '2026-10-04 02:00'
+
 var linuxImagePublisher = 'Canonical'
 var linuxImageOffer = '0001-com-ubuntu-server-jammy'
 var linuxImageSku = '22_04-lts-gen2'
@@ -64,6 +78,16 @@ var managementInboundRules = empty(managementSourceCidrs) ? [] : [
   }
 ]
 
+var entraLoginExtensionName = osType == 'Linux' ? 'AADSSHLoginForLinux' : 'AADLoginForWindows'
+var virtualMachineAdministratorLoginRoleId = '1c0163c0-47e6-4577-8991-ea5c82e286e4'
+// Update Manager owns patching: platform-orchestrated installs inside the maintenance window, daily assessment.
+var patchSettings = {
+  patchMode: 'AutomaticByPlatform'
+  assessmentMode: 'AutomaticByPlatform'
+  automaticByPlatformSettings: {
+    bypassPlatformSafetyChecksOnUserSchedule: true
+  }
+}
 var dataCollectionRuleName = '${vmName}-dcr'
 var azureMonitorAgentName = osType == 'Linux' ? 'AzureMonitorLinuxAgent' : 'AzureMonitorWindowsAgent'
 var performanceCounterSource = {
@@ -143,6 +167,22 @@ resource networkSecurityGroup 'Microsoft.Network/networkSecurityGroups@2024-07-0
           destinationPortRange: '*'
         }
       }
+      {
+        name: 'deny-ssh-rdp-outbound'
+        properties: {
+          priority: 4000
+          access: 'Deny'
+          direction: 'Outbound'
+          protocol: '*'
+          sourceAddressPrefix: '*'
+          sourcePortRange: '*'
+          destinationAddressPrefix: '*'
+          destinationPortRanges: [
+            '22'
+            '3389'
+          ]
+        }
+      }
     ])
   }
 }
@@ -173,6 +213,9 @@ resource networkInterface 'Microsoft.Network/networkInterfaces@2024-07-01' = {
 resource virtualMachine 'Microsoft.Compute/virtualMachines@2026-04-01' = {
   name: vmName
   location: location
+  zones: [
+    availabilityZone
+  ]
   identity: {
     type: 'SystemAssigned'
   }
@@ -214,6 +257,7 @@ resource virtualMachine 'Microsoft.Compute/virtualMachines@2026-04-01' = {
             }
           ]
         }
+        patchSettings: patchSettings
       }
     } : {
       computerName: vmName
@@ -222,6 +266,7 @@ resource virtualMachine 'Microsoft.Compute/virtualMachines@2026-04-01' = {
       windowsConfiguration: {
         enableAutomaticUpdates: true
         provisionVMAgent: true
+        patchSettings: patchSettings
       }
     }
     networkProfile: {
@@ -316,6 +361,77 @@ resource dataCollectionRuleAssociation 'Microsoft.Insights/dataCollectionRuleAss
   scope: virtualMachine
   properties: {
     dataCollectionRuleId: dataCollectionRule.id
+  }
+}
+
+// Entra ID sign-in (az ssh vm / Bastion native client with --auth-type AAD); local admin stays for break-glass.
+resource entraLogin 'Microsoft.Compute/virtualMachines/extensions@2026-04-01' = {
+  parent: virtualMachine
+  name: entraLoginExtensionName
+  location: location
+  properties: {
+    publisher: 'Microsoft.Azure.ActiveDirectory'
+    type: entraLoginExtensionName
+    typeHandlerVersion: '1.0'
+    autoUpgradeMinorVersion: true
+  }
+  // One extension operation at a time per VM.
+  dependsOn: [
+    azureMonitorAgent
+  ]
+}
+
+// The admin group signs in as administrator; PIM makes the membership just-in-time (runbook 03).
+resource administratorLogin 'Microsoft.Authorization/roleAssignments@2022-04-01' = if (!empty(adminGroupObjectId)) {
+  name: guid(virtualMachine.id, adminGroupObjectId, virtualMachineAdministratorLoginRoleId)
+  scope: virtualMachine
+  properties: {
+    principalId: adminGroupObjectId
+    principalType: 'Group'
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', virtualMachineAdministratorLoginRoleId)
+  }
+}
+
+// Weekly Update Manager window for critical and security updates.
+resource patchSchedule 'Microsoft.Maintenance/maintenanceConfigurations@2023-04-01' = {
+  name: '${vmName}-patch'
+  location: location
+  properties: {
+    maintenanceScope: 'InGuestPatch'
+    extensionProperties: {
+      InGuestPatchMode: 'User'
+    }
+    maintenanceWindow: {
+      startDateTime: patchWindowStartDateTime
+      duration: '03:00'
+      timeZone: 'UTC'
+      recurEvery: 'Week Sunday'
+    }
+    installPatches: {
+      rebootSetting: 'IfRequired'
+      linuxParameters: {
+        classificationsToInclude: [
+          'Critical'
+          'Security'
+        ]
+      }
+      windowsParameters: {
+        classificationsToInclude: [
+          'Critical'
+          'Security'
+        ]
+      }
+    }
+  }
+}
+
+resource patchScheduleAssignment 'Microsoft.Maintenance/configurationAssignments@2023-04-01' = {
+  name: '${vmName}-patch'
+  scope: virtualMachine
+  location: location
+  properties: {
+    maintenanceConfigurationId: patchSchedule.id
+    resourceId: virtualMachine.id
   }
 }
 

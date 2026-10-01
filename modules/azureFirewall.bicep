@@ -28,6 +28,9 @@ param spokeAddressPrefixes array
 @description('Management subnet CIDR ranges permitted to reach OS update endpoints.')
 param managementAddressPrefixes array
 
+@description('Point-to-site VPN client pools permitted to reach the management subnet over SSH/RDP.')
+param vpnClientAddressPrefixes array = []
+
 @description('Approved outbound FQDNs for App Service traffic. An empty list denies application traffic by default.')
 param allowedOutboundFqdns array = []
 
@@ -107,6 +110,7 @@ module policyRules 'firewallPolicyRules.bicep' = {
     firewallPolicyName: firewallPolicy.name
     spokeAddressPrefixes: spokeAddressPrefixes
     managementAddressPrefixes: managementAddressPrefixes
+    vpnClientAddressPrefixes: vpnClientAddressPrefixes
     allowedOutboundFqdns: allowedOutboundFqdns
   }
 }

@@ -6,21 +6,24 @@ BeforeAll {
         $groups | Where-Object { $_.name -like "*'$Name')]" }
     }
     $dns = Get-Group 'dns-egress'
+    $admin = Get-Group 'admin-access'
     $platform = Get-Group 'platform-egress'
     $approved = Get-Group 'approved-https-egress'
 }
 
 Describe 'Baseline firewall rules (ADR-010)' {
-    It 'defines the dns-egress, platform-egress and approved-https-egress groups at priorities 100, 150, 200' {
-        $groups.Count | Should -Be 3
+    It 'defines the dns-egress, admin-access, platform-egress and approved-https-egress groups at priorities 100, 120, 150, 200' {
+        $groups.Count | Should -Be 4
         $dns.properties.priority | Should -Be 100
+        $admin.properties.priority | Should -Be 120
         $platform.properties.priority | Should -Be 150
         $approved.properties.priority | Should -Be 200
     }
 
     It 'updates the groups one at a time (a policy rejects concurrent rule collection group updates)' {
         @($dns.PSObject.Properties.Name) | Should -Not -Contain 'dependsOn'
-        @($platform.dependsOn) | Should -Contain "[resourceId('Microsoft.Network/firewallPolicies/ruleCollectionGroups', parameters('firewallPolicyName'), 'dns-egress')]"
+        @($admin.dependsOn) | Should -Contain "[resourceId('Microsoft.Network/firewallPolicies/ruleCollectionGroups', parameters('firewallPolicyName'), 'dns-egress')]"
+        @($platform.dependsOn) | Should -Contain "[resourceId('Microsoft.Network/firewallPolicies/ruleCollectionGroups', parameters('firewallPolicyName'), 'admin-access')]"
         @($approved.dependsOn) | Should -Contain "[resourceId('Microsoft.Network/firewallPolicies/ruleCollectionGroups', parameters('firewallPolicyName'), 'platform-egress')]"
     }
 
@@ -36,6 +39,49 @@ Describe 'Baseline firewall rules (ADR-010)' {
         @($rule.destinationAddresses) | Should -Contain 'AzureMonitor'
         @($rule.destinationAddresses) | Should -Contain 'AzureResourceManager'
         @($rule.destinationPorts) | Should -Contain '443'
+    }
+}
+
+Describe 'Admin sessions from VPN clients (Phase 3)' {
+    BeforeAll {
+        $rule = $admin.properties.ruleCollections[0].rules[0]
+    }
+
+    It 'is always deployed so enabling admin access never reorders the group chain' {
+        $admin.PSObject.Properties.Name | Should -Not -Contain 'condition'
+    }
+
+    It 'allows only SSH and RDP from the VPN client pools to the management subnet' {
+        $admin.properties.ruleCollections[0].action.type | Should -Be 'Allow'
+        $rule.ruleType | Should -Be 'NetworkRule'
+        @($rule.ipProtocols) -join ',' | Should -Be 'TCP'
+        $rule.sourceAddresses | Should -Be "[parameters('vpnClientAddressPrefixes')]"
+        $rule.destinationAddresses | Should -Be "[parameters('managementAddressPrefixes')]"
+        @($rule.destinationPorts) -join ',' | Should -Be '22,3389'
+    }
+}
+
+Describe 'Entra ID sign-in egress for the jump host (Phase 3)' {
+    BeforeAll {
+        $collection = $platform.properties.ruleCollections | Where-Object { $_.name -eq 'entra-login' }
+        $rule = $collection.rules[0]
+    }
+
+    It 'allows the Entra login endpoints from the management subnet only, over HTTPS' {
+        $rule.sourceAddresses | Should -Be "[parameters('managementAddressPrefixes')]"
+        @($rule.protocols.protocolType) -join ',' | Should -Be 'Https'
+    }
+
+    It 'derives the login host from the cloud environment instead of hardcoding it' {
+        $template.variables.entraLoginHost | Should -Be "[split(environment().authentication.loginEndpoint, '/')[2]]"
+        @($rule.targetFqdns) | Should -Contain "[variables('entraLoginHost')]"
+        @($rule.targetFqdns) | Should -Contain "[format('device.{0}', variables('entraLoginHost'))]"
+    }
+
+    It 'allows the device registration, pas.windows.net and extension package endpoints' {
+        foreach ($fqdn in 'pas.windows.net', 'packages.microsoft.com', 'enterpriseregistration.windows.net') {
+            @($rule.targetFqdns) | Should -Contain $fqdn
+        }
     }
 }
 

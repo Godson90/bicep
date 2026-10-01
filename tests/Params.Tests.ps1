@@ -74,7 +74,40 @@ Describe 'Address plan' {
             'prod-primary' { $prod.primaryAddressPlan.value }
             'prod-secondary' { $prod.secondaryAddressPlan.value }
         }
-        Test-InsideSixteen $plan.hubAddressSpace[0] @($plan.firewallSubnetPrefix) | Should -BeTrue
+        Test-InsideSixteen $plan.hubAddressSpace[0] @($plan.firewallSubnetPrefix, $plan.bastionSubnetPrefix, $plan.gatewaySubnetPrefix) | Should -BeTrue
         Test-InsideSixteen $plan.spokeAddressSpace[0] @($plan.privateEndpointSubnetPrefix, $plan.appServiceIntegrationSubnetPrefix, $plan.managementSubnetPrefix) | Should -BeTrue
+    }
+}
+
+Describe 'Admin access address plan (Phase 3)' {
+    BeforeAll {
+        $plans = @($dev.primaryAddressPlan.value, $prod.primaryAddressPlan.value, $prod.secondaryAddressPlan.value)
+    }
+
+    It 'sizes the hub subnets for Azure (Bastion /26, GatewaySubnet /27) in <_> plans' -ForEach 'dev-primary', 'prod-primary', 'prod-secondary' {
+        $plan = switch ($_) {
+            'dev-primary' { $dev.primaryAddressPlan.value }
+            'prod-primary' { $prod.primaryAddressPlan.value }
+            'prod-secondary' { $prod.secondaryAddressPlan.value }
+        }
+        $plan.bastionSubnetPrefix | Should -Match '/26$'
+        $plan.gatewaySubnetPrefix | Should -Match '/27$'
+        @(@($plan.firewallSubnetPrefix, $plan.bastionSubnetPrefix, $plan.gatewaySubnetPrefix) | Select-Object -Unique) | Should -HaveCount 3
+    }
+
+    It 'uses the spec pool 172.16.200.0/24 for the prod primary region' {
+        $prod.primaryAddressPlan.value.vpnClientAddressPool | Should -Be '172.16.200.0/24'
+    }
+
+    It 'gives every region and environment its own VPN client pool' {
+        @($plans | ForEach-Object { $_.vpnClientAddressPool } | Select-Object -Unique) | Should -HaveCount 3
+    }
+
+    It 'keeps every VPN client pool outside every VNet (clients must never overlap Azure ranges)' {
+        $vnetRoots = @($plans | ForEach-Object { @($_.hubAddressSpace) + @($_.spokeAddressSpace) } | ForEach-Object { ($_ -split '\.')[0..1] -join '.' })
+        foreach ($plan in $plans) {
+            $poolRoot = ($plan.vpnClientAddressPool -split '\.')[0..1] -join '.'
+            $vnetRoots | Should -Not -Contain $poolRoot
+        }
     }
 }
