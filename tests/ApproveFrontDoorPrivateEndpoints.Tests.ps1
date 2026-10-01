@@ -11,7 +11,21 @@ BeforeAll {
     # and the script itself picks out the one whose sharedPrivateLinkResource.privateLink.id matches).
     # 'approve' flips a connection to Approved and, unless -OriginFlipsOnApproval is $false, flips the matching
     # origin to Approved too, modeling Front Door eventually catching up. Every call is recorded in $global:AzCalls.
+    # az afd origin list/show print a FLATTENED shape: sharedPrivateLinkResource sits at the top level of each
+    # origin, not nested under properties (runbook 04 uses this shape directly: --query sharedPrivateLinkResource.status).
     function New-Origin([string]$Name, [string]$Status, [string]$ForAppId = $appId) {
+        [pscustomobject]@{
+            name                      = $Name
+            sharedPrivateLinkResource = [pscustomobject]@{
+                status      = $Status
+                privateLink = [pscustomobject]@{ id = $ForAppId }
+            }
+        }
+    }
+
+    # Older/alternate shape, nested under properties. The script must fall back to this when the top-level
+    # sharedPrivateLinkResource property is absent.
+    function New-NestedOrigin([string]$Name, [string]$Status, [string]$ForAppId = $appId) {
         [pscustomobject]@{
             name       = $Name
             properties = [pscustomobject]@{
@@ -68,8 +82,9 @@ BeforeAll {
                 if ($global:FakeOriginFlipsOnApproval) {
                     $forAppId = ($id -split '/privateEndpointConnections/')[0]
                     foreach ($o in $global:FakeOrigins) {
-                        if ($o.properties.sharedPrivateLinkResource.privateLink.id -ieq $forAppId) {
-                            $o.properties.sharedPrivateLinkResource.status = 'Approved'
+                        $splr = if ($o.sharedPrivateLinkResource) { $o.sharedPrivateLinkResource } else { $o.properties.sharedPrivateLinkResource }
+                        if ($splr -and $splr.privateLink.id -ieq $forAppId) {
+                            $splr.status = 'Approved'
                         }
                     }
                 }
@@ -342,6 +357,33 @@ Describe 'Approve-FrontDoorPrivateEndpoints.ps1 (Phase 4)' {
             Set-FakeConnections -Connections @(New-Connection 'fd-1' 'Pending' 'DEFENSTACK-FRONTDOOR') -Origins @(New-Origin 'app-wus3' 'Pending')
             { & $scriptPath -AppServiceId $appId -FrontDoorProfileName $fdProfile -FrontDoorResourceGroupName $fdRg -TimeoutSeconds 0 -WarningAction SilentlyContinue | Out-Null } |
                 Should -Throw '*no Front Door private endpoint connection was approved*'
+            Get-Approvals | Should -BeNullOrEmpty
+        }
+
+        It 'recognizes the origin private link status and id when sharedPrivateLinkResource is nested under properties (fallback shape)' {
+            Set-FakeConnections -Connections @(New-Connection 'fd-1' 'Pending' 'defenstack-frontdoor') -Origins @(New-NestedOrigin 'app-wus3' 'Pending')
+            & $scriptPath -AppServiceId $appId -FrontDoorProfileName $fdProfile -FrontDoorResourceGroupName $fdRg -TimeoutSeconds 0 | Out-Null
+            (Get-Approvals).Count | Should -Be 1
+        }
+    }
+
+    Context 'origin status refuses a prefix-less approval that spoofs a pending request (final fix 2, C2)' {
+        It 'throws and approves nothing when a connection is Approved without the prefix, the origin already reports Approved, and a Pending exact-message request also exists' {
+            Set-FakeConnections -Connections @(
+                New-Connection 'fd-1' 'Approved' 'approved manually by an operator'
+                New-Connection 'fd-2' 'Pending' 'defenstack-frontdoor'
+            ) -Origins @(New-Origin 'app-wus3' 'Approved')
+            { & $scriptPath -AppServiceId $appId -FrontDoorProfileName $fdProfile -FrontDoorResourceGroupName $fdRg -TimeoutSeconds 0 | Out-Null } |
+                Should -Throw '*already*Approved*cannot be Front Door*fd-2*'
+            Get-Approvals | Should -BeNullOrEmpty
+        }
+    }
+
+    Context 'distinct timeout message when a prefixed connection is already approved but the origin lags (final fix 2, C3)' {
+        It 'throws a message naming the origin and its status when the connection was already Approved before this run and the origin never reaches Approved' {
+            Set-FakeConnections -Connections @(New-Connection 'fd-1' 'Approved' 'defenstack-frontdoor approved by Approve-FrontDoorPrivateEndpoints.ps1') -Origins @(New-Origin 'app-wus3' 'Pending')
+            { & $scriptPath -AppServiceId $appId -FrontDoorProfileName $fdProfile -FrontDoorResourceGroupName $fdRg -TimeoutSeconds 0 | Out-Null } |
+                Should -Throw "*a Front Door connection is approved but origin 'app-wus3' still reports 'Pending' after 0 seconds*runbook 04 section 9*"
             Get-Approvals | Should -BeNullOrEmpty
         }
     }

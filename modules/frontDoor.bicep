@@ -45,8 +45,10 @@ var privateLinkRequestMessage = 'defenstack-frontdoor'
 var hasCustomDomain = !empty(customDomainHostName)
 var customDomainName = replace(customDomainHostName, '.', '-')
 
-// Counts per TCP peer (socket) IP, not any client-supplied header, so it cannot be inflated or evaded by forging
-// X-Forwarded-For.
+// The match condition's RemoteAddr is derived from X-Forwarded-For, not the TCP peer (socket) address, but the
+// condition here matches all traffic regardless of that value (0.0.0.0/0 and ::/0 cover every IPv4 and IPv6
+// address), so it never filters anything out. Front Door's rate limit itself counts requests per socket IP, not
+// X-Forwarded-For, so the limit cannot be inflated or evaded by forging that header.
 var rateLimitRule = {
   name: 'RateLimitPerClientIp'
   priority: 100

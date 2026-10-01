@@ -102,6 +102,27 @@ function Get-FrontDoorOrigins {
     @($parsed | ForEach-Object { $_ })
 }
 
+# `az afd origin list`/`show` print a FLATTENED shape: sharedPrivateLinkResource sits at the top level of each
+# origin object, not nested under properties (runbook 04 uses this shape directly: --query
+# sharedPrivateLinkResource.status). Fall back to properties.sharedPrivateLinkResource only when the top-level
+# property is absent, in case an older/alternate shape is ever returned.
+function Get-SharedPrivateLinkResource($origin) {
+    if ($origin.sharedPrivateLinkResource) {
+        return $origin.sharedPrivateLinkResource
+    }
+    if ($origin.properties -and $origin.properties.sharedPrivateLinkResource) {
+        return $origin.properties.sharedPrivateLinkResource
+    }
+    return $null
+}
+
+function Find-MatchingOrigin([object[]]$Origins, [string]$ResourceId) {
+    $Origins | Where-Object {
+        $splr = Get-SharedPrivateLinkResource $_
+        $splr -and $splr.privateLink -and [string]$splr.privateLink.id -ieq $ResourceId
+    } | Select-Object -First 1
+}
+
 foreach ($id in $AppServiceId) {
     $appName = ($id -split '/')[-1]
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
@@ -127,6 +148,20 @@ foreach ($id in $AppServiceId) {
 
         foreach ($other in $pendingOther) {
             Write-Warning "$appName`: leaving pending connection '$($other.Name)' (request message '$($other.Description)'): not a Front Door request from this deployment."
+        }
+
+        # Read Front Door's own origin status before deciding whether to approve anything. The "already approved"
+        # refusal below only catches a connection whose description starts with the request message; a connection
+        # approved another way (for example, by hand in the portal, without the prefix) would not match it. Once
+        # Front Door's own origin reports its private link Approved, any pending connection with the same request
+        # message cannot be Front Door's either way, so check this first (runbook 04 section 5.2).
+        $origins = Get-FrontDoorOrigins
+        $matchingOrigin = Find-MatchingOrigin $origins $id
+        $matchingOriginStatus = if ($matchingOrigin) { (Get-SharedPrivateLinkResource $matchingOrigin).status } else { $null }
+
+        if ($matchingOriginStatus -eq 'Approved' -and $pendingMatching.Count -gt 0) {
+            $names = ($pendingMatching | ForEach-Object { $_.Name }) -join ', '
+            throw "$appName`: Front Door's origin '$($matchingOrigin.name)' already reports its private link Approved, so the pending connection with the same request message ('$RequestMessage') cannot be Front Door's ($names). This could be a spoofed request: verify the private endpoint and reject any unexpected connection, then re-run this script (runbook 04 section 5.2)."
         }
 
         if ($approvedFrontDoor.Count -gt 0 -and $pendingMatching.Count -gt 0) {
@@ -156,16 +191,12 @@ foreach ($id in $AppServiceId) {
         }
 
         # Approving a connection is this script's own action, not proof Front Door is using it. Trust only
-        # Front Door's own origin status for success.
+        # Front Door's own origin status for success. Re-read it: approving above may have just flipped it.
         $origins = Get-FrontDoorOrigins
-        $matchingOrigin = $origins | Where-Object {
-            $_.properties -and
-            $_.properties.sharedPrivateLinkResource -and
-            $_.properties.sharedPrivateLinkResource.privateLink -and
-            [string]$_.properties.sharedPrivateLinkResource.privateLink.id -ieq $id
-        } | Select-Object -First 1
+        $matchingOrigin = Find-MatchingOrigin $origins $id
+        $matchingOriginStatus = if ($matchingOrigin) { (Get-SharedPrivateLinkResource $matchingOrigin).status } else { $null }
 
-        if ($matchingOrigin -and $matchingOrigin.properties.sharedPrivateLinkResource.status -eq 'Approved') {
+        if ($matchingOriginStatus -eq 'Approved') {
             Write-Output "$appName`: Front Door origin '$($matchingOrigin.name)' reports its private link Approved."
             break
         }
@@ -176,6 +207,9 @@ foreach ($id in $AppServiceId) {
             }
             if ($approvedConnectionForApp) {
                 throw "$appName`: the approved connection '$($approvedConnectionForApp.Name)' (private endpoint $($approvedConnectionForApp.PrivateEndpointId)) did not bring Front Door's origin '$($matchingOrigin.name)' to Approved within $TimeoutSeconds seconds; it may not be Front Door's request. Reject it and follow runbook 04 section 5.2."
+            }
+            if ($approvedFrontDoor.Count -gt 0) {
+                throw "$appName`: a Front Door connection is approved but origin '$($matchingOrigin.name)' still reports '$matchingOriginStatus' after $TimeoutSeconds seconds; check the origin in the Front Door profile (runbook 04 section 9)."
             }
             throw "$appName`: no Front Door private endpoint connection was approved within $TimeoutSeconds seconds. Check the origin in the Front Door profile, then re-run this script (runbook 04 section 9)."
         }
