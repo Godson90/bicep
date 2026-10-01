@@ -109,3 +109,11 @@ jobs:
             --name "gh-${{ github.run_id }}-${{ github.run_attempt }}" \
             --parameters "params/${TARGET_ENV}.bicepparam" \
             --output table
+
+      # Front Door reaches each App Service over Private Link; its connections stay Pending until approved (runbook 04).
+      - name: Approve Front Door private endpoint connections
+        shell: pwsh
+        run: |
+          $ids = az deployment sub show --name "gh-${{ github.run_id }}-${{ github.run_attempt }}" --query properties.outputs.appServiceIds.value --output json | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0 -or -not $ids) { throw 'Could not read appServiceIds from the deployment outputs.' }
+          ./scripts/Approve-FrontDoorPrivateEndpoints.ps1 -AppServiceId $ids

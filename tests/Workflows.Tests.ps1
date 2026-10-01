@@ -88,3 +88,17 @@ Describe 'Deploy workflow plan/apply split (Phase 2)' {
         $planJob | Should -Match 'overwrite: true'
     }
 }
+
+Describe 'Front Door private endpoint approval (Phase 4)' {
+    It 'approves Front Door connections after the deployment, from the deployment outputs' {
+        $create = $deploy.IndexOf('az deployment sub create')
+        $approve = $deploy.IndexOf('./scripts/Approve-FrontDoorPrivateEndpoints.ps1 -AppServiceId $ids')
+        $approve | Should -BeGreaterThan $create
+        $deploy | Should -Match ([regex]::Escape('--query properties.outputs.appServiceIds.value'))
+        $deploy | Should -Match ([regex]::Escape('az deployment sub show --name "gh-${{ github.run_id }}-${{ github.run_attempt }}"'))
+    }
+
+    It 'fails the job when the outputs cannot be read' {
+        $deploy | Should -Match ([regex]::Escape("throw 'Could not read appServiceIds from the deployment outputs.'"))
+    }
+}

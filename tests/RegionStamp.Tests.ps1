@@ -186,3 +186,9 @@ Describe 'Region stamp admin access (Phase 3)' {
         }
     }
 }
+
+Describe 'Region stamp ingress output (Phase 4)' {
+    It 'outputs the App Service resource ID for the Front Door Private Link origin' {
+        $stamp.outputs.appServiceId.value | Should -Be "[reference('appService').outputs.appServiceAppId.value]"
+    }
+}
