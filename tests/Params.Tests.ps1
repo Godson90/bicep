@@ -111,3 +111,10 @@ Describe 'Admin access address plan (Phase 3)' {
         }
     }
 }
+
+Describe 'Front Door custom domain (Phase 4)' {
+    It 'leaves the custom domain empty in <_> until the external DNS records exist (runbook 04)' -ForEach 'dev', 'prod' {
+        $parameters = if ($_ -eq 'dev') { $dev } else { $prod }
+        $parameters.customDomainHostName.value | Should -Be ''
+    }
+}

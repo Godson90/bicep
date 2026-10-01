@@ -302,6 +302,7 @@ output expectedFirewallPrivateIp string = firewallPrivateIp
 output bastionName string = deployAdminAccess ? names.bastion : ''
 output vpnGatewayName string = deployAdminAccess ? names.vpnGateway : ''
 output appServiceName string = names.appService
+output appServiceId string = appService.outputs.appServiceAppId
 output appServiceHostName string = appService.outputs.appServiceAppHostName
 output keyVaultName string = names.keyVault
 output storageAccountName string = names.storageAccount

@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "10345088740497350405"
+      "templateHash": "11778462052488647586"
     }
   },
   "definitions": {
@@ -204,6 +204,13 @@
       "defaultValue": "",
       "metadata": {
         "description": "Object ID of the Entra ID admin security group granted Virtual Machine Administrator Login on the management VM. Empty skips the assignment."
+      }
+    },
+    "customDomainHostName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Custom domain served by Front Door, for example app.example.com, hosted at an external DNS provider. Empty serves only the azurefd.net hostname."
       }
     },
     "healthCheckPath": {
@@ -642,7 +649,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "8225818268337419252"
+              "templateHash": "3830908815412313554"
             }
           },
           "definitions": {
@@ -4592,6 +4599,10 @@
             "appServiceName": {
               "type": "string",
               "value": "[variables('names').appService]"
+            },
+            "appServiceId": {
+              "type": "string",
+              "value": "[reference('appService').outputs.appServiceAppId.value]"
             },
             "appServiceHostName": {
               "type": "string",
@@ -4669,7 +4680,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "8225818268337419252"
+              "templateHash": "3830908815412313554"
             }
           },
           "definitions": {
@@ -8620,6 +8631,10 @@
               "type": "string",
               "value": "[variables('names').appService]"
             },
+            "appServiceId": {
+              "type": "string",
+              "value": "[reference('appService').outputs.appServiceAppId.value]"
+            },
             "appServiceHostName": {
               "type": "string",
               "value": "[reference('appService').outputs.appServiceAppHostName.value]"
@@ -8637,6 +8652,420 @@
       },
       "dependsOn": [
         "global"
+      ]
+    },
+    "frontDoor": {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('front-door-{0}', parameters('environmentName'))]",
+      "resourceGroup": "[variables('globalResourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "profileName": {
+            "value": "[format('afd-defenstack-{0}', parameters('environmentName'))]"
+          },
+          "endpointName": {
+            "value": "[format('fde-defenstack-{0}', parameters('environmentName'))]"
+          },
+          "wafPolicyName": {
+            "value": "[format('wafdefenstack{0}', parameters('environmentName'))]"
+          },
+          "origins": {
+            "value": "[concat(createArray(createObject('name', format('app-{0}', variables('primaryRegionCode')), 'appServiceId', reference('primaryStamp').outputs.appServiceId.value, 'hostName', reference('primaryStamp').outputs.appServiceHostName.value, 'location', parameters('primaryLocation'))), if(parameters('deploySecondaryRegion'), createArray(createObject('name', format('app-{0}', variables('secondaryRegionCode')), 'appServiceId', reference('secondaryStamp').outputs.appServiceId.value, 'hostName', reference('secondaryStamp').outputs.appServiceHostName.value, 'location', parameters('secondaryLocation'))), createArray()))]"
+          },
+          "healthProbePath": {
+            "value": "[parameters('healthCheckPath')]"
+          },
+          "customDomainHostName": {
+            "value": "[parameters('customDomainHostName')]"
+          },
+          "logAnalyticsWorkspaceId": {
+            "value": "[reference('global').outputs.logAnalyticsWorkspaceId.value]"
+          },
+          "enableDeleteLock": {
+            "value": "[variables('isProd')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "9700455370740627386"
+            }
+          },
+          "parameters": {
+            "profileName": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 90,
+              "metadata": {
+                "description": "Front Door profile name."
+              }
+            },
+            "endpointName": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 46,
+              "metadata": {
+                "description": "Front Door endpoint name. Azure appends a hash to form <name>-<hash>.z01.azurefd.net."
+              }
+            },
+            "wafPolicyName": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "metadata": {
+                "description": "WAF policy name. Letters and digits only, starting with a letter."
+              }
+            },
+            "origins": {
+              "type": "array",
+              "minLength": 1,
+              "maxLength": 5,
+              "metadata": {
+                "description": "Origins in failover order: the first entry is priority 1 (active), the next priority 2 (standby). Each entry: { name, appServiceId, hostName, location }."
+              }
+            },
+            "healthProbePath": {
+              "type": "string",
+              "defaultValue": "/",
+              "metadata": {
+                "description": "Relative path Front Door probes on every origin (the App Service health check path)."
+              }
+            },
+            "customDomainHostName": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Custom domain served by the endpoint, for example app.example.com. Empty serves only the azurefd.net hostname."
+              }
+            },
+            "rateLimitThresholdPerMinute": {
+              "type": "int",
+              "defaultValue": 1000,
+              "minValue": 100,
+              "maxValue": 100000,
+              "metadata": {
+                "description": "Requests per minute from one client IP before the WAF blocks it."
+              }
+            },
+            "allowedCountryCodes": {
+              "type": "array",
+              "defaultValue": [],
+              "metadata": {
+                "description": "ISO 3166-1 alpha-2 country codes allowed to reach the app. Empty disables geo-filtering."
+              }
+            },
+            "logAnalyticsWorkspaceId": {
+              "type": "string",
+              "metadata": {
+                "description": "Log Analytics workspace resource ID for access, health probe and WAF logs."
+              }
+            },
+            "enableDeleteLock": {
+              "type": "bool",
+              "defaultValue": false,
+              "metadata": {
+                "description": "Apply CanNotDelete locks to the profile and the WAF policy."
+              }
+            }
+          },
+          "variables": {
+            "privateLinkRequestMessage": "defenstack-frontdoor",
+            "hasCustomDomain": "[not(empty(parameters('customDomainHostName')))]",
+            "customDomainName": "[replace(parameters('customDomainHostName'), '.', '-')]",
+            "rateLimitRule": {
+              "name": "RateLimitPerClientIp",
+              "priority": 100,
+              "enabledState": "Enabled",
+              "ruleType": "RateLimitRule",
+              "rateLimitDurationInMinutes": 1,
+              "rateLimitThreshold": "[parameters('rateLimitThresholdPerMinute')]",
+              "matchConditions": [
+                {
+                  "matchVariable": "RemoteAddr",
+                  "operator": "IPMatch",
+                  "negateCondition": false,
+                  "matchValue": [
+                    "0.0.0.0/0",
+                    "::/0"
+                  ]
+                }
+              ],
+              "action": "Block"
+            },
+            "geoFilterRules": "[if(empty(parameters('allowedCountryCodes')), createArray(), createArray(createObject('name', 'BlockOutsideAllowedCountries', 'priority', 200, 'enabledState', 'Enabled', 'ruleType', 'MatchRule', 'matchConditions', createArray(createObject('matchVariable', 'SocketAddr', 'operator', 'GeoMatch', 'negateCondition', true(), 'matchValue', parameters('allowedCountryCodes'))), 'action', 'Block')))]"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Cdn/profiles",
+              "apiVersion": "2024-09-01",
+              "name": "[parameters('profileName')]",
+              "location": "global",
+              "sku": {
+                "name": "Premium_AzureFrontDoor"
+              },
+              "identity": {
+                "type": "SystemAssigned"
+              },
+              "properties": {
+                "originResponseTimeoutSeconds": 60
+              }
+            },
+            {
+              "type": "Microsoft.Cdn/profiles/afdEndpoints",
+              "apiVersion": "2024-09-01",
+              "name": "[format('{0}/{1}', parameters('profileName'), parameters('endpointName'))]",
+              "location": "global",
+              "properties": {
+                "enabledState": "Enabled",
+                "autoGeneratedDomainNameLabelScope": "TenantReuse"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Cdn/profiles', parameters('profileName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Network/FrontDoorWebApplicationFirewallPolicies",
+              "apiVersion": "2024-02-01",
+              "name": "[parameters('wafPolicyName')]",
+              "location": "Global",
+              "sku": {
+                "name": "Premium_AzureFrontDoor"
+              },
+              "properties": {
+                "policySettings": {
+                  "enabledState": "Enabled",
+                  "mode": "Prevention",
+                  "requestBodyCheck": "Enabled"
+                },
+                "customRules": {
+                  "rules": "[concat(createArray(variables('rateLimitRule')), variables('geoFilterRules'))]"
+                },
+                "managedRules": {
+                  "managedRuleSets": [
+                    {
+                      "ruleSetType": "Microsoft_DefaultRuleSet",
+                      "ruleSetVersion": "2.1",
+                      "ruleSetAction": "Block"
+                    },
+                    {
+                      "ruleSetType": "Microsoft_BotManagerRuleSet",
+                      "ruleSetVersion": "1.1"
+                    }
+                  ]
+                }
+              }
+            },
+            {
+              "type": "Microsoft.Cdn/profiles/originGroups",
+              "apiVersion": "2024-09-01",
+              "name": "[format('{0}/{1}', parameters('profileName'), 'app')]",
+              "properties": {
+                "loadBalancingSettings": {
+                  "sampleSize": 4,
+                  "successfulSamplesRequired": 3,
+                  "additionalLatencyInMilliseconds": 50
+                },
+                "healthProbeSettings": {
+                  "probePath": "[parameters('healthProbePath')]",
+                  "probeRequestType": "HEAD",
+                  "probeProtocol": "Https",
+                  "probeIntervalInSeconds": 30
+                },
+                "sessionAffinityState": "Disabled"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Cdn/profiles', parameters('profileName'))]"
+              ]
+            },
+            {
+              "copy": {
+                "name": "appOrigins",
+                "count": "[length(parameters('origins'))]"
+              },
+              "type": "Microsoft.Cdn/profiles/originGroups/origins",
+              "apiVersion": "2024-09-01",
+              "name": "[format('{0}/{1}/{2}', parameters('profileName'), 'app', parameters('origins')[copyIndex()].name)]",
+              "properties": {
+                "hostName": "[parameters('origins')[copyIndex()].hostName]",
+                "originHostHeader": "[parameters('origins')[copyIndex()].hostName]",
+                "httpPort": 80,
+                "httpsPort": 443,
+                "priority": "[add(copyIndex(), 1)]",
+                "weight": 1000,
+                "enabledState": "Enabled",
+                "enforceCertificateNameCheck": true,
+                "sharedPrivateLinkResource": {
+                  "privateLink": {
+                    "id": "[parameters('origins')[copyIndex()].appServiceId]"
+                  },
+                  "groupId": "sites",
+                  "privateLinkLocation": "[parameters('origins')[copyIndex()].location]",
+                  "requestMessage": "[variables('privateLinkRequestMessage')]"
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Cdn/profiles/originGroups', parameters('profileName'), 'app')]"
+              ]
+            },
+            {
+              "condition": "[variables('hasCustomDomain')]",
+              "type": "Microsoft.Cdn/profiles/customDomains",
+              "apiVersion": "2024-09-01",
+              "name": "[format('{0}/{1}', parameters('profileName'), if(variables('hasCustomDomain'), variables('customDomainName'), 'unused'))]",
+              "properties": {
+                "hostName": "[parameters('customDomainHostName')]",
+                "tlsSettings": {
+                  "certificateType": "ManagedCertificate",
+                  "minimumTlsVersion": "TLS12"
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Cdn/profiles', parameters('profileName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Cdn/profiles/afdEndpoints/routes",
+              "apiVersion": "2024-09-01",
+              "name": "[format('{0}/{1}/{2}', parameters('profileName'), parameters('endpointName'), 'app')]",
+              "properties": {
+                "originGroup": {
+                  "id": "[resourceId('Microsoft.Cdn/profiles/originGroups', parameters('profileName'), 'app')]"
+                },
+                "customDomains": "[if(variables('hasCustomDomain'), createArray(createObject('id', resourceId('Microsoft.Cdn/profiles/customDomains', parameters('profileName'), if(variables('hasCustomDomain'), variables('customDomainName'), 'unused')))), createArray())]",
+                "supportedProtocols": [
+                  "Http",
+                  "Https"
+                ],
+                "patternsToMatch": [
+                  "/*"
+                ],
+                "forwardingProtocol": "HttpsOnly",
+                "httpsRedirect": "Enabled",
+                "linkToDefaultDomain": "Enabled",
+                "enabledState": "Enabled"
+              },
+              "dependsOn": [
+                "appOrigins",
+                "[resourceId('Microsoft.Cdn/profiles/customDomains', parameters('profileName'), if(variables('hasCustomDomain'), variables('customDomainName'), 'unused'))]",
+                "[resourceId('Microsoft.Cdn/profiles/afdEndpoints', parameters('profileName'), parameters('endpointName'))]",
+                "[resourceId('Microsoft.Cdn/profiles/originGroups', parameters('profileName'), 'app')]"
+              ]
+            },
+            {
+              "type": "Microsoft.Cdn/profiles/securityPolicies",
+              "apiVersion": "2024-09-01",
+              "name": "[format('{0}/{1}', parameters('profileName'), 'waf')]",
+              "properties": {
+                "parameters": {
+                  "type": "WebApplicationFirewall",
+                  "wafPolicy": {
+                    "id": "[resourceId('Microsoft.Network/FrontDoorWebApplicationFirewallPolicies', parameters('wafPolicyName'))]"
+                  },
+                  "associations": [
+                    {
+                      "domains": "[concat(createArray(createObject('id', resourceId('Microsoft.Cdn/profiles/afdEndpoints', parameters('profileName'), parameters('endpointName')))), if(variables('hasCustomDomain'), createArray(createObject('id', resourceId('Microsoft.Cdn/profiles/customDomains', parameters('profileName'), if(variables('hasCustomDomain'), variables('customDomainName'), 'unused')))), createArray()))]",
+                      "patternsToMatch": [
+                        "/*"
+                      ]
+                    }
+                  ]
+                }
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Cdn/profiles/customDomains', parameters('profileName'), if(variables('hasCustomDomain'), variables('customDomainName'), 'unused'))]",
+                "[resourceId('Microsoft.Cdn/profiles/afdEndpoints', parameters('profileName'), parameters('endpointName'))]",
+                "[resourceId('Microsoft.Cdn/profiles', parameters('profileName'))]",
+                "[resourceId('Microsoft.Network/FrontDoorWebApplicationFirewallPolicies', parameters('wafPolicyName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Insights/diagnosticSettings",
+              "apiVersion": "2021-05-01-preview",
+              "scope": "[resourceId('Microsoft.Cdn/profiles', parameters('profileName'))]",
+              "name": "frontdoor-diagnostics",
+              "properties": {
+                "workspaceId": "[parameters('logAnalyticsWorkspaceId')]",
+                "logs": [
+                  {
+                    "categoryGroup": "allLogs",
+                    "enabled": true
+                  }
+                ],
+                "metrics": [
+                  {
+                    "category": "AllMetrics",
+                    "enabled": true
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Cdn/profiles', parameters('profileName'))]"
+              ]
+            },
+            {
+              "condition": "[parameters('enableDeleteLock')]",
+              "type": "Microsoft.Authorization/locks",
+              "apiVersion": "2020-05-01",
+              "scope": "[resourceId('Microsoft.Cdn/profiles', parameters('profileName'))]",
+              "name": "[format('{0}-lck', parameters('profileName'))]",
+              "properties": {
+                "level": "CanNotDelete"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Cdn/profiles', parameters('profileName'))]"
+              ]
+            },
+            {
+              "condition": "[parameters('enableDeleteLock')]",
+              "type": "Microsoft.Authorization/locks",
+              "apiVersion": "2020-05-01",
+              "scope": "[resourceId('Microsoft.Network/FrontDoorWebApplicationFirewallPolicies', parameters('wafPolicyName'))]",
+              "name": "[format('{0}-lck', parameters('wafPolicyName'))]",
+              "properties": {
+                "level": "CanNotDelete"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/FrontDoorWebApplicationFirewallPolicies', parameters('wafPolicyName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "profileName": {
+              "type": "string",
+              "value": "[parameters('profileName')]"
+            },
+            "endpointHostName": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Cdn/profiles/afdEndpoints', parameters('profileName'), parameters('endpointName')), '2024-09-01').hostName]"
+            },
+            "frontDoorId": {
+              "type": "string",
+              "value": "[reference(resourceId('Microsoft.Cdn/profiles', parameters('profileName')), '2024-09-01').frontDoorId]"
+            },
+            "customDomainValidationToken": {
+              "type": "string",
+              "value": "[if(variables('hasCustomDomain'), reference(resourceId('Microsoft.Cdn/profiles/customDomains', parameters('profileName'), if(variables('hasCustomDomain'), variables('customDomainName'), 'unused')), '2024-09-01').validationProperties.validationToken, '')]"
+            },
+            "privateLinkRequestMessage": {
+              "type": "string",
+              "value": "[variables('privateLinkRequestMessage')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "global",
+        "primaryStamp",
+        "secondaryStamp"
       ]
     },
     "privateDnsLinks": {
@@ -8770,6 +9199,22 @@
     "primaryFirewallPrivateIp": {
       "type": "string",
       "value": "[reference('primaryStamp').outputs.firewallPrivateIp.value]"
+    },
+    "frontDoorEndpointHostName": {
+      "type": "string",
+      "value": "[reference('frontDoor').outputs.endpointHostName.value]"
+    },
+    "frontDoorCustomDomainValidationToken": {
+      "type": "string",
+      "value": "[reference('frontDoor').outputs.customDomainValidationToken.value]"
+    },
+    "frontDoorPrivateLinkRequestMessage": {
+      "type": "string",
+      "value": "[reference('frontDoor').outputs.privateLinkRequestMessage.value]"
+    },
+    "appServiceIds": {
+      "type": "array",
+      "value": "[concat(createArray(reference('primaryStamp').outputs.appServiceId.value), if(parameters('deploySecondaryRegion'), createArray(reference('secondaryStamp').outputs.appServiceId.value), createArray()))]"
     }
   }
 }
