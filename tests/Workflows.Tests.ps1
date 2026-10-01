@@ -92,13 +92,31 @@ Describe 'Deploy workflow plan/apply split (Phase 2)' {
 Describe 'Front Door private endpoint approval (Phase 4)' {
     It 'approves Front Door connections after the deployment, from the deployment outputs' {
         $create = $deploy.IndexOf('az deployment sub create')
-        $approve = $deploy.IndexOf('./scripts/Approve-FrontDoorPrivateEndpoints.ps1 -AppServiceId $ids')
+        $approve = $deploy.IndexOf('./scripts/Approve-FrontDoorPrivateEndpoints.ps1')
         $approve | Should -BeGreaterThan $create
-        $deploy | Should -Match ([regex]::Escape('--query properties.outputs.appServiceIds.value'))
+        $deploy | Should -Match ([regex]::Escape('--query properties.outputs --output json'))
         $deploy | Should -Match ([regex]::Escape('az deployment sub show --name "gh-${{ github.run_id }}-${{ github.run_attempt }}"'))
     }
 
     It 'fails the job when the outputs cannot be read' {
         $deploy | Should -Match ([regex]::Escape("throw 'Could not read appServiceIds from the deployment outputs.'"))
+        $deploy | Should -Match ([regex]::Escape("throw 'Could not read frontDoorProfileName from the deployment outputs.'"))
+        $deploy | Should -Match ([regex]::Escape("throw 'Could not read globalResourceGroupName from the deployment outputs.'"))
+    }
+
+    It 'passes the Front Door profile and global resource group names to the approval script (final review A)' {
+        $deploy | Should -Match ([regex]::Escape('-AppServiceId $ids -FrontDoorProfileName $profileName -FrontDoorResourceGroupName $resourceGroupName'))
+    }
+
+    It 'refreshes the Azure login right before the approval step, since the wait can outlast the first token' {
+        $create = $deploy.IndexOf('az deployment sub create')
+        $refresh = $deploy.IndexOf('Refresh Azure login before approval')
+        $approve = $deploy.IndexOf('Approve Front Door private endpoint connections')
+        $refresh | Should -BeGreaterThan $create
+        $approve | Should -BeGreaterThan $refresh
+
+        $applyStart = $deploy.IndexOf('  apply:')
+        $applyJob = $deploy.Substring($applyStart)
+        ([regex]::Matches($applyJob, 'uses: azure/login@v2')).Count | Should -Be 2
     }
 }

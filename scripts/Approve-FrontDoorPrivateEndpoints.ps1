@@ -1,6 +1,7 @@
 <#
 .SYNOPSIS
-Approves the pending private endpoint connections that Azure Front Door creates on each App Service origin.
+Approves the pending private endpoint connections that Azure Front Door creates on each App Service origin, and
+waits until Front Door's own origin status confirms the Private Link is Approved.
 
 .DESCRIPTION
 Front Door reaches every App Service over Private Link. Each origin creates a private endpoint connection on the
@@ -20,13 +21,22 @@ endpoint request. To guard against that, for each app:
     approved either, and the script throws the same way.
   - Otherwise, when exactly one pending connection carries the exact request message and none is approved yet,
     that connection is approved and its private endpoint id is reported.
+  Every request message comparison is case-sensitive (ordinal), so a message that differs only in case is
+  treated as unrelated, never approved.
 
-For each app it waits until a Front Door connection is Approved, approving pending ones as they appear,
-because Front Door creates the connection a few minutes after the origin is deployed.
+An approved connection is not, by itself, proof that Front Door is using it: approving is this script's own
+action, and a stale or unrelated connection could coincidentally be approved by someone else. The script
+therefore waits for Front Door's own view, the origin group's `sharedPrivateLinkResource.status`, read with
+`az afd origin list`, to report Approved for the origin whose private link targets this app. Only then is the
+app done. If this run approved a connection but the origin never reaches Approved by the deadline, the script
+throws a distinct message, because the connection it approved may not be the one Front Door is actually using.
+If no origin in the given profile/origin group references the app at all, it throws a different message once
+the deadline passes.
+
 Runs in deploy.yml after the deployment, and by hand from runbook 04.
 
 .EXAMPLE
-./scripts/Approve-FrontDoorPrivateEndpoints.ps1 -AppServiceId /subscriptions/<sub>/resourceGroups/rg-defenstack-dev-wus3/providers/Microsoft.Web/sites/<app>
+./scripts/Approve-FrontDoorPrivateEndpoints.ps1 -AppServiceId /subscriptions/<sub>/resourceGroups/rg-defenstack-dev-wus3/providers/Microsoft.Web/sites/<app> -FrontDoorProfileName afd-defenstack-dev -FrontDoorResourceGroupName rg-defenstack-dev-global
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -34,6 +44,18 @@ param(
     [ValidateNotNullOrEmpty()]
     [ValidatePattern('^/subscriptions/[0-9a-fA-F-]{36}/resourceGroups/[^/]+/providers/Microsoft\.Web/sites/[^/]+$')]
     [string[]]$AppServiceId,
+
+    [Parameter(Mandatory)]
+    [ValidatePattern('^[A-Za-z0-9-]{1,90}$')]
+    [string]$FrontDoorProfileName,
+
+    [Parameter(Mandatory)]
+    [ValidatePattern('^[-\w._()]{1,90}$')]
+    [string]$FrontDoorResourceGroupName,
+
+    [Parameter()]
+    [ValidatePattern('^[A-Za-z0-9-]{1,90}$')]
+    [string]$OriginGroupName = 'app',
 
     [Parameter()]
     [ValidatePattern('^[A-Za-z0-9-]{1,64}$')]
@@ -70,9 +92,21 @@ function Get-PrivateEndpointConnections([string]$ResourceId) {
     @($parsed | ForEach-Object { $_ })
 }
 
+function Get-FrontDoorOrigins {
+    $json = az afd origin list --profile-name $FrontDoorProfileName --resource-group $FrontDoorResourceGroupName --origin-group-name $OriginGroupName --output json
+    if ($LASTEXITCODE -ne 0) {
+        throw "Unable to list Front Door origins for $FrontDoorProfileName/$FrontDoorResourceGroupName/$OriginGroupName."
+    }
+    # Same Windows PowerShell 5.1 array-unrolling guard as Get-PrivateEndpointConnections.
+    $parsed = ($json -join "`n") | ConvertFrom-Json
+    @($parsed | ForEach-Object { $_ })
+}
+
 foreach ($id in $AppServiceId) {
     $appName = ($id -split '/')[-1]
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    $approvedConnectionForApp = $null
+    $matchingOrigin = $null
     while ($true) {
         $connections = Get-PrivateEndpointConnections $id
         $states = $connections | ForEach-Object {
@@ -85,9 +119,11 @@ foreach ($id in $AppServiceId) {
             }
         }
 
-        $approvedFrontDoor = @($states | Where-Object { $_.Status -eq 'Approved' -and $_.Description.StartsWith($RequestMessage) })
-        $pendingMatching = @($states | Where-Object { $_.Status -eq 'Pending' -and $_.Description -eq $RequestMessage })
-        $pendingOther = @($states | Where-Object { $_.Status -eq 'Pending' -and $_.Description -ne $RequestMessage })
+        # Every comparison against $RequestMessage is case-sensitive (ordinal): a message that differs only in
+        # case belongs to someone else, never to Front Door.
+        $approvedFrontDoor = @($states | Where-Object { $_.Status -ceq 'Approved' -and $_.Description.StartsWith($RequestMessage, [StringComparison]::Ordinal) })
+        $pendingMatching = @($states | Where-Object { $_.Status -ceq 'Pending' -and $_.Description -ceq $RequestMessage })
+        $pendingOther = @($states | Where-Object { $_.Status -ceq 'Pending' -and $_.Description -cne $RequestMessage })
 
         foreach ($other in $pendingOther) {
             Write-Warning "$appName`: leaving pending connection '$($other.Name)' (request message '$($other.Description)'): not a Front Door request from this deployment."
@@ -111,6 +147,7 @@ foreach ($id in $AppServiceId) {
                     throw "Approving private endpoint connection '$($pending.Name)' on $appName failed."
                 }
                 Write-Output "$appName`: approved Front Door connection '$($pending.Name)' (private endpoint $($pending.PrivateEndpointId))."
+                $approvedConnectionForApp = $pending
             }
         }
 
@@ -118,16 +155,28 @@ foreach ($id in $AppServiceId) {
             break
         }
 
-        $approved = @(Get-PrivateEndpointConnections $id | Where-Object {
-                $_.properties.privateLinkServiceConnectionState.status -eq 'Approved' -and
-                ([string]$_.properties.privateLinkServiceConnectionState.description).StartsWith($RequestMessage)
-            })
-        if ($approved.Count -gt 0) {
-            Write-Output "$appName`: $($approved.Count) Front Door connection(s) approved."
+        # Approving a connection is this script's own action, not proof Front Door is using it. Trust only
+        # Front Door's own origin status for success.
+        $origins = Get-FrontDoorOrigins
+        $matchingOrigin = $origins | Where-Object {
+            $_.properties -and
+            $_.properties.sharedPrivateLinkResource -and
+            $_.properties.sharedPrivateLinkResource.privateLink -and
+            [string]$_.properties.sharedPrivateLinkResource.privateLink.id -ieq $id
+        } | Select-Object -First 1
+
+        if ($matchingOrigin -and $matchingOrigin.properties.sharedPrivateLinkResource.status -eq 'Approved') {
+            Write-Output "$appName`: Front Door origin '$($matchingOrigin.name)' reports its private link Approved."
             break
         }
 
         if ((Get-Date) -ge $deadline) {
+            if (-not $matchingOrigin) {
+                throw "$appName`: no Front Door origin in $FrontDoorProfileName/$OriginGroupName references this App Service. Check the origin exists, or redeploy (runbook 04 section 9)."
+            }
+            if ($approvedConnectionForApp) {
+                throw "$appName`: the approved connection '$($approvedConnectionForApp.Name)' (private endpoint $($approvedConnectionForApp.PrivateEndpointId)) did not bring Front Door's origin '$($matchingOrigin.name)' to Approved within $TimeoutSeconds seconds; it may not be Front Door's request. Reject it and follow runbook 04 section 5.2."
+            }
             throw "$appName`: no Front Door private endpoint connection was approved within $TimeoutSeconds seconds. Check the origin in the Front Door profile, then re-run this script (runbook 04 section 9)."
         }
         Write-Output "$appName`: waiting for Front Door to create its private endpoint connection..."

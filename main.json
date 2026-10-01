@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "11778462052488647586"
+      "templateHash": "469615716823029545"
     }
   },
   "definitions": {
@@ -9211,6 +9211,14 @@
     "frontDoorPrivateLinkRequestMessage": {
       "type": "string",
       "value": "[reference('frontDoor').outputs.privateLinkRequestMessage.value]"
+    },
+    "frontDoorProfileName": {
+      "type": "string",
+      "value": "[reference('frontDoor').outputs.profileName.value]"
+    },
+    "globalResourceGroupName": {
+      "type": "string",
+      "value": "[variables('globalResourceGroupName')]"
     },
     "appServiceIds": {
       "type": "array",

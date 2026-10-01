@@ -229,6 +229,8 @@ output primaryFirewallPrivateIp string = primaryStamp.outputs.firewallPrivateIp
 output frontDoorEndpointHostName string = frontDoor.outputs.endpointHostName
 output frontDoorCustomDomainValidationToken string = frontDoor.outputs.customDomainValidationToken
 output frontDoorPrivateLinkRequestMessage string = frontDoor.outputs.privateLinkRequestMessage
+output frontDoorProfileName string = frontDoor.outputs.profileName
+output globalResourceGroupName string = globalResourceGroupName
 output appServiceIds array = concat([
   primaryStamp.outputs.appServiceId
 ], deploySecondaryRegion ? [

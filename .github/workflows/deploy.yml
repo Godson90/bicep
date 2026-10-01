@@ -110,10 +110,24 @@ jobs:
             --parameters "params/${TARGET_ENV}.bicepparam" \
             --output table
 
+      # The approval wait can outlast the first login's token (up to 15 minutes per app), so refresh it immediately
+      # before the step that needs it.
+      - name: Refresh Azure login before approval
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
       # Front Door reaches each App Service over Private Link; its connections stay Pending until approved (runbook 04).
       - name: Approve Front Door private endpoint connections
         shell: pwsh
         run: |
-          $ids = az deployment sub show --name "gh-${{ github.run_id }}-${{ github.run_attempt }}" --query properties.outputs.appServiceIds.value --output json | ConvertFrom-Json
+          $outputs = az deployment sub show --name "gh-${{ github.run_id }}-${{ github.run_attempt }}" --query properties.outputs --output json | ConvertFrom-Json
+          $ids = $outputs.appServiceIds.value
+          $profileName = $outputs.frontDoorProfileName.value
+          $resourceGroupName = $outputs.globalResourceGroupName.value
           if ($LASTEXITCODE -ne 0 -or -not $ids) { throw 'Could not read appServiceIds from the deployment outputs.' }
-          ./scripts/Approve-FrontDoorPrivateEndpoints.ps1 -AppServiceId $ids
+          if (-not $profileName) { throw 'Could not read frontDoorProfileName from the deployment outputs.' }
+          if (-not $resourceGroupName) { throw 'Could not read globalResourceGroupName from the deployment outputs.' }
+          ./scripts/Approve-FrontDoorPrivateEndpoints.ps1 -AppServiceId $ids -FrontDoorProfileName $profileName -FrontDoorResourceGroupName $resourceGroupName

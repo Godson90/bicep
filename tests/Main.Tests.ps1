@@ -146,4 +146,12 @@ Describe 'Public ingress (Phase 4)' {
         $main.outputs.appServiceIds.type | Should -Be 'array'
         $main.outputs.appServiceIds.value | Should -Match "if\(parameters\('deploySecondaryRegion'\)"
     }
+
+    It 'outputs the Front Door profile name and the global resource group name, so the pipeline can poll the origin group (final review A)' {
+        foreach ($output in 'frontDoorProfileName', 'globalResourceGroupName') {
+            $main.outputs.PSObject.Properties.Name | Should -Contain $output
+        }
+        $main.outputs.frontDoorProfileName.value | Should -Be "[reference('frontDoor').outputs.profileName.value]"
+        $main.outputs.globalResourceGroupName.value | Should -Be "[variables('globalResourceGroupName')]"
+    }
 }
