@@ -100,6 +100,7 @@ var names = {
   bastionPublicIp: 'pip-bas-defenstack-${environmentName}-${regionCode}'
   vpnGateway: 'vpng-defenstack-${environmentName}-${regionCode}'
   vpnGatewayPublicIp: 'pip-vpng-defenstack-${environmentName}-${regionCode}'
+  appInsights: 'appi-defenstack-${environmentName}-${regionCode}'
 }
 // Azure Firewall always takes the first usable address (.4) of AzureFirewallSubnet. The hub needs it before
 // the firewall exists (GatewaySubnet route table); runbook 03 checks it matches the firewall's actual IP.
@@ -201,6 +202,16 @@ module spokeNetwork 'spokeNetwork.bicep' = {
   }
 }
 
+// One workspace-based component per region, so a regional outage never takes the other region's telemetry with it (ADR-021).
+module appInsights 'appInsights.bicep' = {
+  name: 'app-insights'
+  params: {
+    location: location
+    componentName: names.appInsights
+    logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
+  }
+}
+
 module appService 'appService.bicep' = {
   name: 'app-service'
   params: {
@@ -213,6 +224,16 @@ module appService 'appService.bicep' = {
     healthCheckPath: healthCheckPath
     zoneRedundant: isProd && isPrimary
     instanceCount: isProd && isPrimary ? 3 : 1
+    applicationInsightsConnectionString: appInsights.outputs.connectionString
+  }
+}
+
+module appInsightsPublisher 'appInsightsPublisher.bicep' = {
+  name: 'app-insights-publisher'
+  params: {
+    componentName: appInsights.outputs.name
+    publisherPrincipalId: appService.outputs.appServicePrincipalId
+    publisherAppServiceName: names.appService
   }
 }
 
@@ -328,3 +349,4 @@ output storageAccountName string = names.storageAccount
 output storageAccountId string = storage.outputs.id
 output storageContainerName string = storage.outputs.blobContainerName
 output appServicePrincipalId string = appService.outputs.appServicePrincipalId
+output appInsightsName string = appInsights.outputs.name
