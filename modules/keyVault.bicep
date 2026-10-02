@@ -26,6 +26,10 @@ param enabledForTemplateDeployment bool = false
 @description('Apply a CanNotDelete lock to the vault (in addition to soft delete and purge protection).')
 param enableDeleteLock bool = false
 
+@description('Application secrets to write, as { name: value }. Written through Azure Resource Manager, so the deploying identity needs no network path to the private vault (ADR-019). Names: letters, digits and hyphens, at most 127 characters.')
+@secure()
+param secrets object = {}
+
 // RBAC-based vault with public access disabled; clients use its private endpoint.
 resource keyVault 'Microsoft.KeyVault/vaults@2025-05-01' = {
   name: keyVaultName
@@ -48,6 +52,18 @@ resource keyVault 'Microsoft.KeyVault/vaults@2025-05-01' = {
     }
   }
 }
+
+// The same deploy-time values go to every regional vault, which is how the stamps stay in sync (ADR-019).
+resource vaultSecrets 'Microsoft.KeyVault/vaults/secrets@2025-05-01' = [for secret in items(secrets): {
+  parent: keyVault
+  name: secret.key
+  properties: {
+    value: secret.value
+    attributes: {
+      enabled: true
+    }
+  }
+}]
 
 // Key Vault audit events are centralized with the other platform diagnostics.
 resource keyVaultDiagnostics 'Microsoft.Insights/diagnosticSettings@2021-05-01-preview' = {

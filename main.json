@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "11396280836128805106"
+      "templateHash": "12712774969457220055"
     }
   },
   "definitions": {
@@ -211,6 +211,13 @@
       "defaultValue": "",
       "metadata": {
         "description": "Custom domain served by Front Door, for example app.example.com, hosted at an external DNS provider. Empty serves only the azurefd.net hostname."
+      }
+    },
+    "keyVaultSecrets": {
+      "type": "secureObject",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Application secrets written to every regional Key Vault, as { name: value }. The pipeline supplies them from the KEYVAULT_SECRETS_JSON environment secret; never put values in a committed parameter file (ADR-019)."
       }
     },
     "healthCheckPath": {
@@ -639,6 +646,9 @@
           },
           "adminGroupObjectId": {
             "value": "[parameters('adminGroupObjectId')]"
+          },
+          "keyVaultSecrets": {
+            "value": "[parameters('keyVaultSecrets')]"
           }
         },
         "template": {
@@ -649,7 +659,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "16813384299965939729"
+              "templateHash": "804849034244079893"
             }
           },
           "definitions": {
@@ -903,6 +913,13 @@
               "metadata": {
                 "description": "Warm standby only: name of the primary region storage account."
               }
+            },
+            "keyVaultSecrets": {
+              "type": "secureObject",
+              "defaultValue": {},
+              "metadata": {
+                "description": "Application secrets written to this region's Key Vault, as { name: value } (ADR-019)."
+              }
             }
           },
           "variables": {
@@ -1151,6 +1168,9 @@
                   },
                   "enableDeleteLock": {
                     "value": "[variables('isProd')]"
+                  },
+                  "secrets": {
+                    "value": "[parameters('keyVaultSecrets')]"
                   }
                 },
                 "template": {
@@ -1160,7 +1180,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "10414290426879708077"
+                      "templateHash": "12501774521018755639"
                     }
                   },
                   "parameters": {
@@ -1220,6 +1240,13 @@
                       "metadata": {
                         "description": "Apply a CanNotDelete lock to the vault (in addition to soft delete and purge protection)."
                       }
+                    },
+                    "secrets": {
+                      "type": "secureObject",
+                      "defaultValue": {},
+                      "metadata": {
+                        "description": "Application secrets to write, as { name: value }. Written through Azure Resource Manager, so the deploying identity needs no network path to the private vault (ADR-019). Names: letters, digits and hyphens, at most 127 characters."
+                      }
                     }
                   },
                   "resources": [
@@ -1245,6 +1272,24 @@
                           "defaultAction": "Deny"
                         }
                       }
+                    },
+                    {
+                      "copy": {
+                        "name": "vaultSecrets",
+                        "count": "[length(items(parameters('secrets')))]"
+                      },
+                      "type": "Microsoft.KeyVault/vaults/secrets",
+                      "apiVersion": "2025-05-01",
+                      "name": "[format('{0}/{1}', parameters('keyVaultName'), items(parameters('secrets'))[copyIndex()].key)]",
+                      "properties": {
+                        "value": "[items(parameters('secrets'))[copyIndex()].value]",
+                        "attributes": {
+                          "enabled": true
+                        }
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]"
+                      ]
                     },
                     {
                       "type": "Microsoft.Insights/diagnosticSettings",
@@ -5010,6 +5055,9 @@
           },
           "primaryStorageAccountName": {
             "value": "[reference('primaryStamp').outputs.storageAccountName.value]"
+          },
+          "keyVaultSecrets": {
+            "value": "[parameters('keyVaultSecrets')]"
           }
         },
         "template": {
@@ -5020,7 +5068,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "16813384299965939729"
+              "templateHash": "804849034244079893"
             }
           },
           "definitions": {
@@ -5274,6 +5322,13 @@
               "metadata": {
                 "description": "Warm standby only: name of the primary region storage account."
               }
+            },
+            "keyVaultSecrets": {
+              "type": "secureObject",
+              "defaultValue": {},
+              "metadata": {
+                "description": "Application secrets written to this region's Key Vault, as { name: value } (ADR-019)."
+              }
             }
           },
           "variables": {
@@ -5522,6 +5577,9 @@
                   },
                   "enableDeleteLock": {
                     "value": "[variables('isProd')]"
+                  },
+                  "secrets": {
+                    "value": "[parameters('keyVaultSecrets')]"
                   }
                 },
                 "template": {
@@ -5531,7 +5589,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "10414290426879708077"
+                      "templateHash": "12501774521018755639"
                     }
                   },
                   "parameters": {
@@ -5591,6 +5649,13 @@
                       "metadata": {
                         "description": "Apply a CanNotDelete lock to the vault (in addition to soft delete and purge protection)."
                       }
+                    },
+                    "secrets": {
+                      "type": "secureObject",
+                      "defaultValue": {},
+                      "metadata": {
+                        "description": "Application secrets to write, as { name: value }. Written through Azure Resource Manager, so the deploying identity needs no network path to the private vault (ADR-019). Names: letters, digits and hyphens, at most 127 characters."
+                      }
                     }
                   },
                   "resources": [
@@ -5616,6 +5681,24 @@
                           "defaultAction": "Deny"
                         }
                       }
+                    },
+                    {
+                      "copy": {
+                        "name": "vaultSecrets",
+                        "count": "[length(items(parameters('secrets')))]"
+                      },
+                      "type": "Microsoft.KeyVault/vaults/secrets",
+                      "apiVersion": "2025-05-01",
+                      "name": "[format('{0}/{1}', parameters('keyVaultName'), items(parameters('secrets'))[copyIndex()].key)]",
+                      "properties": {
+                        "value": "[items(parameters('secrets'))[copyIndex()].value]",
+                        "attributes": {
+                          "enabled": true
+                        }
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]"
+                      ]
                     },
                     {
                       "type": "Microsoft.Insights/diagnosticSettings",
