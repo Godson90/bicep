@@ -87,7 +87,8 @@ this stands.
 | `AZURE_CLIENT_ID` | App registration **Application (client) ID** | GitHub environment variable | No (identifier) |
 | `AZURE_TENANT_ID` | Directory (tenant) ID | GitHub environment variable | No (identifier) |
 | `AZURE_SUBSCRIPTION_ID` | Subscription containing `rg-defenstack-dev-global` and `rg-defenstack-dev-wus3` | GitHub environment variable | No (identifier) |
-| Delegatable roles | `Storage Blob Data Contributor` (`ba92f5b4-2d11-453d-a403-e96b0029c9fe`); `Virtual Machine Administrator Login` (`1c0163c0-47e6-4577-8991-ea5c82e286e4`, Phase 3: admin group on the jump host) | RBAC Administrator condition | No |
+| Delegatable roles | `Storage Blob Data Contributor` (`ba92f5b4-2d11-453d-a403-e96b0029c9fe`); `Virtual Machine Administrator Login` (`1c0163c0-47e6-4577-8991-ea5c82e286e4`, Phase 3: admin group on the jump host); `Storage Blob Data Reader` (`2a2b9908-6ea1-4ae2-8e65-a410df84e7d1`, Phase 5: warm-standby app on the primary container); `Monitoring Metrics Publisher` (`3913510d-42f4-4e42-8a64-420c390055eb`, Phase 5: App Service identity on its App Insights component) | RBAC Administrator condition | No |
+| `KEYVAULT_SECRETS_JSON` | `{}` until the app has secrets | GitHub **environment secret** on `dev` and `prod`, read only by the `apply` job (runbook 05 §5.1, `ADR-019`) | **Yes**: create it as a secret, never a variable |
 
 The workflows read these values with `vars.*`, so they **must be created as variables, not secrets**. A secret with the same name is ignored.
 
@@ -352,7 +353,7 @@ gh variable list --env dev-plan --repo Godson90/bicep
 
 - **Rotation:** nothing to rotate. There are no stored secrets, and each run gets a fresh token that lasts about an hour.
 - **Renaming the repo, organisation or environment** changes the token subject. Update the federated credential subject in the same change, otherwise login fails with `AADSTS70021`.
-- **Assigning an extra role from Bicep** (for example Key Vault Secrets User in a later phase). Phase 3 did this for `Virtual Machine Administrator Login`, which is now in the script's default list, so an identity created before Phase 3 needs only steps 2–3 (runbook 03 §4 step 3):
+- **Assigning an extra role from Bicep** (for example Key Vault Secrets User in a later phase). Phase 3 did this for `Virtual Machine Administrator Login`, and Phase 5 for `Storage Blob Data Reader` and `Monitoring Metrics Publisher`. All three are in the script's default list, so an identity created before Phase 5 needs only steps 2–3 (runbook 03 §4 step 3, runbook 05 §4 step 1):
   1. Add the role's GUID to `-DelegatableRoleDefinitionIds`.
   2. Delete the existing RBAC Administrator assignment on **each** resource group the environment uses.
   3. Re-run the script. It refuses a mismatched condition on purpose.
