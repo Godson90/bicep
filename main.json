@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "469615716823029545"
+      "templateHash": "14360959365998541990"
     }
   },
   "definitions": {
@@ -649,7 +649,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "3830908815412313554"
+              "templateHash": "16367298874529328561"
             }
           },
           "definitions": {
@@ -889,6 +889,20 @@
               "metadata": {
                 "description": "Object ID of the Entra ID admin security group granted Virtual Machine Administrator Login on the management VM. Empty skips the assignment."
               }
+            },
+            "primaryStorageAccountId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Warm standby only: resource ID of the primary region RA-GZRS storage account, read through its secondary endpoint. Empty for the primary stamp."
+              }
+            },
+            "primaryStorageAccountName": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Warm standby only: name of the primary region storage account."
+              }
             }
           },
           "variables": {
@@ -938,7 +952,7 @@
                   "storageAccountName": {
                     "value": "[variables('names').storageAccount]"
                   },
-                  "storageAccountSkuName": "[if(variables('isProd'), createObject('value', 'Standard_GRS'), createObject('value', 'Standard_LRS'))]",
+                  "storageAccountSkuName": "[if(variables('isProd'), if(variables('isPrimary'), createObject('value', 'Standard_RAGZRS'), createObject('value', 'Standard_GRS')), createObject('value', 'Standard_LRS'))]",
                   "logAnalyticsWorkspaceId": {
                     "value": "[parameters('logAnalyticsWorkspaceId')]"
                   }
@@ -4275,6 +4289,131 @@
                 "vpnGateway"
               ]
             },
+            "storageSecondaryEndpoint": {
+              "condition": "[not(empty(parameters('primaryStorageAccountId')))]",
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "storage-secondary-endpoint",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "location": {
+                    "value": "[parameters('location')]"
+                  },
+                  "primaryStorageAccountId": {
+                    "value": "[parameters('primaryStorageAccountId')]"
+                  },
+                  "primaryStorageAccountName": {
+                    "value": "[parameters('primaryStorageAccountName')]"
+                  },
+                  "privateEndpointSubnetId": {
+                    "value": "[reference('spokeNetwork').outputs.privateEndpointSubnetId.value]"
+                  },
+                  "blobPrivateDnsZoneId": {
+                    "value": "[parameters('privateDnsZoneIds').blob]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.47.16.16243",
+                      "templateHash": "15337722754788976540"
+                    }
+                  },
+                  "parameters": {
+                    "location": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Azure region for the private endpoint (the warm-standby region)."
+                      }
+                    },
+                    "primaryStorageAccountId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Resource ID of the primary region storage account (RA-GZRS)."
+                      }
+                    },
+                    "primaryStorageAccountName": {
+                      "type": "string",
+                      "minLength": 3,
+                      "maxLength": 24,
+                      "metadata": {
+                        "description": "Primary region storage account name, used for deterministic naming."
+                      }
+                    },
+                    "privateEndpointSubnetId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Private endpoint subnet in the warm-standby spoke."
+                      }
+                    },
+                    "blobPrivateDnsZoneId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Shared privatelink.blob zone resource ID; the secondary endpoint registers as <account>-secondary."
+                      }
+                    }
+                  },
+                  "resources": [
+                    {
+                      "type": "Microsoft.Network/privateEndpoints",
+                      "apiVersion": "2024-07-01",
+                      "name": "[format('{0}-secondary-pe', parameters('primaryStorageAccountName'))]",
+                      "location": "[parameters('location')]",
+                      "properties": {
+                        "privateLinkServiceConnections": [
+                          {
+                            "name": "blob-secondary",
+                            "properties": {
+                              "privateLinkServiceId": "[parameters('primaryStorageAccountId')]",
+                              "groupIds": [
+                                "blob_secondary"
+                              ]
+                            }
+                          }
+                        ],
+                        "subnet": {
+                          "id": "[parameters('privateEndpointSubnetId')]"
+                        }
+                      }
+                    },
+                    {
+                      "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+                      "apiVersion": "2024-07-01",
+                      "name": "[format('{0}/{1}', format('{0}-secondary-pe', parameters('primaryStorageAccountName')), 'default')]",
+                      "properties": {
+                        "privateDnsZoneConfigs": [
+                          {
+                            "name": "blob-secondary",
+                            "properties": {
+                              "privateDnsZoneId": "[parameters('blobPrivateDnsZoneId')]"
+                            }
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-secondary-pe', parameters('primaryStorageAccountName')))]"
+                      ]
+                    }
+                  ],
+                  "outputs": {
+                    "id": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-secondary-pe', parameters('primaryStorageAccountName')))]"
+                    }
+                  }
+                }
+              },
+              "dependsOn": [
+                "spokeNetwork"
+              ]
+            },
             "privateConnectivity": {
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -4615,6 +4754,18 @@
             "storageAccountName": {
               "type": "string",
               "value": "[variables('names').storageAccount]"
+            },
+            "storageAccountId": {
+              "type": "string",
+              "value": "[reference('storage').outputs.id.value]"
+            },
+            "storageContainerName": {
+              "type": "string",
+              "value": "[reference('storage').outputs.blobContainerName.value]"
+            },
+            "appServicePrincipalId": {
+              "type": "string",
+              "value": "[reference('appService').outputs.appServicePrincipalId.value]"
             }
           }
         }
@@ -4670,6 +4821,12 @@
           },
           "deployAdminAccess": {
             "value": "[parameters('deploySecondaryAdminAccess')]"
+          },
+          "primaryStorageAccountId": {
+            "value": "[reference('primaryStamp').outputs.storageAccountId.value]"
+          },
+          "primaryStorageAccountName": {
+            "value": "[reference('primaryStamp').outputs.storageAccountName.value]"
           }
         },
         "template": {
@@ -4680,7 +4837,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "3830908815412313554"
+              "templateHash": "16367298874529328561"
             }
           },
           "definitions": {
@@ -4920,6 +5077,20 @@
               "metadata": {
                 "description": "Object ID of the Entra ID admin security group granted Virtual Machine Administrator Login on the management VM. Empty skips the assignment."
               }
+            },
+            "primaryStorageAccountId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Warm standby only: resource ID of the primary region RA-GZRS storage account, read through its secondary endpoint. Empty for the primary stamp."
+              }
+            },
+            "primaryStorageAccountName": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Warm standby only: name of the primary region storage account."
+              }
             }
           },
           "variables": {
@@ -4969,7 +5140,7 @@
                   "storageAccountName": {
                     "value": "[variables('names').storageAccount]"
                   },
-                  "storageAccountSkuName": "[if(variables('isProd'), createObject('value', 'Standard_GRS'), createObject('value', 'Standard_LRS'))]",
+                  "storageAccountSkuName": "[if(variables('isProd'), if(variables('isPrimary'), createObject('value', 'Standard_RAGZRS'), createObject('value', 'Standard_GRS')), createObject('value', 'Standard_LRS'))]",
                   "logAnalyticsWorkspaceId": {
                     "value": "[parameters('logAnalyticsWorkspaceId')]"
                   }
@@ -8306,6 +8477,131 @@
                 "vpnGateway"
               ]
             },
+            "storageSecondaryEndpoint": {
+              "condition": "[not(empty(parameters('primaryStorageAccountId')))]",
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "storage-secondary-endpoint",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "location": {
+                    "value": "[parameters('location')]"
+                  },
+                  "primaryStorageAccountId": {
+                    "value": "[parameters('primaryStorageAccountId')]"
+                  },
+                  "primaryStorageAccountName": {
+                    "value": "[parameters('primaryStorageAccountName')]"
+                  },
+                  "privateEndpointSubnetId": {
+                    "value": "[reference('spokeNetwork').outputs.privateEndpointSubnetId.value]"
+                  },
+                  "blobPrivateDnsZoneId": {
+                    "value": "[parameters('privateDnsZoneIds').blob]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.47.16.16243",
+                      "templateHash": "15337722754788976540"
+                    }
+                  },
+                  "parameters": {
+                    "location": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Azure region for the private endpoint (the warm-standby region)."
+                      }
+                    },
+                    "primaryStorageAccountId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Resource ID of the primary region storage account (RA-GZRS)."
+                      }
+                    },
+                    "primaryStorageAccountName": {
+                      "type": "string",
+                      "minLength": 3,
+                      "maxLength": 24,
+                      "metadata": {
+                        "description": "Primary region storage account name, used for deterministic naming."
+                      }
+                    },
+                    "privateEndpointSubnetId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Private endpoint subnet in the warm-standby spoke."
+                      }
+                    },
+                    "blobPrivateDnsZoneId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Shared privatelink.blob zone resource ID; the secondary endpoint registers as <account>-secondary."
+                      }
+                    }
+                  },
+                  "resources": [
+                    {
+                      "type": "Microsoft.Network/privateEndpoints",
+                      "apiVersion": "2024-07-01",
+                      "name": "[format('{0}-secondary-pe', parameters('primaryStorageAccountName'))]",
+                      "location": "[parameters('location')]",
+                      "properties": {
+                        "privateLinkServiceConnections": [
+                          {
+                            "name": "blob-secondary",
+                            "properties": {
+                              "privateLinkServiceId": "[parameters('primaryStorageAccountId')]",
+                              "groupIds": [
+                                "blob_secondary"
+                              ]
+                            }
+                          }
+                        ],
+                        "subnet": {
+                          "id": "[parameters('privateEndpointSubnetId')]"
+                        }
+                      }
+                    },
+                    {
+                      "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+                      "apiVersion": "2024-07-01",
+                      "name": "[format('{0}/{1}', format('{0}-secondary-pe', parameters('primaryStorageAccountName')), 'default')]",
+                      "properties": {
+                        "privateDnsZoneConfigs": [
+                          {
+                            "name": "blob-secondary",
+                            "properties": {
+                              "privateDnsZoneId": "[parameters('blobPrivateDnsZoneId')]"
+                            }
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-secondary-pe', parameters('primaryStorageAccountName')))]"
+                      ]
+                    }
+                  ],
+                  "outputs": {
+                    "id": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-secondary-pe', parameters('primaryStorageAccountName')))]"
+                    }
+                  }
+                }
+              },
+              "dependsOn": [
+                "spokeNetwork"
+              ]
+            },
             "privateConnectivity": {
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -8646,12 +8942,115 @@
             "storageAccountName": {
               "type": "string",
               "value": "[variables('names').storageAccount]"
+            },
+            "storageAccountId": {
+              "type": "string",
+              "value": "[reference('storage').outputs.id.value]"
+            },
+            "storageContainerName": {
+              "type": "string",
+              "value": "[reference('storage').outputs.blobContainerName.value]"
+            },
+            "appServicePrincipalId": {
+              "type": "string",
+              "value": "[reference('appService').outputs.appServicePrincipalId.value]"
             }
           }
         }
       },
       "dependsOn": [
-        "global"
+        "global",
+        "primaryStamp"
+      ]
+    },
+    "secondaryStorageReader": {
+      "condition": "[parameters('deploySecondaryRegion')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('storage-reader-{0}', variables('secondaryRegionCode'))]",
+      "resourceGroup": "[variables('primaryResourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "storageAccountName": {
+            "value": "[reference('primaryStamp').outputs.storageAccountName.value]"
+          },
+          "storageContainerName": {
+            "value": "[reference('primaryStamp').outputs.storageContainerName.value]"
+          },
+          "readerPrincipalId": {
+            "value": "[reference('secondaryStamp').outputs.appServicePrincipalId.value]"
+          },
+          "readerAppServiceName": {
+            "value": "[reference('secondaryStamp').outputs.appServiceName.value]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "7740808792062286483"
+            }
+          },
+          "parameters": {
+            "storageAccountName": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 24,
+              "metadata": {
+                "description": "Storage account name in this resource group."
+              }
+            },
+            "storageContainerName": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 63,
+              "metadata": {
+                "description": "Blob container the reader may read."
+              }
+            },
+            "readerPrincipalId": {
+              "type": "string",
+              "metadata": {
+                "description": "Principal ID of the App Service managed identity that reads the container."
+              }
+            },
+            "readerAppServiceName": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 60,
+              "metadata": {
+                "description": "Name of the App Service that owns the identity, used to make the assignment GUID deterministic."
+              }
+            }
+          },
+          "variables": {
+            "storageBlobDataReaderRoleId": "2a2b9908-6ea1-4ae2-8e65-a410df84e7d1"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', parameters('storageContainerName'))]",
+              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), parameters('storageContainerName'), parameters('readerAppServiceName'), variables('storageBlobDataReaderRoleId'))]",
+              "properties": {
+                "principalId": "[parameters('readerPrincipalId')]",
+                "principalType": "ServicePrincipal",
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageBlobDataReaderRoleId'))]"
+              }
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "primaryStamp",
+        "secondaryStamp"
       ]
     },
     "frontDoor": {

@@ -71,6 +71,12 @@ param deployAdminAccess bool = false
 @description('Object ID of the Entra ID admin security group granted Virtual Machine Administrator Login on the management VM. Empty skips the assignment.')
 param adminGroupObjectId string = ''
 
+@description('Warm standby only: resource ID of the primary region RA-GZRS storage account, read through its secondary endpoint. Empty for the primary stamp.')
+param primaryStorageAccountId string = ''
+
+@description('Warm standby only: name of the primary region storage account.')
+param primaryStorageAccountName string = ''
+
 var isProd = environmentName == 'prod'
 var isPrimary = regionRole == 'primary'
 var nameSuffix = uniqueString(subscription().id, environmentName, location)
@@ -111,7 +117,8 @@ module storage 'storage.bicep' = {
   params: {
     location: location
     storageAccountName: names.storageAccount
-    storageAccountSkuName: isProd ? 'Standard_GRS' : 'Standard_LRS'
+    // Prod primary: zone- and geo-redundant with read access to the East US copy (ADR-020). Warm standby: GRS. Dev: LRS (ADR-008).
+    storageAccountSkuName: isProd ? (isPrimary ? 'Standard_RAGZRS' : 'Standard_GRS') : 'Standard_LRS'
     logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
   }
 }
@@ -278,6 +285,18 @@ module networkIntegration 'networkIntegration.bicep' = {
   ]
 }
 
+// The warm standby reads the primary's data through the RA-GZRS secondary endpoint (blob_secondary).
+module storageSecondaryEndpoint 'storageSecondaryEndpoint.bicep' = if (!empty(primaryStorageAccountId)) {
+  name: 'storage-secondary-endpoint'
+  params: {
+    location: location
+    primaryStorageAccountId: primaryStorageAccountId
+    primaryStorageAccountName: primaryStorageAccountName
+    privateEndpointSubnetId: spokeNetwork.outputs.privateEndpointSubnetId
+    blobPrivateDnsZoneId: privateDnsZoneIds.blob
+  }
+}
+
 module privateConnectivity 'privateConnectivity.bicep' = {
   name: 'private-connectivity'
   params: {
@@ -306,3 +325,6 @@ output appServiceId string = appService.outputs.appServiceAppId
 output appServiceHostName string = appService.outputs.appServiceAppHostName
 output keyVaultName string = names.keyVault
 output storageAccountName string = names.storageAccount
+output storageAccountId string = storage.outputs.id
+output storageContainerName string = storage.outputs.blobContainerName
+output appServicePrincipalId string = appService.outputs.appServicePrincipalId

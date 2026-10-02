@@ -148,6 +148,20 @@ module secondaryStamp 'modules/regionStamp.bicep' = if (deploySecondaryRegion) {
     managementSourceCidrs: managementSourceCidrs
     healthCheckPath: healthCheckPath
     deployAdminAccess: deploySecondaryAdminAccess
+    primaryStorageAccountId: primaryStamp.outputs.storageAccountId
+    primaryStorageAccountName: primaryStamp.outputs.storageAccountName
+  }
+}
+
+// The warm-standby App Service may read (never write) the primary application container (ADR-020).
+module secondaryStorageReader 'modules/storageReaderAssignment.bicep' = if (deploySecondaryRegion) {
+  name: 'storage-reader-${secondaryRegionCode}'
+  scope: resourceGroup(primaryResourceGroupName)
+  params: {
+    storageAccountName: primaryStamp.outputs.storageAccountName
+    storageContainerName: primaryStamp.outputs.storageContainerName
+    readerPrincipalId: secondaryStamp!.outputs.appServicePrincipalId
+    readerAppServiceName: secondaryStamp!.outputs.appServiceName
   }
 }
 
