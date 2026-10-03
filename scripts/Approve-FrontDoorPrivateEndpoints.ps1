@@ -19,6 +19,10 @@ endpoint request. To guard against that, for each app:
     section 5.2).
   - If more than one pending connection carries the exact request message and none is approved yet, nothing is
     approved either, and the script throws the same way.
+  - If a pending connection carries the exact request message but no Front Door origin in the given
+    profile/origin group references the App Service, nothing is approved. Front Door always creates its origin
+    before it sends the request, so such a request cannot be Front Door's; the script throws, naming the
+    pending connection(s), the same way (runbook 04 section 5.2). This check applies under `-WhatIf` too.
   - Otherwise, when exactly one pending connection carries the exact request message and none is approved yet,
     that connection is approved and its private endpoint id is reported.
   Every request message comparison is case-sensitive (ordinal), so a message that differs only in case is
@@ -30,14 +34,10 @@ therefore waits for Front Door's own view, the origin group's `sharedPrivateLink
 `az afd origin list`, to report Approved for the origin whose private link targets this app. Only then is the
 app done. If this run approved a connection but the origin never reaches Approved by the deadline, the script
 throws a distinct message, because the connection it approved may not be the one Front Door is actually using.
-If no origin in the given profile/origin group references the app at all, it throws a different message once
-the deadline passes.
+If no origin in the given profile/origin group references the app at all, and no pending connection carries the
+request message either, it throws a different message once the deadline passes.
 
 Runs in deploy.yml after the deployment, and by hand from runbook 04.
-
-A matching Pending request for an App Service that no origin in the origin group references is refused (the
-script approves nothing and throws): Front Door creates its origin before it sends the request, so such a request
-cannot be Front Door's.
 
 .EXAMPLE
 ./scripts/Approve-FrontDoorPrivateEndpoints.ps1 -AppServiceId /subscriptions/<sub>/resourceGroups/rg-defenstack-dev-wus3/providers/Microsoft.Web/sites/<app> -FrontDoorProfileName afd-defenstack-dev -FrontDoorResourceGroupName rg-defenstack-dev-global

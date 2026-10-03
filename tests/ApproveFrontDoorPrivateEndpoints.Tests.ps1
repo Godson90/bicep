@@ -218,8 +218,8 @@ Describe 'Approve-FrontDoorPrivateEndpoints.ps1 (Phase 4)' {
         Set-FakeConnections -Connections @(
             New-Connection 'fd-1' 'Approved' 'defenstack-frontdoor approved by Approve-FrontDoorPrivateEndpoints.ps1'
             New-Connection 'fd-2' 'Pending' 'defenstack-frontdoor'
-        )
-        { & $scriptPath -AppServiceId $appId -FrontDoorProfileName $fdProfile -FrontDoorResourceGroupName $fdRg -TimeoutSeconds 0 | Out-Null } | Should -Throw '*fd-2*'
+        ) -Origins @(New-Origin 'app-wus3' 'Pending')
+        { & $scriptPath -AppServiceId $appId -FrontDoorProfileName $fdProfile -FrontDoorResourceGroupName $fdRg -TimeoutSeconds 0 | Out-Null } | Should -Throw '*already approved, but a pending connection*fd-2*'
         Get-Approvals | Should -BeNullOrEmpty
     }
 
@@ -227,8 +227,8 @@ Describe 'Approve-FrontDoorPrivateEndpoints.ps1 (Phase 4)' {
         Set-FakeConnections -Connections @(
             New-Connection 'fd-1' 'Pending' 'defenstack-frontdoor'
             New-Connection 'fd-2' 'Pending' 'defenstack-frontdoor'
-        )
-        { & $scriptPath -AppServiceId $appId -FrontDoorProfileName $fdProfile -FrontDoorResourceGroupName $fdRg -TimeoutSeconds 0 | Out-Null } | Should -Throw '*fd-1*'
+        ) -Origins @(New-Origin 'app-wus3' 'Pending')
+        { & $scriptPath -AppServiceId $appId -FrontDoorProfileName $fdProfile -FrontDoorResourceGroupName $fdRg -TimeoutSeconds 0 | Out-Null } | Should -Throw '*multiple pending connections share*fd-1, fd-2*'
         Get-Approvals | Should -BeNullOrEmpty
     }
 
@@ -350,7 +350,7 @@ Describe 'Approve-FrontDoorPrivateEndpoints.ps1 (Phase 4)' {
         It 'still times out with the "no origin" message when there is neither a request nor an origin' {
             Set-FakeConnections -Connections @() -Origins @()
             { & $scriptPath -AppServiceId $appId -FrontDoorProfileName $fdProfile -FrontDoorResourceGroupName $fdRg -TimeoutSeconds 0 | Out-Null } |
-                Should -Throw "*no Front Door origin in $fdProfile/app references this App Service*"
+                Should -Throw '*Check the origin exists, or redeploy*'
         }
 
         It 'fails when the Azure CLI cannot list Front Door origins' {
