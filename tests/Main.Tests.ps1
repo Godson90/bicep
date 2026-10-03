@@ -248,3 +248,23 @@ Describe 'Hub-to-hub peering and firewall routing (Phase 6)' {
         @($main.variables.monitorPrivateEndpointPrefixes) | Should -Be @("[parameters('primaryAddressPlan').privateEndpointSubnetPrefix]")
     }
 }
+
+Describe 'Subscription Activity Log (Phase 6)' {
+    BeforeAll {
+        $activityLog = Get-TemplateResourceBySymbol -Template $main -Symbol 'activityLog'
+    }
+
+    It 'deploys at subscription scope, not into a resource group' {
+        $activityLog.PSObject.Properties.Name | Should -Not -Contain 'resourceGroup'
+        $activityLog.PSObject.Properties.Name | Should -Not -Contain 'condition'
+    }
+
+    It 'names the setting per environment, so dev and prod can share one subscription' {
+        $activityLog.properties.parameters.settingName.value | Should -Be "[format('activity-log-defenstack-{0}', parameters('environmentName'))]"
+        $activityLog.name | Should -Be "[format('activity-log-{0}', parameters('environmentName'))]"
+    }
+
+    It 'sends the Activity Log to the shared workspace' {
+        $activityLog.properties.parameters.logAnalyticsWorkspaceId.value | Should -Be "[reference('global').outputs.logAnalyticsWorkspaceId.value]"
+    }
+}

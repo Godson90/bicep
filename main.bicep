@@ -126,6 +126,15 @@ module global 'modules/global.bicep' = {
   }
 }
 
+// The subscription Activity Log goes to the shared workspace, where Sentinel reads it as Azure Activity (Phase 6).
+module activityLog 'modules/activityLog.bicep' = {
+  name: 'activity-log-${environmentName}'
+  params: {
+    settingName: 'activity-log-defenstack-${environmentName}'
+    logAnalyticsWorkspaceId: global.outputs.logAnalyticsWorkspaceId
+  }
+}
+
 module primaryStamp 'modules/regionStamp.bicep' = {
   name: 'region-${primaryRegionCode}'
   scope: resourceGroup(primaryResourceGroupName)
