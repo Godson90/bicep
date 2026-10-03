@@ -112,7 +112,7 @@ Data protection is unchanged from Phase 0 (F7) on every account:
 
    1. Add read access in place: `az storage account update -g rg-defenstack-prod-wus3 -n <account> --sku Standard_RAGRS`.
    2. Start the zone conversion: `az storage account migration start -g rg-defenstack-prod-wus3 --account-name <account> --sku Standard_RAGZRS --no-wait`.
-   3. Poll until it finishes: `az storage account migration show -g rg-defenstack-prod-wus3 --account-name <account> --migration-name default --query "properties.migrationStatus" -o tsv`. Expected: `Complete`. It can take hours to days. The account stays readable and writable throughout.
+   3. Poll until it finishes: `az storage account migration show -g rg-defenstack-prod-wus3 --account-name <account> --migration-name default --query "{status: properties.migrationStatus || migrationStatus, detail: properties.migrationStatusDetail || migrationStatusDetail}" -o json`. Expected: `"status": "Complete"`. It can take hours to days. The account stays readable and writable throughout.
    4. Only then run the prod pipeline deploy (step 5 below).
 
    Reference: [Change how a storage account is replicated](https://learn.microsoft.com/en-us/azure/storage/common/redundancy-migration).
