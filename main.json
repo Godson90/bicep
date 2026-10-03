@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "8359658680150663647"
+      "templateHash": "798421267350042295"
     }
   },
   "definitions": {
@@ -30,10 +30,34 @@
           "metadata": {
             "description": "Key Vault zone."
           }
+        },
+        "monitor": {
+          "type": "string",
+          "metadata": {
+            "description": "Azure Monitor global endpoints zone (AMPLS)."
+          }
+        },
+        "oms": {
+          "type": "string",
+          "metadata": {
+            "description": "Log Analytics workspace agent endpoints zone (AMPLS)."
+          }
+        },
+        "ods": {
+          "type": "string",
+          "metadata": {
+            "description": "Log Analytics workspace ingestion (ODS) endpoints zone (AMPLS)."
+          }
+        },
+        "agentsvc": {
+          "type": "string",
+          "metadata": {
+            "description": "Log Analytics agent service endpoints zone (AMPLS)."
+          }
         }
       },
       "metadata": {
-        "description": "Private DNS zone names (or resource IDs) keyed by private endpoint group.",
+        "description": "Private DNS zone names (or resource IDs) keyed by private endpoint group: the application zones plus the Azure Monitor Private Link Scope zones (Phase 6).",
         "__bicep_imported_from!": {
           "sourceTemplate": "modules/types.bicep"
         }
@@ -283,7 +307,11 @@
     "privateDnsZoneNames": {
       "blob": "[format('privatelink.blob.{0}', environment().suffixes.storage)]",
       "sites": "privatelink.azurewebsites.net",
-      "vault": "privatelink.vaultcore.azure.net"
+      "vault": "privatelink.vaultcore.azure.net",
+      "monitor": "privatelink.monitor.azure.com",
+      "oms": "privatelink.oms.opinsights.azure.com",
+      "ods": "privatelink.ods.opinsights.azure.com",
+      "agentsvc": "privatelink.agentsvc.azure-automation.net"
     }
   },
   "resources": {
@@ -320,7 +348,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "11970960340011942935"
+              "templateHash": "3187133291534148592"
             }
           },
           "definitions": {
@@ -344,10 +372,34 @@
                   "metadata": {
                     "description": "Key Vault zone."
                   }
+                },
+                "monitor": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "Azure Monitor global endpoints zone (AMPLS)."
+                  }
+                },
+                "oms": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "Log Analytics workspace agent endpoints zone (AMPLS)."
+                  }
+                },
+                "ods": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "Log Analytics workspace ingestion (ODS) endpoints zone (AMPLS)."
+                  }
+                },
+                "agentsvc": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "Log Analytics agent service endpoints zone (AMPLS)."
+                  }
                 }
               },
               "metadata": {
-                "description": "Private DNS zone names (or resource IDs) keyed by private endpoint group.",
+                "description": "Private DNS zone names (or resource IDs) keyed by private endpoint group: the application zones plus the Azure Monitor Private Link Scope zones (Phase 6).",
                 "__bicep_imported_from!": {
                   "sourceTemplate": "types.bicep"
                 }
@@ -391,61 +443,31 @@
             }
           },
           "resources": {
-            "blobZone": {
+            "zones": {
+              "copy": {
+                "name": "zones",
+                "count": "[length(items(parameters('privateDnsZoneNames')))]"
+              },
               "type": "Microsoft.Network/privateDnsZones",
               "apiVersion": "2024-06-01",
-              "name": "[parameters('privateDnsZoneNames').blob]",
+              "name": "[items(parameters('privateDnsZoneNames'))[copyIndex()].value]",
               "location": "global"
             },
-            "sitesZone": {
-              "type": "Microsoft.Network/privateDnsZones",
-              "apiVersion": "2024-06-01",
-              "name": "[parameters('privateDnsZoneNames').sites]",
-              "location": "global"
-            },
-            "vaultZone": {
-              "type": "Microsoft.Network/privateDnsZones",
-              "apiVersion": "2024-06-01",
-              "name": "[parameters('privateDnsZoneNames').vault]",
-              "location": "global"
-            },
-            "blobZoneLock": {
+            "zoneLocks": {
+              "copy": {
+                "name": "zoneLocks",
+                "count": "[length(items(parameters('privateDnsZoneNames')))]"
+              },
               "condition": "[parameters('enableDeleteLock')]",
               "type": "Microsoft.Authorization/locks",
               "apiVersion": "2020-05-01",
-              "scope": "[resourceId('Microsoft.Network/privateDnsZones', parameters('privateDnsZoneNames').blob)]",
-              "name": "blob-zone-lck",
+              "scope": "[resourceId('Microsoft.Network/privateDnsZones', items(parameters('privateDnsZoneNames'))[copyIndex()].value)]",
+              "name": "[format('{0}-zone-lck', items(parameters('privateDnsZoneNames'))[copyIndex()].key)]",
               "properties": {
                 "level": "CanNotDelete"
               },
               "dependsOn": [
-                "blobZone"
-              ]
-            },
-            "sitesZoneLock": {
-              "condition": "[parameters('enableDeleteLock')]",
-              "type": "Microsoft.Authorization/locks",
-              "apiVersion": "2020-05-01",
-              "scope": "[resourceId('Microsoft.Network/privateDnsZones', parameters('privateDnsZoneNames').sites)]",
-              "name": "sites-zone-lck",
-              "properties": {
-                "level": "CanNotDelete"
-              },
-              "dependsOn": [
-                "sitesZone"
-              ]
-            },
-            "vaultZoneLock": {
-              "condition": "[parameters('enableDeleteLock')]",
-              "type": "Microsoft.Authorization/locks",
-              "apiVersion": "2020-05-01",
-              "scope": "[resourceId('Microsoft.Network/privateDnsZones', parameters('privateDnsZoneNames').vault)]",
-              "name": "vault-zone-lck",
-              "properties": {
-                "level": "CanNotDelete"
-              },
-              "dependsOn": [
-                "vaultZone"
+                "[format('zones[{0}]', copyIndex())]"
               ]
             },
             "monitoring": {
@@ -478,7 +500,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "11037180356623621409"
+                      "templateHash": "15867639967149762954"
                     }
                   },
                   "parameters": {
@@ -528,6 +550,8 @@
                       "location": "[parameters('location')]",
                       "properties": {
                         "retentionInDays": "[parameters('retentionInDays')]",
+                        "publicNetworkAccessForIngestion": "Disabled",
+                        "publicNetworkAccessForQuery": "Disabled",
                         "sku": {
                           "name": "PerGB2018"
                         },
@@ -572,11 +596,7 @@
             },
             "privateDnsZoneIds": {
               "$ref": "#/definitions/privateDnsZoneSet",
-              "value": {
-                "blob": "[resourceId('Microsoft.Network/privateDnsZones', parameters('privateDnsZoneNames').blob)]",
-                "sites": "[resourceId('Microsoft.Network/privateDnsZones', parameters('privateDnsZoneNames').sites)]",
-                "vault": "[resourceId('Microsoft.Network/privateDnsZones', parameters('privateDnsZoneNames').vault)]"
-              }
+              "value": "[toObject(items(parameters('privateDnsZoneNames')), lambda('zone', lambdaVariables('zone').key), lambda('zone', resourceId('Microsoft.Network/privateDnsZones', lambdaVariables('zone').value)))]"
             }
           }
         }
@@ -659,7 +679,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "804849034244079893"
+              "templateHash": "11283561421743270098"
             }
           },
           "definitions": {
@@ -683,10 +703,34 @@
                   "metadata": {
                     "description": "Key Vault zone."
                   }
+                },
+                "monitor": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "Azure Monitor global endpoints zone (AMPLS)."
+                  }
+                },
+                "oms": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "Log Analytics workspace agent endpoints zone (AMPLS)."
+                  }
+                },
+                "ods": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "Log Analytics workspace ingestion (ODS) endpoints zone (AMPLS)."
+                  }
+                },
+                "agentsvc": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "Log Analytics agent service endpoints zone (AMPLS)."
+                  }
                 }
               },
               "metadata": {
-                "description": "Private DNS zone names (or resource IDs) keyed by private endpoint group.",
+                "description": "Private DNS zone names (or resource IDs) keyed by private endpoint group: the application zones plus the Azure Monitor Private Link Scope zones (Phase 6).",
                 "__bicep_imported_from!": {
                   "sourceTemplate": "types.bicep"
                 }
@@ -3040,7 +3084,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "7524839027847542132"
+                      "templateHash": "7460805633704700014"
                     }
                   },
                   "parameters": {
@@ -3077,8 +3121,8 @@
                         "WorkspaceResourceId": "[parameters('logAnalyticsWorkspaceId')]",
                         "IngestionMode": "LogAnalytics",
                         "DisableLocalAuth": true,
-                        "publicNetworkAccessForIngestion": "Enabled",
-                        "publicNetworkAccessForQuery": "Enabled"
+                        "publicNetworkAccessForIngestion": "Disabled",
+                        "publicNetworkAccessForQuery": "Disabled"
                       }
                     }
                   ],
@@ -4684,7 +4728,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "14541934992851968211"
+                      "templateHash": "1945499524287876429"
                     }
                   },
                   "definitions": {
@@ -4708,10 +4752,34 @@
                           "metadata": {
                             "description": "Key Vault zone."
                           }
+                        },
+                        "monitor": {
+                          "type": "string",
+                          "metadata": {
+                            "description": "Azure Monitor global endpoints zone (AMPLS)."
+                          }
+                        },
+                        "oms": {
+                          "type": "string",
+                          "metadata": {
+                            "description": "Log Analytics workspace agent endpoints zone (AMPLS)."
+                          }
+                        },
+                        "ods": {
+                          "type": "string",
+                          "metadata": {
+                            "description": "Log Analytics workspace ingestion (ODS) endpoints zone (AMPLS)."
+                          }
+                        },
+                        "agentsvc": {
+                          "type": "string",
+                          "metadata": {
+                            "description": "Log Analytics agent service endpoints zone (AMPLS)."
+                          }
                         }
                       },
                       "metadata": {
-                        "description": "Private DNS zone names (or resource IDs) keyed by private endpoint group.",
+                        "description": "Private DNS zone names (or resource IDs) keyed by private endpoint group: the application zones plus the Azure Monitor Private Link Scope zones (Phase 6).",
                         "__bicep_imported_from!": {
                           "sourceTemplate": "types.bicep"
                         }
@@ -4994,6 +5062,14 @@
             "appInsightsName": {
               "type": "string",
               "value": "[reference('appInsights').outputs.name.value]"
+            },
+            "appInsightsId": {
+              "type": "string",
+              "value": "[reference('appInsights').outputs.id.value]"
+            },
+            "privateEndpointSubnetId": {
+              "type": "string",
+              "value": "[reference('spokeNetwork').outputs.privateEndpointSubnetId.value]"
             }
           }
         }
@@ -5064,7 +5140,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "804849034244079893"
+              "templateHash": "11283561421743270098"
             }
           },
           "definitions": {
@@ -5088,10 +5164,34 @@
                   "metadata": {
                     "description": "Key Vault zone."
                   }
+                },
+                "monitor": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "Azure Monitor global endpoints zone (AMPLS)."
+                  }
+                },
+                "oms": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "Log Analytics workspace agent endpoints zone (AMPLS)."
+                  }
+                },
+                "ods": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "Log Analytics workspace ingestion (ODS) endpoints zone (AMPLS)."
+                  }
+                },
+                "agentsvc": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "Log Analytics agent service endpoints zone (AMPLS)."
+                  }
                 }
               },
               "metadata": {
-                "description": "Private DNS zone names (or resource IDs) keyed by private endpoint group.",
+                "description": "Private DNS zone names (or resource IDs) keyed by private endpoint group: the application zones plus the Azure Monitor Private Link Scope zones (Phase 6).",
                 "__bicep_imported_from!": {
                   "sourceTemplate": "types.bicep"
                 }
@@ -7445,7 +7545,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "7524839027847542132"
+                      "templateHash": "7460805633704700014"
                     }
                   },
                   "parameters": {
@@ -7482,8 +7582,8 @@
                         "WorkspaceResourceId": "[parameters('logAnalyticsWorkspaceId')]",
                         "IngestionMode": "LogAnalytics",
                         "DisableLocalAuth": true,
-                        "publicNetworkAccessForIngestion": "Enabled",
-                        "publicNetworkAccessForQuery": "Enabled"
+                        "publicNetworkAccessForIngestion": "Disabled",
+                        "publicNetworkAccessForQuery": "Disabled"
                       }
                     }
                   ],
@@ -9089,7 +9189,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "14541934992851968211"
+                      "templateHash": "1945499524287876429"
                     }
                   },
                   "definitions": {
@@ -9113,10 +9213,34 @@
                           "metadata": {
                             "description": "Key Vault zone."
                           }
+                        },
+                        "monitor": {
+                          "type": "string",
+                          "metadata": {
+                            "description": "Azure Monitor global endpoints zone (AMPLS)."
+                          }
+                        },
+                        "oms": {
+                          "type": "string",
+                          "metadata": {
+                            "description": "Log Analytics workspace agent endpoints zone (AMPLS)."
+                          }
+                        },
+                        "ods": {
+                          "type": "string",
+                          "metadata": {
+                            "description": "Log Analytics workspace ingestion (ODS) endpoints zone (AMPLS)."
+                          }
+                        },
+                        "agentsvc": {
+                          "type": "string",
+                          "metadata": {
+                            "description": "Log Analytics agent service endpoints zone (AMPLS)."
+                          }
                         }
                       },
                       "metadata": {
-                        "description": "Private DNS zone names (or resource IDs) keyed by private endpoint group.",
+                        "description": "Private DNS zone names (or resource IDs) keyed by private endpoint group: the application zones plus the Azure Monitor Private Link Scope zones (Phase 6).",
                         "__bicep_imported_from!": {
                           "sourceTemplate": "types.bicep"
                         }
@@ -9399,6 +9523,14 @@
             "appInsightsName": {
               "type": "string",
               "value": "[reference('appInsights').outputs.name.value]"
+            },
+            "appInsightsId": {
+              "type": "string",
+              "value": "[reference('appInsights').outputs.id.value]"
+            },
+            "privateEndpointSubnetId": {
+              "type": "string",
+              "value": "[reference('spokeNetwork').outputs.privateEndpointSubnetId.value]"
             }
           }
         }
@@ -10017,6 +10149,304 @@
         "primaryStamp",
         "secondaryStamp"
       ]
+    },
+    "monitorPrivateLinkScope": {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('monitor-private-link-scope-{0}', parameters('environmentName'))]",
+      "resourceGroup": "[variables('globalResourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "scopeName": {
+            "value": "[format('ampls-defenstack-{0}', parameters('environmentName'))]"
+          },
+          "scopedResourceIds": {
+            "value": "[concat(createArray(reference('global').outputs.logAnalyticsWorkspaceId.value, reference('primaryStamp').outputs.appInsightsId.value), if(parameters('deploySecondaryRegion'), createArray(reference('secondaryStamp').outputs.appInsightsId.value), createArray()))]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "4163302235386877161"
+            }
+          },
+          "parameters": {
+            "scopeName": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255,
+              "metadata": {
+                "description": "Azure Monitor Private Link Scope name."
+              }
+            },
+            "scopedResourceIds": {
+              "type": "array",
+              "metadata": {
+                "description": "Resource IDs of the Azure Monitor resources reachable through the scope: the Log Analytics workspace and every Application Insights component."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Insights/privateLinkScopes",
+              "apiVersion": "2021-09-01",
+              "name": "[parameters('scopeName')]",
+              "location": "global",
+              "properties": {
+                "accessModeSettings": {
+                  "ingestionAccessMode": "PrivateOnly",
+                  "queryAccessMode": "PrivateOnly"
+                }
+              }
+            },
+            {
+              "copy": {
+                "name": "scopedResources",
+                "count": "[length(parameters('scopedResourceIds'))]"
+              },
+              "type": "Microsoft.Insights/privateLinkScopes/scopedResources",
+              "apiVersion": "2021-09-01",
+              "name": "[format('{0}/{1}', parameters('scopeName'), last(split(parameters('scopedResourceIds')[copyIndex()], '/')))]",
+              "properties": {
+                "linkedResourceId": "[parameters('scopedResourceIds')[copyIndex()]]"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Insights/privateLinkScopes', parameters('scopeName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "id": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Insights/privateLinkScopes', parameters('scopeName'))]"
+            },
+            "name": {
+              "type": "string",
+              "value": "[parameters('scopeName')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "global",
+        "primaryStamp",
+        "secondaryStamp"
+      ]
+    },
+    "monitorPrivateEndpoint": {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('monitor-private-endpoint-{0}', parameters('environmentName'))]",
+      "resourceGroup": "[variables('primaryResourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('primaryLocation')]"
+          },
+          "privateLinkScopeId": {
+            "value": "[reference('monitorPrivateLinkScope').outputs.id.value]"
+          },
+          "privateLinkScopeName": {
+            "value": "[reference('monitorPrivateLinkScope').outputs.name.value]"
+          },
+          "privateEndpointSubnetId": {
+            "value": "[reference('primaryStamp').outputs.privateEndpointSubnetId.value]"
+          },
+          "privateDnsZoneIds": {
+            "value": "[reference('global').outputs.privateDnsZoneIds.value]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "languageVersion": "2.0",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "18058642784737473513"
+            }
+          },
+          "definitions": {
+            "privateDnsZoneSet": {
+              "type": "object",
+              "properties": {
+                "blob": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "Blob storage zone."
+                  }
+                },
+                "sites": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "App Service (sites) zone."
+                  }
+                },
+                "vault": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "Key Vault zone."
+                  }
+                },
+                "monitor": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "Azure Monitor global endpoints zone (AMPLS)."
+                  }
+                },
+                "oms": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "Log Analytics workspace agent endpoints zone (AMPLS)."
+                  }
+                },
+                "ods": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "Log Analytics workspace ingestion (ODS) endpoints zone (AMPLS)."
+                  }
+                },
+                "agentsvc": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "Log Analytics agent service endpoints zone (AMPLS)."
+                  }
+                }
+              },
+              "metadata": {
+                "description": "Private DNS zone names (or resource IDs) keyed by private endpoint group: the application zones plus the Azure Monitor Private Link Scope zones (Phase 6).",
+                "__bicep_imported_from!": {
+                  "sourceTemplate": "types.bicep"
+                }
+              }
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure region for the private endpoint (the primary region)."
+              }
+            },
+            "privateLinkScopeId": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure Monitor Private Link Scope resource ID."
+              }
+            },
+            "privateLinkScopeName": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255,
+              "metadata": {
+                "description": "Azure Monitor Private Link Scope name, used for deterministic private endpoint naming."
+              }
+            },
+            "privateEndpointSubnetId": {
+              "type": "string",
+              "metadata": {
+                "description": "Private-endpoint subnet resource ID in the primary spoke."
+              }
+            },
+            "privateDnsZoneIds": {
+              "$ref": "#/definitions/privateDnsZoneSet",
+              "metadata": {
+                "description": "Resource IDs of the shared private DNS zones created by the global layer."
+              }
+            }
+          },
+          "resources": {
+            "privateEndpoint": {
+              "type": "Microsoft.Network/privateEndpoints",
+              "apiVersion": "2024-07-01",
+              "name": "[format('{0}-pe', parameters('privateLinkScopeName'))]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "privateLinkServiceConnections": [
+                  {
+                    "name": "azuremonitor",
+                    "properties": {
+                      "privateLinkServiceId": "[parameters('privateLinkScopeId')]",
+                      "groupIds": [
+                        "azuremonitor"
+                      ]
+                    }
+                  }
+                ],
+                "subnet": {
+                  "id": "[parameters('privateEndpointSubnetId')]"
+                }
+              }
+            },
+            "privateDnsZoneGroup": {
+              "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+              "apiVersion": "2024-07-01",
+              "name": "[format('{0}/{1}', format('{0}-pe', parameters('privateLinkScopeName')), 'default')]",
+              "properties": {
+                "privateDnsZoneConfigs": [
+                  {
+                    "name": "monitor",
+                    "properties": {
+                      "privateDnsZoneId": "[parameters('privateDnsZoneIds').monitor]"
+                    }
+                  },
+                  {
+                    "name": "oms",
+                    "properties": {
+                      "privateDnsZoneId": "[parameters('privateDnsZoneIds').oms]"
+                    }
+                  },
+                  {
+                    "name": "ods",
+                    "properties": {
+                      "privateDnsZoneId": "[parameters('privateDnsZoneIds').ods]"
+                    }
+                  },
+                  {
+                    "name": "agentsvc",
+                    "properties": {
+                      "privateDnsZoneId": "[parameters('privateDnsZoneIds').agentsvc]"
+                    }
+                  },
+                  {
+                    "name": "blob",
+                    "properties": {
+                      "privateDnsZoneId": "[parameters('privateDnsZoneIds').blob]"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "privateEndpoint"
+              ]
+            }
+          },
+          "outputs": {
+            "id": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-pe', parameters('privateLinkScopeName')))]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "global",
+        "monitorPrivateLinkScope",
+        "primaryStamp"
+      ]
     }
   },
   "outputs": {
@@ -10067,6 +10497,10 @@
     "appServiceIds": {
       "type": "array",
       "value": "[concat(createArray(reference('primaryStamp').outputs.appServiceId.value), if(parameters('deploySecondaryRegion'), createArray(reference('secondaryStamp').outputs.appServiceId.value), createArray()))]"
+    },
+    "monitorPrivateLinkScopeName": {
+      "type": "string",
+      "value": "[reference('monitorPrivateLinkScope').outputs.name.value]"
     }
   }
 }

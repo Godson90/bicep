@@ -59,10 +59,19 @@ Describe 'Composition' {
 }
 
 Describe 'Shared private DNS' {
-    It 'defines the three zone names once' {
-        @($main.variables.privateDnsZoneNames.PSObject.Properties.Name) -join ',' | Should -Be 'blob,sites,vault'
+    It 'defines the zone names once: three application zones and four Azure Monitor (AMPLS) zones' {
+        @($main.variables.privateDnsZoneNames.PSObject.Properties.Name) -join ',' | Should -Be 'blob,sites,vault,monitor,oms,ods,agentsvc'
         $main.variables.privateDnsZoneNames.sites | Should -Be 'privatelink.azurewebsites.net'
         $main.variables.privateDnsZoneNames.vault | Should -Be 'privatelink.vaultcore.azure.net'
+    }
+
+    It 'adds the AMPLS zone <Key> = <Zone> (Phase 6)' -ForEach @(
+        @{ Key = 'monitor'; Zone = 'privatelink.monitor.azure.com' }
+        @{ Key = 'oms'; Zone = 'privatelink.oms.opinsights.azure.com' }
+        @{ Key = 'ods'; Zone = 'privatelink.ods.opinsights.azure.com' }
+        @{ Key = 'agentsvc'; Zone = 'privatelink.agentsvc.azure-automation.net' }
+    ) {
+        $main.variables.privateDnsZoneNames.$Key | Should -BeExactly $Zone
     }
 
     It 'links every zone in the global resource group' {
@@ -153,5 +162,39 @@ Describe 'Public ingress (Phase 4)' {
         }
         $main.outputs.frontDoorProfileName.value | Should -Be "[reference('frontDoor').outputs.profileName.value]"
         $main.outputs.globalResourceGroupName.value | Should -Be "[variables('globalResourceGroupName')]"
+    }
+}
+
+Describe 'Azure Monitor Private Link Scope (Phase 6)' {
+    BeforeAll {
+        $scope = Get-TemplateResourceBySymbol -Template $main -Symbol 'monitorPrivateLinkScope'
+        $endpoint = Get-TemplateResourceBySymbol -Template $main -Symbol 'monitorPrivateEndpoint'
+    }
+
+    It 'deploys one scope per environment into the global resource group' {
+        $scope.resourceGroup | Should -Be "[variables('globalResourceGroupName')]"
+        $scope.properties.parameters.scopeName.value | Should -Be "[format('ampls-defenstack-{0}', parameters('environmentName'))]"
+    }
+
+    It 'scopes the workspace and the primary App Insights component, plus the secondary component only when deployed' {
+        $value = $scope.properties.parameters.scopedResourceIds.value
+        $value | Should -Match "^\[concat\(createArray\(reference\('global'\)\.outputs\.logAnalyticsWorkspaceId\.value, reference\('primaryStamp'\)\.outputs\.appInsightsId\.value\)"
+        $value | Should -Match "if\(parameters\('deploySecondaryRegion'\), createArray\(reference\('secondaryStamp'\)\.outputs\.appInsightsId\.value\), createArray\(\)\)"
+    }
+
+    It 'puts the single azuremonitor endpoint in the primary spoke private-endpoint subnet' {
+        $endpoint.resourceGroup | Should -Be "[variables('primaryResourceGroupName')]"
+        $endpoint.properties.parameters.location.value | Should -Be "[parameters('primaryLocation')]"
+        $endpoint.properties.parameters.privateEndpointSubnetId.value | Should -Be "[reference('primaryStamp').outputs.privateEndpointSubnetId.value]"
+        $endpoint.properties.parameters.privateDnsZoneIds.value | Should -Be "[reference('global').outputs.privateDnsZoneIds.value]"
+    }
+
+    It 'creates the endpoint after the scope holds its resources, so the DNS records cover them all' {
+        $endpoint.properties.parameters.privateLinkScopeId.value | Should -Be "[reference('monitorPrivateLinkScope').outputs.id.value]"
+        @($endpoint.dependsOn) | Should -Contain 'monitorPrivateLinkScope'
+    }
+
+    It 'outputs the scope name for runbook 06' {
+        $main.outputs.monitorPrivateLinkScopeName.value | Should -Be "[reference('monitorPrivateLinkScope').outputs.name.value]"
     }
 }

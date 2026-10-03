@@ -20,9 +20,9 @@ Describe 'Application Insights component (Phase 5)' {
         $component.properties.DisableLocalAuth | Should -BeExactly $true
     }
 
-    It 'keeps public ingestion and query until Phase 6 adds AMPLS' {
-        $component.properties.publicNetworkAccessForIngestion | Should -Be 'Enabled'
-        $component.properties.publicNetworkAccessForQuery | Should -Be 'Enabled'
+    It 'accepts ingestion and queries only through the Azure Monitor Private Link Scope (Phase 6)' {
+        $component.properties.publicNetworkAccessForIngestion | Should -Be 'Disabled'
+        $component.properties.publicNetworkAccessForQuery | Should -Be 'Disabled'
     }
 
     It 'outputs the connection string the App Service needs' {
@@ -64,6 +64,10 @@ Describe 'Region stamp telemetry wiring (Phase 5)' {
     It 'passes the regional connection string to the App Service' {
         (Get-ModuleDeployment -Template $stamp -Name 'app-service').properties.parameters.applicationInsightsConnectionString.value |
             Should -Be "[reference('appInsights').outputs.connectionString.value]"
+    }
+
+    It 'outputs the component ID so the entry point can scope it into AMPLS (Phase 6)' {
+        $stamp.outputs.appInsightsId.value | Should -Be "[reference('appInsights').outputs.id.value]"
     }
 
     It 'grants the App Service identity the publisher role on its own component' {

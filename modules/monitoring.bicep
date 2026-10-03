@@ -17,12 +17,15 @@ param replicationLocation string = ''
 @description('Apply a CanNotDelete lock to the workspace.')
 param enableDeleteLock bool = false
 
-// Central workspace for platform, network, storage, and application diagnostics.
+// Central workspace for platform, network, storage, and application diagnostics. Agents and queries reach it
+// only through the Azure Monitor Private Link Scope; diagnostic settings use Azure's internal path (F10, Phase 6).
 resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2026-03-01' = {
   name: workspaceName
   location: location
   properties: {
     retentionInDays: retentionInDays
+    publicNetworkAccessForIngestion: 'Disabled'
+    publicNetworkAccessForQuery: 'Disabled'
     sku: {
       name: 'PerGB2018'
     }

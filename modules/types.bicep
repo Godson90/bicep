@@ -32,7 +32,7 @@ type regionAddressPlan = {
 }
 
 @export()
-@description('Private DNS zone names (or resource IDs) keyed by private endpoint group.')
+@description('Private DNS zone names (or resource IDs) keyed by private endpoint group: the application zones plus the Azure Monitor Private Link Scope zones (Phase 6).')
 type privateDnsZoneSet = {
   @description('Blob storage zone.')
   blob: string
@@ -42,6 +42,18 @@ type privateDnsZoneSet = {
 
   @description('Key Vault zone.')
   vault: string
+
+  @description('Azure Monitor global endpoints zone (AMPLS).')
+  monitor: string
+
+  @description('Log Analytics workspace agent endpoints zone (AMPLS).')
+  oms: string
+
+  @description('Log Analytics workspace ingestion (ODS) endpoints zone (AMPLS).')
+  ods: string
+
+  @description('Log Analytics agent service endpoints zone (AMPLS).')
+  agentsvc: string
 }
 
 @export()
