@@ -35,6 +35,10 @@ the deadline passes.
 
 Runs in deploy.yml after the deployment, and by hand from runbook 04.
 
+A matching Pending request for an App Service that no origin in the origin group references is refused (the
+script approves nothing and throws): Front Door creates its origin before it sends the request, so such a request
+cannot be Front Door's.
+
 .EXAMPLE
 ./scripts/Approve-FrontDoorPrivateEndpoints.ps1 -AppServiceId /subscriptions/<sub>/resourceGroups/rg-defenstack-dev-wus3/providers/Microsoft.Web/sites/<app> -FrontDoorProfileName afd-defenstack-dev -FrontDoorResourceGroupName rg-defenstack-dev-global
 #>
@@ -162,6 +166,13 @@ foreach ($id in $AppServiceId) {
         if ($matchingOriginStatus -eq 'Approved' -and $pendingMatching.Count -gt 0) {
             $names = ($pendingMatching | ForEach-Object { $_.Name }) -join ', '
             throw "$appName`: Front Door's origin '$($matchingOrigin.name)' already reports its private link Approved, so the pending connection with the same request message ('$RequestMessage') cannot be Front Door's ($names). This could be a spoofed request: verify the private endpoint and reject any unexpected connection, then re-run this script (runbook 04 section 5.2)."
+        }
+
+        # Front Door creates its origin first and only then sends the private endpoint request, so a matching
+        # request for an App Service that no origin references cannot be Front Door's.
+        if (-not $matchingOrigin -and $pendingMatching.Count -gt 0) {
+            $names = ($pendingMatching | ForEach-Object { $_.Name }) -join ', '
+            throw "$appName`: a pending connection carries the request message '$RequestMessage' ($names), but no Front Door origin in $FrontDoorProfileName/$OriginGroupName references this App Service, so it cannot be Front Door's request. This could be a spoofed request: verify the private endpoint and reject any unexpected connection, then re-run this script (runbook 04 section 5.2)."
         }
 
         if ($approvedFrontDoor.Count -gt 0 -and $pendingMatching.Count -gt 0) {
