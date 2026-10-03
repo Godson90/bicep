@@ -1,12 +1,12 @@
-# Architecture overview: Phase 1-5 (subscription-scope, multi-region, Premium firewall, admin access, public ingress, app and data resilience)
+# Architecture overview: Phase 1-6 (subscription-scope, multi-region, Premium firewall, admin access, public ingress, app and data resilience, private monitoring and detection)
 
-> Owning files: `main.bicep`, `modules/global.bicep`, `modules/regionStamp.bicep`, `modules/privateDnsZoneLinks.bicep`, `modules/types.bicep`, `modules/azureFirewall.bicep`, `modules/firewallPolicyRules.bicep`, `modules/hubNetwork.bicep`, `modules/bastion.bicep`, `modules/vpnGateway.bicep`, `modules/frontDoor.bicep`. Spec: `docs/superpowers/specs/2026-09-25-secure-connectivity-design.md` §1, §3, §5.
+> Owning files: `main.bicep`, `modules/global.bicep`, `modules/regionStamp.bicep`, `modules/privateDnsZoneLinks.bicep`, `modules/types.bicep`, `modules/azureFirewall.bicep`, `modules/firewallPolicyRules.bicep`, `modules/hubNetwork.bicep`, `modules/bastion.bicep`, `modules/vpnGateway.bicep`, `modules/frontDoor.bicep`, `modules/monitorPrivateLinkScope.bicep`, `modules/hubPeering.bicep`, `modules/flowLogs.bicep`, `modules/metricAlerts.bicep`. Spec: `docs/superpowers/specs/2026-09-25-secure-connectivity-design.md` §1, §3, §5.
 
 ## 1. Purpose and status
 
 Phase 1 replaces the single resource-group, resource-group-scoped `defenStack` deployment with a **subscription-scope** deployment (`targetScope = 'subscription'` in `main.bicep`) that fans out, with `resourceGroup(name)`, to resource groups the operator pre-creates (runbook 01). One deployment now spans:
 
-- A **global layer** (`modules/global.bicep`), deployed once per environment into `rg-defenstack-<env>-global`: the shared Log Analytics workspace and the three `privatelink.*` private DNS zones every region stamp uses.
+- A **global layer** (`modules/global.bicep`), deployed once per environment into `rg-defenstack-<env>-global`: the shared Log Analytics workspace and the shared `privatelink.*` private DNS zones every region stamp uses (three application zones; Phase 6 adds four Azure Monitor zones).
 - One or two **region stamps** (`modules/regionStamp.bicep`), each a hub/spoke pair with Azure Firewall, private App Service, Key Vault and Storage, deployed into `rg-defenstack-<env>-<regionCode>`:
   - The **primary** stamp is always deployed (West US 3 for both dev and prod).
   - The **secondary** stamp is deployed only when `deploySecondaryRegion = true` (prod only, East US). Dev runs primary-only (`ADR-008`).
@@ -53,13 +53,21 @@ deploy pipeline approves Front Door's private endpoint connections
 
 See [runbook 05](../runbooks/05-app-and-data.md).
 
-What later phases add (not present after Phase 5):
+**Phase 6** added monitoring, detection and response:
+- Azure Monitor is private-only. One Azure Monitor Private Link Scope per environment, with ingestion and query `PrivateOnly`, scopes the workspace and every Application Insights component. Its single `azuremonitor` private endpoint sits in the primary spoke, and four Azure Monitor zones join the shared zone set (`ADR-022`).
+- Prod with DR peers the two hubs (brought forward from Phase 8). Each `AzureFirewallSubnet` routes the other region's spoke to the other firewall, and the `cross-region-monitoring` rules let only the East US App Service and management subnets reach the AMPLS endpoint (`ADR-022`).
+- VNet flow logs with Traffic Analytics, per region, write with a managed identity to a keyless regional account, under `NetworkWatcher_<region>` in `NetworkWatcherRG` (`ADR-023`).
+- The subscription Activity Log goes to the workspace (`ADR-025`), Microsoft Sentinel is onboarded, and its content comes from Content Hub (`ADR-024`).
+- One action group per environment emails `ALERT_EMAIL`; metric alerts cover the firewall, App Service, Key Vault, the VPN gateway and Front Door, plus Service Health.
+
+See [runbook 06](../runbooks/06-monitoring-and-sentinel.md).
+
+What later phases add (not present after Phase 6):
 
 | Phase | Adds |
 |---|---|
-| 6 | Azure Monitor Private Link Scope (AMPLS), alerts, Microsoft Sentinel |
 | 7 | Microsoft Defender for Cloud plans, Azure Policy assignments |
-| 8 | Recovery Services vaults, hub-to-hub peering, the regional-failover runbook |
+| 8 | Recovery Services vaults and the backup job alert, DR traffic over the hub-to-hub peering (Phase 6 carries only monitoring), the regional-failover runbook |
 
 ## 2. Topology
 
@@ -231,6 +239,39 @@ flowchart LR
 - The custom domain (`customDomainHostName`) is hosted at an external DNS provider. It is empty until the domain exists; runbook 04 §5.1 covers the TXT validation and CNAME cutover.
 - No region has an inbound public IP for the app, and DDoS Network Protection is not deployed (`ADR-017`).
 
+### Monitoring (Phase 6)
+
+Telemetry and queries reach Azure Monitor only through the AMPLS endpoint (`ADR-022`); full procedures are in [runbook 06](../runbooks/06-monitoring-and-sentinel.md).
+
+```mermaid
+flowchart LR
+    subgraph WUS3["West US 3 (primary)"]
+        APP1["App Service and jump host"]
+        FW1["Firewall (Host: application rule, SNAT)"]
+        PE["AMPLS private endpoint (private-endpoints subnet)"]
+    end
+    subgraph EUS["East US (prod with DR)"]
+        APP2["App Service and jump host"]
+        FW2["Firewall (Client: network rule)"]
+    end
+    subgraph GLOBAL["rg-defenstack-env-global"]
+        AMPLS["AMPLS (PrivateOnly)"]
+        WS["Log Analytics workspace + Sentinel"]
+        AI["App Insights components (one per region)"]
+    end
+    APP1 -->|"HTTPS, private DNS"| PE
+    APP2 --> FW2
+    FW2 -->|"hub-to-hub peering"| FW1
+    FW1 --> PE
+    PE --> AMPLS
+    AMPLS --> WS
+    AMPLS --> AI
+    DIAG["Diagnostic settings, Activity Log, flow logs (Traffic Analytics)"] -.->|"Azure internal path"| WS
+```
+
+- VPN clients and the jump host resolve the Azure Monitor names through the firewall DNS proxy, so operators query and use Sentinel from there; nothing else can.
+- Diagnostic settings, the subscription Activity Log and Traffic Analytics write over Azure's own path, not through the endpoint.
+
 ### Admin access
 
 Two private, Entra ID-authenticated entry points per region (`ADR-013`); full procedures are in [runbook 03](../runbooks/03-admin-access.md).
@@ -312,16 +353,24 @@ One row per `names.*` key in `modules/regionStamp.bicep`, plus the resource grou
 
 | Resource group | Contents |
 |---|---|
-| `rg-defenstack-dev-global` | Log Analytics workspace `log-defenstack-dev` (`replication.enabled: false`); private DNS zones `privatelink.blob...`, `privatelink.azurewebsites.net`, `privatelink.vaultcore.azure.net`, each with 2 VNet links (dev-wus3 hub and spoke); Front Door Premium `afd-defenstack-dev` (endpoint `fde-defenstack-dev`, origin `app-wus3`, route `app`, security policy `waf`) and WAF policy `wafdefenstackdev` |
-| `rg-defenstack-dev-wus3` | Hub VNet with `AzureFirewallSubnet`, `AzureBastionSubnet` (Bastion NSG) and `GatewaySubnet` (route table spoke → firewall), DNS server = firewall IP; Bastion Standard `bas-defenstack-dev-wus3` and active-active VPN gateway `vpng-defenstack-dev-wus3` (`VpnGw1AZ`, `ADR-015`) with three public IPs and a gateway maintenance configuration; Firewall **Premium** `afw-defenstack-dev-wus3` (zones 1/2/3, IDPS `Alert`, `threatIntelMode: Alert`, `ADR-003`); firewall policy with four rule collection groups — `dns-egress`, `admin-access`, `platform-egress`, and `approved-https-egress` when `allowedOutboundFqdns` is non-empty (`ADR-010`) — and public IP; spoke VNet with `private-endpoints`, `appservice-integration`, `management` subnets, their NSGs, and two route tables (App Service and management egress through the firewall); App Service Plan `asp-defenstack-dev-wus3` (S1-equivalent, 1 instance, non-zonal); App Service with system-assigned identity and private endpoint; Key Vault (RBAC, purge protection on, 90-day soft delete) with private endpoint; Storage account (`Standard_LRS`) with private endpoint; Application Insights `appi-defenstack-dev-wus3` (workspace-based, Entra ID ingestion only); hub↔spoke peering with gateway transit; when `enableVirtualMachine = true`, the jump host (zone 1, Entra login extension, Update Manager schedule `<vm>-patch`) |
+| `rg-defenstack-dev-global` | Log Analytics workspace `log-defenstack-dev` (`replication.enabled: false`); private DNS zones `privatelink.blob...`, `privatelink.azurewebsites.net`, `privatelink.vaultcore.azure.net` and the four Azure Monitor zones (`privatelink.monitor.azure.com`, `privatelink.oms.opinsights.azure.com`, `privatelink.ods.opinsights.azure.com`, `privatelink.agentsvc.azure-automation.net`), each with 2 VNet links (dev-wus3 hub and spoke); Microsoft Sentinel on the workspace (public ingestion and query `Disabled`); AMPLS `ampls-defenstack-dev` (`PrivateOnly`); action group `ag-defenstack-dev`; Front Door alerts `alert-defenstack-dev-front-door-origin-health` and `-waf-blocks`; Service Health alert `alert-defenstack-dev-service-health`; Front Door Premium `afd-defenstack-dev` (endpoint `fde-defenstack-dev`, origin `app-wus3`, route `app`, security policy `waf`) and WAF policy `wafdefenstackdev` |
+| `rg-defenstack-dev-wus3` | Hub VNet with `AzureFirewallSubnet`, `AzureBastionSubnet` (Bastion NSG) and `GatewaySubnet` (route table spoke → firewall), DNS server = firewall IP; Bastion Standard `bas-defenstack-dev-wus3` and active-active VPN gateway `vpng-defenstack-dev-wus3` (`VpnGw1AZ`, `ADR-015`) with three public IPs and a gateway maintenance configuration; Firewall **Premium** `afw-defenstack-dev-wus3` (zones 1/2/3, IDPS `Alert`, `threatIntelMode: Alert`, `ADR-003`); firewall policy with four rule collection groups — `dns-egress`, `admin-access`, `platform-egress`, and `approved-https-egress` when `allowedOutboundFqdns` is non-empty (`ADR-010`) — and public IP; spoke VNet with `private-endpoints`, `appservice-integration`, `management` subnets, their NSGs, and two route tables (App Service and management egress through the firewall); App Service Plan `asp-defenstack-dev-wus3` (S1-equivalent, 1 instance, non-zonal); App Service with system-assigned identity and private endpoint; Key Vault (RBAC, purge protection on, 90-day soft delete) with private endpoint; Storage account (`Standard_LRS`) with private endpoint; Application Insights `appi-defenstack-dev-wus3` (workspace-based, Entra ID ingestion only, public access `Disabled`); AMPLS private endpoint `ampls-defenstack-dev-pe` in `private-endpoints`; flow-log account `stflwus3…` (LRS, keyless) and identity `id-flowlogs-defenstack-dev-wus3`; seven metric alerts `alert-defenstack-dev-wus3-*`; hub↔spoke peering with gateway transit; when `enableVirtualMachine = true`, the jump host (zone 1, Entra login extension, Update Manager schedule `<vm>-patch`) |
 
 ### prod
 
 | Resource group | Contents |
 |---|---|
-| `rg-defenstack-prod-global` | Log Analytics workspace `log-defenstack-prod` (`replication.enabled: true, location: eastus`); the same three private DNS zones, each with 4 VNet links (wus3 hub, wus3 spoke, eus hub, eus spoke); Front Door Premium `afd-defenstack-prod` with origins `app-wus3` (priority 1) and `app-eus` (priority 2), and WAF policy `wafdefenstackprod`; `enableDeleteLock: true` on the zones, the workspace, the Front Door profile and the WAF policy |
-| `rg-defenstack-prod-wus3` (primary) | Same shape as dev's region resource group, but: VPN gateway `VpnGw2AZ`; Firewall Premium with IDPS `Deny`, `threatIntelMode: Deny`; App Service Plan `asp-defenstack-prod-wus3` zone-redundant, 3 instances (`isProd && isPrimary`); Storage account `Standard_RAGZRS` (`ADR-020`), with a Storage Blob Data Reader assignment on `def-blob` for the East US App Service; `enableDeleteLock: true` on the hub VNet, spoke VNet, Key Vault, firewall, firewall policy, and firewall public IP |
-| `rg-defenstack-prod-eus` (secondary, warm standby) | Same resource types as `rg-defenstack-prod-wus3`, deployed only when `deploySecondaryRegion = true`, except Bastion and the VPN gateway (their subnets exist; the resources arrive with `deploySecondaryAdminAccess = true` during failover): App Service Plan `asp-defenstack-prod-eus`, 1 instance, non-zonal (no scale-out until failover, `ADR-008`); Storage account `Standard_GRS`; private endpoint `<primary account>-secondary-pe` on the primary account's read-only secondary (`blob_secondary`); hub↔spoke peering local to this region; `enableDeleteLock: true` on the same set of resources as the primary (hub VNet, spoke VNet, Key Vault, firewall, firewall policy, firewall public IP) |
+| `rg-defenstack-prod-global` | Log Analytics workspace `log-defenstack-prod` (`replication.enabled: true, location: eastus`); the same seven private DNS zones, each with 4 VNet links (wus3 hub, wus3 spoke, eus hub, eus spoke); Sentinel, AMPLS `ampls-defenstack-prod`, action group `ag-defenstack-prod` and the global alerts, as in dev; Front Door Premium `afd-defenstack-prod` with origins `app-wus3` (priority 1) and `app-eus` (priority 2), and WAF policy `wafdefenstackprod`; `enableDeleteLock: true` on the zones, the workspace, the Front Door profile and the WAF policy |
+| `rg-defenstack-prod-wus3` (primary) | Same shape as dev's region resource group, but: VPN gateway `VpnGw2AZ`; Firewall Premium with IDPS `Deny`, `threatIntelMode: Deny`; App Service Plan `asp-defenstack-prod-wus3` zone-redundant, 3 instances (`isProd && isPrimary`); Storage account `Standard_RAGZRS` (`ADR-020`), with a Storage Blob Data Reader assignment on `def-blob` for the East US App Service; the AMPLS endpoint `ampls-defenstack-prod-pe`; flow-log account `stflwus3…` (ZRS); hub peering `hub-to-eus-hub` and route table `vnet-defenstack-prod-wus3-hub-firewall-rt`; rule collection group `cross-region-monitoring` (Host); the private-endpoint NSG also admits its own `AzureFirewallSubnet`; `enableDeleteLock: true` on the hub VNet, spoke VNet, Key Vault, firewall, firewall policy, and firewall public IP |
+| `rg-defenstack-prod-eus` (secondary, warm standby) | Same resource types as `rg-defenstack-prod-wus3`, deployed only when `deploySecondaryRegion = true`, except Bastion and the VPN gateway (their subnets exist; the resources arrive with `deploySecondaryAdminAccess = true` during failover): App Service Plan `asp-defenstack-prod-eus`, 1 instance, non-zonal (no scale-out until failover, `ADR-008`); Storage account `Standard_GRS`; private endpoint `<primary account>-secondary-pe` on the primary account's read-only secondary (`blob_secondary`); hub↔spoke peering local to this region; hub peering `hub-to-wus3-hub`, route table `vnet-defenstack-prod-eus-hub-firewall-rt` and `cross-region-monitoring` (Client); flow-log account `stfleus…` (ZRS); seven metric alerts (six until the VPN gateway is deployed); `enableDeleteLock: true` on the same set of resources as the primary (hub VNet, spoke VNet, Key Vault, firewall, firewall policy, firewall public IP) |
+
+### NetworkWatcherRG (shared by every environment in the subscription)
+
+| Resource group | Contents |
+|---|---|
+| `NetworkWatcherRG` | `NetworkWatcher_westus3` and `NetworkWatcher_eastus` (created by Azure or by an operator, never by this template); under them, the flow logs `<vnet>-flowlog` for every deployed hub and spoke. The pipeline identities hold `Network Contributor` here (`ADR-023`) |
+
+The subscription also holds the diagnostic setting `activity-log-defenstack-<env>` (`ADR-025`).
 
 ## 7. Design decisions
 
@@ -344,3 +393,7 @@ One row per `names.*` key in `modules/regionStamp.bicep`, plus the resource grou
 - [ADR-019: Regional Key Vaults are kept in sync by deploy-time secrets written through Azure Resource Manager](../decisions/ADR-019-deploy-time-key-vault-secrets.md)
 - [ADR-020: Prod primary storage is RA-GZRS; the warm standby reads it through the secondary endpoint](../decisions/ADR-020-storage-ra-gzrs-and-warm-standby-read.md)
 - [ADR-021: One workspace-based Application Insights component per region, Entra ID ingestion only](../decisions/ADR-021-application-insights-per-region.md)
+- [ADR-022: Azure Monitor is private-only through one AMPLS, and hub-to-hub peering moves to Phase 6](../decisions/ADR-022-private-only-monitoring-and-hub-peering.md)
+- [ADR-023: VNet flow logs write with a managed identity to a regional keyless account, from NetworkWatcherRG](../decisions/ADR-023-flow-log-identity-and-network-watcher.md)
+- [ADR-024: Microsoft Sentinel is onboarded in Bicep; its content comes from Content Hub](../decisions/ADR-024-sentinel-content-through-content-hub.md)
+- [ADR-025: The subscription Activity Log diagnostic setting uses the preview API 2021-05-01-preview](../decisions/ADR-025-preview-api-subscription-diagnostic-setting.md)

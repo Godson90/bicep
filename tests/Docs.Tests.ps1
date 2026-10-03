@@ -184,3 +184,83 @@ Describe 'Phase 5 documentation' {
         Get-Content (Get-RepoPath 'docs/runbooks/04-ingress.md') -Raw | Should -Match ([regex]::Escape("so it cannot be Front Door's request"))
     }
 }
+
+Describe 'Phase 6 documentation' {
+    BeforeAll {
+        $script:runbook06 = Get-Content (Get-RepoPath 'docs/runbooks/06-monitoring-and-sentinel.md') -Raw -ErrorAction SilentlyContinue
+        $script:runbook00b = Get-Content (Get-RepoPath 'docs/runbooks/00b-configure-pipeline-credentials.md') -Raw
+    }
+
+    It '<_> exists' -ForEach 'docs/runbooks/06-monitoring-and-sentinel.md', 'docs/decisions/ADR-022-private-only-monitoring-and-hub-peering.md', 'docs/decisions/ADR-023-flow-log-identity-and-network-watcher.md', 'docs/decisions/ADR-024-sentinel-content-through-content-hub.md', 'docs/decisions/ADR-025-preview-api-subscription-diagnostic-setting.md' {
+        Get-RepoPath $_ | Should -Exist
+    }
+
+    It 'the monitoring runbook follows the 9-section template' {
+        foreach ($section in '## 1. Purpose and scope', '## 2. Prerequisites', '## 3. Parameters', '## 4. Step-by-step', '## 5. Manual and post-deployment steps', '## 6. Validation', '## 7. Rollback', '## 8. Operations', '## 9. Troubleshooting') {
+            $script:runbook06 | Should -Match ([regex]::Escape($section))
+        }
+    }
+
+    It 'the monitoring runbook covers alert triage, Sentinel connectors and querying over the VPN or jump host (spec §5 Phase 6)' {
+        foreach ($topic in 'Alert triage', 'Sentinel connector enablement', 'Content Hub', 'Microsoft Entra ID', 'Tenant-based Microsoft Defender for Cloud', 'Querying the workspace over the VPN or jump host', 'Live-only risks') {
+            $script:runbook06 | Should -Match ([regex]::Escape($topic))
+        }
+    }
+
+    It 'the monitoring runbook has a triage entry for every alert rule' {
+        foreach ($rule in 'firewall-health', 'firewall-snat-ports', 'app-http-5xx', 'app-health-check', 'key-vault-availability', 'key-vault-forbidden', 'vpn-p2s-connections', 'front-door-origin-health', 'front-door-waf-blocks', 'service-health') {
+            $script:runbook06 | Should -Match ([regex]::Escape("``$rule``"))
+        }
+        $script:runbook06 | Should -Match 'backup job alert[^.]*Phase 8'
+    }
+
+    It 'the monitoring runbook sets ALERT_EMAIL on dev, dev-plan and prod' {
+        foreach ($environment in 'dev', 'dev-plan', 'prod') {
+            $script:runbook06 | Should -Match ([regex]::Escape("gh variable set ALERT_EMAIL --env $environment"))
+        }
+    }
+
+    It 'the monitoring runbook and runbooks 00b and 01 require NetworkWatcherRG and NetworkWatcher_<region> before the identity script or deployment' {
+        foreach ($text in $script:runbook06, $script:runbook00b, (Get-Content (Get-RepoPath 'docs/runbooks/01-deploy-stack.md') -Raw)) {
+            $text | Should -Match ([regex]::Escape('az network watcher configure --resource-group NetworkWatcherRG --locations westus3 eastus --enabled true'))
+            $text | Should -Match ([regex]::Escape('NetworkWatcher_<region>'))
+        }
+    }
+
+    It 'the monitoring runbook covers the cross-region AMPLS path: East US network rule, West US 3 application rule with SNAT, and the private-endpoint NSG' {
+        foreach ($topic in 'spoke-to-peer-azure-monitor', 'peer-spoke-to-azure-monitor', 'source address', 'AzureFirewallSubnet', '-firewall-rt') {
+            $script:runbook06 | Should -Match ([regex]::Escape($topic))
+        }
+    }
+
+    It 'the monitoring runbook lists each unverified item as a live-only risk with a fallback' {
+        $risks = $script:runbook06.Substring($script:runbook06.IndexOf('Live-only risks'))
+        foreach ($risk in 'trusted services', 'Traffic Analytics', 'FQDN', '2021-05-01-preview', '2018-03-01') {
+            $risks | Should -Match ([regex]::Escape($risk))
+        }
+        ([regex]::Matches($risks, 'Fallback')).Count | Should -BeGreaterOrEqual 5
+    }
+
+    It 'runbook 00b documents the Phase 6 grants: Network Contributor on NetworkWatcherRG and the diagnostic-setting actions with the update path' {
+        foreach ($topic in 'Network Contributor', '-NetworkWatcherResourceGroupName', 'Microsoft.Insights/diagnosticSettings/write', 'az role definition update', 'Update custom role actions') {
+            $script:runbook00b | Should -Match ([regex]::Escape($topic))
+        }
+    }
+
+    It 'runbook 05 and ADR-021 no longer say Application Insights stays public until Phase 6' {
+        Get-Content (Get-RepoPath 'docs/runbooks/05-app-and-data.md') -Raw | Should -Not -Match 'until Phase 6'
+        Get-Content (Get-RepoPath 'docs/decisions/ADR-021-application-insights-per-region.md') -Raw | Should -Match 'ADR-022'
+    }
+
+    It 'the architecture overview, README and cost document cover Phase 6' {
+        $overview = Get-Content (Get-RepoPath 'docs/architecture/overview.md') -Raw
+        foreach ($adr in 'ADR-022', 'ADR-023', 'ADR-024', 'ADR-025') { $overview | Should -Match $adr }
+        $overview | Should -Match '\*\*Phase 6\*\*'
+        Get-Content (Get-RepoPath 'README.md') -Raw | Should -Match ([regex]::Escape('06-monitoring-and-sentinel.md'))
+        $cost = Get-Content (Get-RepoPath 'docs/cost.md') -Raw
+        $cost | Should -Match '## Phase 6 delta'
+        foreach ($driver in 'Sentinel', 'Traffic Analytics', 'flow-log storage', 'private endpoint', 'DNS zones', 'peering', 'alert') {
+            $cost | Should -Match ([regex]::Escape($driver))
+        }
+    }
+}
