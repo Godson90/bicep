@@ -184,7 +184,7 @@ Describe 'Approve-FrontDoorPrivateEndpoints.ps1 (Phase 4)' {
     }
 
     It 'makes no approval under -WhatIf' {
-        Set-FakeConnections -Connections @(New-Connection 'fd-1' 'Pending' 'defenstack-frontdoor')
+        Set-FakeConnections -Connections @(New-Connection 'fd-1' 'Pending' 'defenstack-frontdoor') -Origins @(New-Origin 'app-wus3' 'Pending')
         & $scriptPath -AppServiceId $appId -FrontDoorProfileName $fdProfile -FrontDoorResourceGroupName $fdRg -WhatIf | Out-Null
         Get-Approvals | Should -BeNullOrEmpty
     }
@@ -218,8 +218,8 @@ Describe 'Approve-FrontDoorPrivateEndpoints.ps1 (Phase 4)' {
         Set-FakeConnections -Connections @(
             New-Connection 'fd-1' 'Approved' 'defenstack-frontdoor approved by Approve-FrontDoorPrivateEndpoints.ps1'
             New-Connection 'fd-2' 'Pending' 'defenstack-frontdoor'
-        )
-        { & $scriptPath -AppServiceId $appId -FrontDoorProfileName $fdProfile -FrontDoorResourceGroupName $fdRg -TimeoutSeconds 0 | Out-Null } | Should -Throw '*fd-2*'
+        ) -Origins @(New-Origin 'app-wus3' 'Pending')
+        { & $scriptPath -AppServiceId $appId -FrontDoorProfileName $fdProfile -FrontDoorResourceGroupName $fdRg -TimeoutSeconds 0 | Out-Null } | Should -Throw '*already approved, but a pending connection*fd-2*'
         Get-Approvals | Should -BeNullOrEmpty
     }
 
@@ -227,8 +227,8 @@ Describe 'Approve-FrontDoorPrivateEndpoints.ps1 (Phase 4)' {
         Set-FakeConnections -Connections @(
             New-Connection 'fd-1' 'Pending' 'defenstack-frontdoor'
             New-Connection 'fd-2' 'Pending' 'defenstack-frontdoor'
-        )
-        { & $scriptPath -AppServiceId $appId -FrontDoorProfileName $fdProfile -FrontDoorResourceGroupName $fdRg -TimeoutSeconds 0 | Out-Null } | Should -Throw '*fd-1*'
+        ) -Origins @(New-Origin 'app-wus3' 'Pending')
+        { & $scriptPath -AppServiceId $appId -FrontDoorProfileName $fdProfile -FrontDoorResourceGroupName $fdRg -TimeoutSeconds 0 | Out-Null } | Should -Throw '*multiple pending connections share*fd-1, fd-2*'
         Get-Approvals | Should -BeNullOrEmpty
     }
 
@@ -255,6 +255,7 @@ Describe 'Approve-FrontDoorPrivateEndpoints.ps1 (Phase 4)' {
                         $c.properties.privateLinkServiceConnectionState.description = $description
                     }
                 }
+                $global:FakeOrigins.Clear()
                 $global:FakeOrigins.Add((New-Origin 'app-wus3' 'Approved'))
                 return ''
             }
@@ -264,6 +265,7 @@ Describe 'Approve-FrontDoorPrivateEndpoints.ps1 (Phase 4)' {
             return ''
         }
         $global:FakeOrigins = [System.Collections.Generic.List[object]]::new()
+        $global:FakeOrigins.Add((New-Origin 'app-wus3' 'Pending'))
         & $scriptPath -AppServiceId $appId -FrontDoorProfileName $fdProfile -FrontDoorResourceGroupName $fdRg -TimeoutSeconds 5 -PollIntervalSeconds 1 | Out-Null
         (Get-Approvals).Count | Should -Be 1
     }
@@ -294,6 +296,9 @@ Describe 'Approve-FrontDoorPrivateEndpoints.ps1 (Phase 4)' {
                 return ''
             }
             $global:LASTEXITCODE = 0
+            if ($joined -like 'afd origin list*') {
+                return (ConvertTo-Json -InputObject @(New-Origin 'app-wus3' 'Pending') -Depth 6)
+            }
             return ''
         }
         { & $scriptPath -AppServiceId $appId -FrontDoorProfileName $fdProfile -FrontDoorResourceGroupName $fdRg -TimeoutSeconds 0 | Out-Null } | Should -Throw '*Approving private endpoint connection*'
@@ -320,10 +325,32 @@ Describe 'Approve-FrontDoorPrivateEndpoints.ps1 (Phase 4)' {
             Get-Approvals | Should -BeNullOrEmpty
         }
 
-        It 'throws a distinct message when no Front Door origin references the App Service' {
+        It 'refuses, and approves nothing, when a matching request exists but no Front Door origin references the App Service (Phase 5)' {
             Set-FakeConnections -Connections @(New-Connection 'fd-1' 'Pending' 'defenstack-frontdoor') -Origins @()
             { & $scriptPath -AppServiceId $appId -FrontDoorProfileName $fdProfile -FrontDoorResourceGroupName $fdRg -TimeoutSeconds 0 | Out-Null } |
-                Should -Throw "*no Front Door origin in $fdProfile/app references this App Service*"
+                Should -Throw "*no Front Door origin in $fdProfile/app references this App Service, so it cannot be Front Door's request*"
+            Get-Approvals | Should -BeNullOrEmpty
+        }
+
+        It 'refuses even when only an origin for a different App Service exists (Phase 5)' {
+            $otherAppId = '/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/rg-defenstack-dev-wus3/providers/Microsoft.Web/sites/some-other-app'
+            Set-FakeConnections -Connections @(New-Connection 'fd-1' 'Pending' 'defenstack-frontdoor') -Origins @(New-Origin -Name 'app-other' -Status 'Pending' -ForAppId $otherAppId)
+            { & $scriptPath -AppServiceId $appId -FrontDoorProfileName $fdProfile -FrontDoorResourceGroupName $fdRg -TimeoutSeconds 0 | Out-Null } |
+                Should -Throw "*cannot be Front Door's request*"
+            Get-Approvals | Should -BeNullOrEmpty
+        }
+
+        It 'refuses under -WhatIf too, without approving' {
+            Set-FakeConnections -Connections @(New-Connection 'fd-1' 'Pending' 'defenstack-frontdoor') -Origins @()
+            { & $scriptPath -AppServiceId $appId -FrontDoorProfileName $fdProfile -FrontDoorResourceGroupName $fdRg -WhatIf | Out-Null } |
+                Should -Throw "*cannot be Front Door's request*"
+            Get-Approvals | Should -BeNullOrEmpty
+        }
+
+        It 'still times out with the "no origin" message when there is neither a request nor an origin' {
+            Set-FakeConnections -Connections @() -Origins @()
+            { & $scriptPath -AppServiceId $appId -FrontDoorProfileName $fdProfile -FrontDoorResourceGroupName $fdRg -TimeoutSeconds 0 | Out-Null } |
+                Should -Throw '*Check the origin exists, or redeploy*'
         }
 
         It 'fails when the Azure CLI cannot list Front Door origins' {

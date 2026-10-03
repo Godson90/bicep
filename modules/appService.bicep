@@ -34,6 +34,9 @@ param zoneRedundant bool = false
 @maxValue(30)
 param instanceCount int = 1
 
+@description('Application Insights connection string for this region. Empty sends no telemetry.')
+param applicationInsightsConnectionString string = ''
+
 @description('App Service plan name. Include the environment and region so every stamp gets its own plan.')
 @minLength(1)
 @maxLength(60)
@@ -41,6 +44,17 @@ param appServicePlanName string
 
 var appServicePlanSkuName = (environmentType == 'prod') ? 'P2V3' : 'S1'
 var appServicePlanSkuTier = (environmentType == 'prod') ? 'PremiumV3' : 'Standard'
+// Entra ID (managed identity) telemetry authentication; the component disables key-based ingestion.
+var telemetrySettings = empty(applicationInsightsConnectionString) ? [] : [
+  {
+    name: 'APPLICATIONINSIGHTS_CONNECTION_STRING'
+    value: applicationInsightsConnectionString
+  }
+  {
+    name: 'APPLICATIONINSIGHTS_AUTHENTICATION_STRING'
+    value: 'Authorization=AAD'
+  }
+]
 
 // App service plan creation
 // Environment-specific plan capacity for the private, VNet-integrated application.
@@ -80,6 +94,10 @@ resource appServiceApp 'Microsoft.Web/sites@2025-03-01' = {
       healthCheckPath: healthCheckPath
       scmMinTlsVersion: '1.2'
       remoteDebuggingEnabled: false
+      // Public access is disabled; default-deny keeps the site and Kudu closed even if it is ever re-enabled.
+      ipSecurityRestrictionsDefaultAction: 'Deny'
+      scmIpSecurityRestrictionsDefaultAction: 'Deny'
+      appSettings: telemetrySettings
     }
   }
 }

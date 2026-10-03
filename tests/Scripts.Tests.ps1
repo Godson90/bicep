@@ -173,8 +173,8 @@ Describe 'New-GitHubDeploymentIdentity.ps1' {
             @($creates | Where-Object { $_ -like '*--role Contributor --scope /subscriptions/22222222-2222-2222-2222-222222222222 *' }).Count | Should -Be 0
         }
 
-        It 'constrains RBAC Administrator with the exact ABAC condition for Storage Blob Data Contributor and Virtual Machine Administrator Login' {
-            $expected = "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {ba92f5b4-2d11-453d-a403-e96b0029c9fe, 1c0163c0-47e6-4577-8991-ea5c82e286e4})) AND ((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {ba92f5b4-2d11-453d-a403-e96b0029c9fe, 1c0163c0-47e6-4577-8991-ea5c82e286e4}))"
+        It 'constrains RBAC Administrator with the exact ABAC condition for the delegatable roles (Storage Blob Data Contributor, Virtual Machine Administrator Login, Storage Blob Data Reader, Monitoring Metrics Publisher)' {
+            $expected = "((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {ba92f5b4-2d11-453d-a403-e96b0029c9fe, 1c0163c0-47e6-4577-8991-ea5c82e286e4, 2a2b9908-6ea1-4ae2-8e65-a410df84e7d1, 3913510d-42f4-4e42-8a64-420c390055eb})) AND ((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {ba92f5b4-2d11-453d-a403-e96b0029c9fe, 1c0163c0-47e6-4577-8991-ea5c82e286e4, 2a2b9908-6ea1-4ae2-8e65-a410df84e7d1, 3913510d-42f4-4e42-8a64-420c390055eb}))"
             $rbacAdmin = @($creates | Where-Object { $_ -like '*--role Role Based Access Control Administrator*' })
             $rbacAdmin.Count | Should -Be 2
             foreach ($call in $rbacAdmin) {
@@ -295,6 +295,35 @@ Describe 'New-GitHubDeploymentIdentity.ps1' {
             finally {
                 Remove-AzShadow
             }
+        }
+    }
+}
+
+Describe 'Role GUIDs are all delegatable' {
+    It 'includes every role-definition GUID used in modules/*.bicep in the default -DelegatableRoleDefinitionIds list' {
+        $guidPattern = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
+        $roleGuids = [System.Collections.Generic.HashSet[string]]::new()
+        foreach ($file in Get-ChildItem (Get-RepoPath 'modules') -Filter '*.bicep') {
+            $text = Get-Content $file.FullName -Raw
+            foreach ($match in [regex]::Matches($text, "subscriptionResourceId\('Microsoft\.Authorization/roleDefinitions',\s*'($guidPattern)'\)")) {
+                [void]$roleGuids.Add($match.Groups[1].Value.ToLowerInvariant())
+            }
+            foreach ($match in [regex]::Matches($text, "(?:roleDefinitionId|roleId|\w*RoleId)\s*=\s*'($guidPattern)'")) {
+                [void]$roleGuids.Add($match.Groups[1].Value.ToLowerInvariant())
+            }
+        }
+
+        # The test must not pass vacuously: it has to find at least one GUID to check.
+        $roleGuids.Count | Should -BeGreaterThan 0
+
+        # Strip comments first, so a parenthesis inside one (e.g. "(app identity, container scope)")
+        # cannot be mistaken for the end of the @(...) array below.
+        $scriptTextNoComments = (Get-Content $scriptPath -Raw) -replace '#[^\r\n]*', ''
+        $defaultBlock = [regex]::Match($scriptTextNoComments, '\$DelegatableRoleDefinitionIds\s*=\s*@\((.*?)\)', 'Singleline').Groups[1].Value
+        $defaultBlock | Should -Not -BeNullOrEmpty
+
+        foreach ($roleGuid in $roleGuids) {
+            $defaultBlock | Should -Match ([regex]::Escape($roleGuid))
         }
     }
 }

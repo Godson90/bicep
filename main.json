@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "469615716823029545"
+      "templateHash": "8359658680150663647"
     }
   },
   "definitions": {
@@ -211,6 +211,13 @@
       "defaultValue": "",
       "metadata": {
         "description": "Custom domain served by Front Door, for example app.example.com, hosted at an external DNS provider. Empty serves only the azurefd.net hostname."
+      }
+    },
+    "keyVaultSecrets": {
+      "type": "secureObject",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Application secrets written to every regional Key Vault, as { name: value }. The pipeline supplies them from the KEYVAULT_SECRETS_JSON environment secret; never put values in a committed parameter file (ADR-019)."
       }
     },
     "healthCheckPath": {
@@ -639,6 +646,9 @@
           },
           "adminGroupObjectId": {
             "value": "[parameters('adminGroupObjectId')]"
+          },
+          "keyVaultSecrets": {
+            "value": "[parameters('keyVaultSecrets')]"
           }
         },
         "template": {
@@ -649,7 +659,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "3830908815412313554"
+              "templateHash": "804849034244079893"
             }
           },
           "definitions": {
@@ -889,6 +899,27 @@
               "metadata": {
                 "description": "Object ID of the Entra ID admin security group granted Virtual Machine Administrator Login on the management VM. Empty skips the assignment."
               }
+            },
+            "primaryStorageAccountId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Warm standby only: resource ID of the primary region RA-GZRS storage account, read through its secondary endpoint. Empty for the primary stamp."
+              }
+            },
+            "primaryStorageAccountName": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Warm standby only: name of the primary region storage account."
+              }
+            },
+            "keyVaultSecrets": {
+              "type": "secureObject",
+              "defaultValue": {},
+              "metadata": {
+                "description": "Application secrets written to this region's Key Vault, as { name: value } (ADR-019)."
+              }
             }
           },
           "variables": {
@@ -914,7 +945,8 @@
               "bastion": "[format('bas-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
               "bastionPublicIp": "[format('pip-bas-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
               "vpnGateway": "[format('vpng-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
-              "vpnGatewayPublicIp": "[format('pip-vpng-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]"
+              "vpnGatewayPublicIp": "[format('pip-vpng-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
+              "appInsights": "[format('appi-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]"
             },
             "firewallPrivateIp": "[cidrHost(parameters('addressPlan').firewallSubnetPrefix, 3)]",
             "adminSourceCidrs": "[concat(createArray(parameters('addressPlan').bastionSubnetPrefix, parameters('addressPlan').vpnClientAddressPool), parameters('managementSourceCidrs'))]",
@@ -938,7 +970,7 @@
                   "storageAccountName": {
                     "value": "[variables('names').storageAccount]"
                   },
-                  "storageAccountSkuName": "[if(variables('isProd'), createObject('value', 'Standard_GRS'), createObject('value', 'Standard_LRS'))]",
+                  "storageAccountSkuName": "[if(variables('isProd'), if(variables('isPrimary'), createObject('value', 'Standard_RAGZRS'), createObject('value', 'Standard_GRS')), createObject('value', 'Standard_LRS'))]",
                   "logAnalyticsWorkspaceId": {
                     "value": "[parameters('logAnalyticsWorkspaceId')]"
                   }
@@ -1136,6 +1168,9 @@
                   },
                   "enableDeleteLock": {
                     "value": "[variables('isProd')]"
+                  },
+                  "secrets": {
+                    "value": "[parameters('keyVaultSecrets')]"
                   }
                 },
                 "template": {
@@ -1145,7 +1180,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "10414290426879708077"
+                      "templateHash": "12501774521018755639"
                     }
                   },
                   "parameters": {
@@ -1205,6 +1240,13 @@
                       "metadata": {
                         "description": "Apply a CanNotDelete lock to the vault (in addition to soft delete and purge protection)."
                       }
+                    },
+                    "secrets": {
+                      "type": "secureObject",
+                      "defaultValue": {},
+                      "metadata": {
+                        "description": "Application secrets to write, as { name: value }. Written through Azure Resource Manager, so the deploying identity needs no network path to the private vault (ADR-019). Names: letters, digits and hyphens, at most 127 characters."
+                      }
                     }
                   },
                   "resources": [
@@ -1230,6 +1272,24 @@
                           "defaultAction": "Deny"
                         }
                       }
+                    },
+                    {
+                      "copy": {
+                        "name": "vaultSecrets",
+                        "count": "[length(items(parameters('secrets')))]"
+                      },
+                      "type": "Microsoft.KeyVault/vaults/secrets",
+                      "apiVersion": "2025-05-01",
+                      "name": "[format('{0}/{1}', parameters('keyVaultName'), items(parameters('secrets'))[copyIndex()].key)]",
+                      "properties": {
+                        "value": "[items(parameters('secrets'))[copyIndex()].value]",
+                        "attributes": {
+                          "enabled": true
+                        }
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]"
+                      ]
                     },
                     {
                       "type": "Microsoft.Insights/diagnosticSettings",
@@ -2953,6 +3013,92 @@
                 "azureFirewall"
               ]
             },
+            "appInsights": {
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "app-insights",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "location": {
+                    "value": "[parameters('location')]"
+                  },
+                  "componentName": {
+                    "value": "[variables('names').appInsights]"
+                  },
+                  "logAnalyticsWorkspaceId": {
+                    "value": "[parameters('logAnalyticsWorkspaceId')]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.47.16.16243",
+                      "templateHash": "7524839027847542132"
+                    }
+                  },
+                  "parameters": {
+                    "location": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Azure region for the Application Insights component (the stamp region)."
+                      }
+                    },
+                    "componentName": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 260,
+                      "metadata": {
+                        "description": "Application Insights component name."
+                      }
+                    },
+                    "logAnalyticsWorkspaceId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Central Log Analytics workspace resource ID; telemetry is stored there (workspace-based)."
+                      }
+                    }
+                  },
+                  "resources": [
+                    {
+                      "type": "Microsoft.Insights/components",
+                      "apiVersion": "2020-02-02",
+                      "name": "[parameters('componentName')]",
+                      "location": "[parameters('location')]",
+                      "kind": "web",
+                      "properties": {
+                        "Application_Type": "web",
+                        "WorkspaceResourceId": "[parameters('logAnalyticsWorkspaceId')]",
+                        "IngestionMode": "LogAnalytics",
+                        "DisableLocalAuth": true,
+                        "publicNetworkAccessForIngestion": "Enabled",
+                        "publicNetworkAccessForQuery": "Enabled"
+                      }
+                    }
+                  ],
+                  "outputs": {
+                    "id": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.Insights/components', parameters('componentName'))]"
+                    },
+                    "name": {
+                      "type": "string",
+                      "value": "[parameters('componentName')]"
+                    },
+                    "connectionString": {
+                      "type": "string",
+                      "value": "[reference(resourceId('Microsoft.Insights/components', parameters('componentName')), '2020-02-02').ConnectionString]"
+                    }
+                  }
+                }
+              }
+            },
             "appService": {
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -2987,7 +3133,10 @@
                   "zoneRedundant": {
                     "value": "[and(variables('isProd'), variables('isPrimary'))]"
                   },
-                  "instanceCount": "[if(and(variables('isProd'), variables('isPrimary')), createObject('value', 3), createObject('value', 1))]"
+                  "instanceCount": "[if(and(variables('isProd'), variables('isPrimary')), createObject('value', 3), createObject('value', 1))]",
+                  "applicationInsightsConnectionString": {
+                    "value": "[reference('appInsights').outputs.connectionString.value]"
+                  }
                 },
                 "template": {
                   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
@@ -2996,7 +3145,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "3265374201144656800"
+                      "templateHash": "8665067702236550410"
                     }
                   },
                   "parameters": {
@@ -3061,6 +3210,13 @@
                         "description": "Number of plan instances. Zone-redundant plans require at least 3."
                       }
                     },
+                    "applicationInsightsConnectionString": {
+                      "type": "string",
+                      "defaultValue": "",
+                      "metadata": {
+                        "description": "Application Insights connection string for this region. Empty sends no telemetry."
+                      }
+                    },
                     "appServicePlanName": {
                       "type": "string",
                       "minLength": 1,
@@ -3072,7 +3228,8 @@
                   },
                   "variables": {
                     "appServicePlanSkuName": "[if(equals(parameters('environmentType'), 'prod'), 'P2V3', 'S1')]",
-                    "appServicePlanSkuTier": "[if(equals(parameters('environmentType'), 'prod'), 'PremiumV3', 'Standard')]"
+                    "appServicePlanSkuTier": "[if(equals(parameters('environmentType'), 'prod'), 'PremiumV3', 'Standard')]",
+                    "telemetrySettings": "[if(empty(parameters('applicationInsightsConnectionString')), createArray(), createArray(createObject('name', 'APPLICATIONINSIGHTS_CONNECTION_STRING', 'value', parameters('applicationInsightsConnectionString')), createObject('name', 'APPLICATIONINSIGHTS_AUTHENTICATION_STRING', 'value', 'Authorization=AAD')))]"
                   },
                   "resources": [
                     {
@@ -3111,7 +3268,10 @@
                           "alwaysOn": true,
                           "healthCheckPath": "[parameters('healthCheckPath')]",
                           "scmMinTlsVersion": "1.2",
-                          "remoteDebuggingEnabled": false
+                          "remoteDebuggingEnabled": false,
+                          "ipSecurityRestrictionsDefaultAction": "Deny",
+                          "scmIpSecurityRestrictionsDefaultAction": "Deny",
+                          "appSettings": "[variables('telemetrySettings')]"
                         }
                       },
                       "dependsOn": [
@@ -3182,7 +3342,85 @@
                 }
               },
               "dependsOn": [
+                "appInsights",
                 "spokeNetwork"
+              ]
+            },
+            "appInsightsPublisher": {
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "app-insights-publisher",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "componentName": {
+                    "value": "[reference('appInsights').outputs.name.value]"
+                  },
+                  "publisherPrincipalId": {
+                    "value": "[reference('appService').outputs.appServicePrincipalId.value]"
+                  },
+                  "publisherAppServiceName": {
+                    "value": "[variables('names').appService]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.47.16.16243",
+                      "templateHash": "13762012215394524180"
+                    }
+                  },
+                  "parameters": {
+                    "componentName": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 260,
+                      "metadata": {
+                        "description": "Application Insights component name in this resource group."
+                      }
+                    },
+                    "publisherPrincipalId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Principal ID of the App Service managed identity that publishes telemetry."
+                      }
+                    },
+                    "publisherAppServiceName": {
+                      "type": "string",
+                      "minLength": 2,
+                      "maxLength": 60,
+                      "metadata": {
+                        "description": "Name of the App Service that owns the identity, used to make the assignment GUID deterministic."
+                      }
+                    }
+                  },
+                  "variables": {
+                    "monitoringMetricsPublisherRoleId": "3913510d-42f4-4e42-8a64-420c390055eb"
+                  },
+                  "resources": [
+                    {
+                      "type": "Microsoft.Authorization/roleAssignments",
+                      "apiVersion": "2022-04-01",
+                      "scope": "[resourceId('Microsoft.Insights/components', parameters('componentName'))]",
+                      "name": "[guid(resourceId('Microsoft.Insights/components', parameters('componentName')), parameters('publisherAppServiceName'), variables('monitoringMetricsPublisherRoleId'))]",
+                      "properties": {
+                        "principalId": "[parameters('publisherPrincipalId')]",
+                        "principalType": "ServicePrincipal",
+                        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('monitoringMetricsPublisherRoleId'))]"
+                      }
+                    }
+                  ]
+                }
+              },
+              "dependsOn": [
+                "appInsights",
+                "appService"
               ]
             },
             "virtualMachine": {
@@ -4275,6 +4513,131 @@
                 "vpnGateway"
               ]
             },
+            "storageSecondaryEndpoint": {
+              "condition": "[not(empty(parameters('primaryStorageAccountId')))]",
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "storage-secondary-endpoint",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "location": {
+                    "value": "[parameters('location')]"
+                  },
+                  "primaryStorageAccountId": {
+                    "value": "[parameters('primaryStorageAccountId')]"
+                  },
+                  "primaryStorageAccountName": {
+                    "value": "[parameters('primaryStorageAccountName')]"
+                  },
+                  "privateEndpointSubnetId": {
+                    "value": "[reference('spokeNetwork').outputs.privateEndpointSubnetId.value]"
+                  },
+                  "blobPrivateDnsZoneId": {
+                    "value": "[parameters('privateDnsZoneIds').blob]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.47.16.16243",
+                      "templateHash": "15337722754788976540"
+                    }
+                  },
+                  "parameters": {
+                    "location": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Azure region for the private endpoint (the warm-standby region)."
+                      }
+                    },
+                    "primaryStorageAccountId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Resource ID of the primary region storage account (RA-GZRS)."
+                      }
+                    },
+                    "primaryStorageAccountName": {
+                      "type": "string",
+                      "minLength": 3,
+                      "maxLength": 24,
+                      "metadata": {
+                        "description": "Primary region storage account name, used for deterministic naming."
+                      }
+                    },
+                    "privateEndpointSubnetId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Private endpoint subnet in the warm-standby spoke."
+                      }
+                    },
+                    "blobPrivateDnsZoneId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Shared privatelink.blob zone resource ID; the secondary endpoint registers as <account>-secondary."
+                      }
+                    }
+                  },
+                  "resources": [
+                    {
+                      "type": "Microsoft.Network/privateEndpoints",
+                      "apiVersion": "2024-07-01",
+                      "name": "[format('{0}-secondary-pe', parameters('primaryStorageAccountName'))]",
+                      "location": "[parameters('location')]",
+                      "properties": {
+                        "privateLinkServiceConnections": [
+                          {
+                            "name": "blob-secondary",
+                            "properties": {
+                              "privateLinkServiceId": "[parameters('primaryStorageAccountId')]",
+                              "groupIds": [
+                                "blob_secondary"
+                              ]
+                            }
+                          }
+                        ],
+                        "subnet": {
+                          "id": "[parameters('privateEndpointSubnetId')]"
+                        }
+                      }
+                    },
+                    {
+                      "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+                      "apiVersion": "2024-07-01",
+                      "name": "[format('{0}/{1}', format('{0}-secondary-pe', parameters('primaryStorageAccountName')), 'default')]",
+                      "properties": {
+                        "privateDnsZoneConfigs": [
+                          {
+                            "name": "blob-secondary",
+                            "properties": {
+                              "privateDnsZoneId": "[parameters('blobPrivateDnsZoneId')]"
+                            }
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-secondary-pe', parameters('primaryStorageAccountName')))]"
+                      ]
+                    }
+                  ],
+                  "outputs": {
+                    "id": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-secondary-pe', parameters('primaryStorageAccountName')))]"
+                    }
+                  }
+                }
+              },
+              "dependsOn": [
+                "spokeNetwork"
+              ]
+            },
             "privateConnectivity": {
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -4615,6 +4978,22 @@
             "storageAccountName": {
               "type": "string",
               "value": "[variables('names').storageAccount]"
+            },
+            "storageAccountId": {
+              "type": "string",
+              "value": "[reference('storage').outputs.id.value]"
+            },
+            "storageContainerName": {
+              "type": "string",
+              "value": "[reference('storage').outputs.blobContainerName.value]"
+            },
+            "appServicePrincipalId": {
+              "type": "string",
+              "value": "[reference('appService').outputs.appServicePrincipalId.value]"
+            },
+            "appInsightsName": {
+              "type": "string",
+              "value": "[reference('appInsights').outputs.name.value]"
             }
           }
         }
@@ -4670,6 +5049,11 @@
           },
           "deployAdminAccess": {
             "value": "[parameters('deploySecondaryAdminAccess')]"
+          },
+          "primaryStorageAccountId": "[if(variables('isProd'), createObject('value', reference('primaryStamp').outputs.storageAccountId.value), createObject('value', ''))]",
+          "primaryStorageAccountName": "[if(variables('isProd'), createObject('value', reference('primaryStamp').outputs.storageAccountName.value), createObject('value', ''))]",
+          "keyVaultSecrets": {
+            "value": "[parameters('keyVaultSecrets')]"
           }
         },
         "template": {
@@ -4680,7 +5064,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "3830908815412313554"
+              "templateHash": "804849034244079893"
             }
           },
           "definitions": {
@@ -4920,6 +5304,27 @@
               "metadata": {
                 "description": "Object ID of the Entra ID admin security group granted Virtual Machine Administrator Login on the management VM. Empty skips the assignment."
               }
+            },
+            "primaryStorageAccountId": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Warm standby only: resource ID of the primary region RA-GZRS storage account, read through its secondary endpoint. Empty for the primary stamp."
+              }
+            },
+            "primaryStorageAccountName": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Warm standby only: name of the primary region storage account."
+              }
+            },
+            "keyVaultSecrets": {
+              "type": "secureObject",
+              "defaultValue": {},
+              "metadata": {
+                "description": "Application secrets written to this region's Key Vault, as { name: value } (ADR-019)."
+              }
             }
           },
           "variables": {
@@ -4945,7 +5350,8 @@
               "bastion": "[format('bas-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
               "bastionPublicIp": "[format('pip-bas-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
               "vpnGateway": "[format('vpng-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
-              "vpnGatewayPublicIp": "[format('pip-vpng-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]"
+              "vpnGatewayPublicIp": "[format('pip-vpng-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
+              "appInsights": "[format('appi-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]"
             },
             "firewallPrivateIp": "[cidrHost(parameters('addressPlan').firewallSubnetPrefix, 3)]",
             "adminSourceCidrs": "[concat(createArray(parameters('addressPlan').bastionSubnetPrefix, parameters('addressPlan').vpnClientAddressPool), parameters('managementSourceCidrs'))]",
@@ -4969,7 +5375,7 @@
                   "storageAccountName": {
                     "value": "[variables('names').storageAccount]"
                   },
-                  "storageAccountSkuName": "[if(variables('isProd'), createObject('value', 'Standard_GRS'), createObject('value', 'Standard_LRS'))]",
+                  "storageAccountSkuName": "[if(variables('isProd'), if(variables('isPrimary'), createObject('value', 'Standard_RAGZRS'), createObject('value', 'Standard_GRS')), createObject('value', 'Standard_LRS'))]",
                   "logAnalyticsWorkspaceId": {
                     "value": "[parameters('logAnalyticsWorkspaceId')]"
                   }
@@ -5167,6 +5573,9 @@
                   },
                   "enableDeleteLock": {
                     "value": "[variables('isProd')]"
+                  },
+                  "secrets": {
+                    "value": "[parameters('keyVaultSecrets')]"
                   }
                 },
                 "template": {
@@ -5176,7 +5585,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "10414290426879708077"
+                      "templateHash": "12501774521018755639"
                     }
                   },
                   "parameters": {
@@ -5236,6 +5645,13 @@
                       "metadata": {
                         "description": "Apply a CanNotDelete lock to the vault (in addition to soft delete and purge protection)."
                       }
+                    },
+                    "secrets": {
+                      "type": "secureObject",
+                      "defaultValue": {},
+                      "metadata": {
+                        "description": "Application secrets to write, as { name: value }. Written through Azure Resource Manager, so the deploying identity needs no network path to the private vault (ADR-019). Names: letters, digits and hyphens, at most 127 characters."
+                      }
                     }
                   },
                   "resources": [
@@ -5261,6 +5677,24 @@
                           "defaultAction": "Deny"
                         }
                       }
+                    },
+                    {
+                      "copy": {
+                        "name": "vaultSecrets",
+                        "count": "[length(items(parameters('secrets')))]"
+                      },
+                      "type": "Microsoft.KeyVault/vaults/secrets",
+                      "apiVersion": "2025-05-01",
+                      "name": "[format('{0}/{1}', parameters('keyVaultName'), items(parameters('secrets'))[copyIndex()].key)]",
+                      "properties": {
+                        "value": "[items(parameters('secrets'))[copyIndex()].value]",
+                        "attributes": {
+                          "enabled": true
+                        }
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.KeyVault/vaults', parameters('keyVaultName'))]"
+                      ]
                     },
                     {
                       "type": "Microsoft.Insights/diagnosticSettings",
@@ -6984,6 +7418,92 @@
                 "azureFirewall"
               ]
             },
+            "appInsights": {
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "app-insights",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "location": {
+                    "value": "[parameters('location')]"
+                  },
+                  "componentName": {
+                    "value": "[variables('names').appInsights]"
+                  },
+                  "logAnalyticsWorkspaceId": {
+                    "value": "[parameters('logAnalyticsWorkspaceId')]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.47.16.16243",
+                      "templateHash": "7524839027847542132"
+                    }
+                  },
+                  "parameters": {
+                    "location": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Azure region for the Application Insights component (the stamp region)."
+                      }
+                    },
+                    "componentName": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 260,
+                      "metadata": {
+                        "description": "Application Insights component name."
+                      }
+                    },
+                    "logAnalyticsWorkspaceId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Central Log Analytics workspace resource ID; telemetry is stored there (workspace-based)."
+                      }
+                    }
+                  },
+                  "resources": [
+                    {
+                      "type": "Microsoft.Insights/components",
+                      "apiVersion": "2020-02-02",
+                      "name": "[parameters('componentName')]",
+                      "location": "[parameters('location')]",
+                      "kind": "web",
+                      "properties": {
+                        "Application_Type": "web",
+                        "WorkspaceResourceId": "[parameters('logAnalyticsWorkspaceId')]",
+                        "IngestionMode": "LogAnalytics",
+                        "DisableLocalAuth": true,
+                        "publicNetworkAccessForIngestion": "Enabled",
+                        "publicNetworkAccessForQuery": "Enabled"
+                      }
+                    }
+                  ],
+                  "outputs": {
+                    "id": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.Insights/components', parameters('componentName'))]"
+                    },
+                    "name": {
+                      "type": "string",
+                      "value": "[parameters('componentName')]"
+                    },
+                    "connectionString": {
+                      "type": "string",
+                      "value": "[reference(resourceId('Microsoft.Insights/components', parameters('componentName')), '2020-02-02').ConnectionString]"
+                    }
+                  }
+                }
+              }
+            },
             "appService": {
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -7018,7 +7538,10 @@
                   "zoneRedundant": {
                     "value": "[and(variables('isProd'), variables('isPrimary'))]"
                   },
-                  "instanceCount": "[if(and(variables('isProd'), variables('isPrimary')), createObject('value', 3), createObject('value', 1))]"
+                  "instanceCount": "[if(and(variables('isProd'), variables('isPrimary')), createObject('value', 3), createObject('value', 1))]",
+                  "applicationInsightsConnectionString": {
+                    "value": "[reference('appInsights').outputs.connectionString.value]"
+                  }
                 },
                 "template": {
                   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
@@ -7027,7 +7550,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "3265374201144656800"
+                      "templateHash": "8665067702236550410"
                     }
                   },
                   "parameters": {
@@ -7092,6 +7615,13 @@
                         "description": "Number of plan instances. Zone-redundant plans require at least 3."
                       }
                     },
+                    "applicationInsightsConnectionString": {
+                      "type": "string",
+                      "defaultValue": "",
+                      "metadata": {
+                        "description": "Application Insights connection string for this region. Empty sends no telemetry."
+                      }
+                    },
                     "appServicePlanName": {
                       "type": "string",
                       "minLength": 1,
@@ -7103,7 +7633,8 @@
                   },
                   "variables": {
                     "appServicePlanSkuName": "[if(equals(parameters('environmentType'), 'prod'), 'P2V3', 'S1')]",
-                    "appServicePlanSkuTier": "[if(equals(parameters('environmentType'), 'prod'), 'PremiumV3', 'Standard')]"
+                    "appServicePlanSkuTier": "[if(equals(parameters('environmentType'), 'prod'), 'PremiumV3', 'Standard')]",
+                    "telemetrySettings": "[if(empty(parameters('applicationInsightsConnectionString')), createArray(), createArray(createObject('name', 'APPLICATIONINSIGHTS_CONNECTION_STRING', 'value', parameters('applicationInsightsConnectionString')), createObject('name', 'APPLICATIONINSIGHTS_AUTHENTICATION_STRING', 'value', 'Authorization=AAD')))]"
                   },
                   "resources": [
                     {
@@ -7142,7 +7673,10 @@
                           "alwaysOn": true,
                           "healthCheckPath": "[parameters('healthCheckPath')]",
                           "scmMinTlsVersion": "1.2",
-                          "remoteDebuggingEnabled": false
+                          "remoteDebuggingEnabled": false,
+                          "ipSecurityRestrictionsDefaultAction": "Deny",
+                          "scmIpSecurityRestrictionsDefaultAction": "Deny",
+                          "appSettings": "[variables('telemetrySettings')]"
                         }
                       },
                       "dependsOn": [
@@ -7213,7 +7747,85 @@
                 }
               },
               "dependsOn": [
+                "appInsights",
                 "spokeNetwork"
+              ]
+            },
+            "appInsightsPublisher": {
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "app-insights-publisher",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "componentName": {
+                    "value": "[reference('appInsights').outputs.name.value]"
+                  },
+                  "publisherPrincipalId": {
+                    "value": "[reference('appService').outputs.appServicePrincipalId.value]"
+                  },
+                  "publisherAppServiceName": {
+                    "value": "[variables('names').appService]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.47.16.16243",
+                      "templateHash": "13762012215394524180"
+                    }
+                  },
+                  "parameters": {
+                    "componentName": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 260,
+                      "metadata": {
+                        "description": "Application Insights component name in this resource group."
+                      }
+                    },
+                    "publisherPrincipalId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Principal ID of the App Service managed identity that publishes telemetry."
+                      }
+                    },
+                    "publisherAppServiceName": {
+                      "type": "string",
+                      "minLength": 2,
+                      "maxLength": 60,
+                      "metadata": {
+                        "description": "Name of the App Service that owns the identity, used to make the assignment GUID deterministic."
+                      }
+                    }
+                  },
+                  "variables": {
+                    "monitoringMetricsPublisherRoleId": "3913510d-42f4-4e42-8a64-420c390055eb"
+                  },
+                  "resources": [
+                    {
+                      "type": "Microsoft.Authorization/roleAssignments",
+                      "apiVersion": "2022-04-01",
+                      "scope": "[resourceId('Microsoft.Insights/components', parameters('componentName'))]",
+                      "name": "[guid(resourceId('Microsoft.Insights/components', parameters('componentName')), parameters('publisherAppServiceName'), variables('monitoringMetricsPublisherRoleId'))]",
+                      "properties": {
+                        "principalId": "[parameters('publisherPrincipalId')]",
+                        "principalType": "ServicePrincipal",
+                        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('monitoringMetricsPublisherRoleId'))]"
+                      }
+                    }
+                  ]
+                }
+              },
+              "dependsOn": [
+                "appInsights",
+                "appService"
               ]
             },
             "virtualMachine": {
@@ -8306,6 +8918,131 @@
                 "vpnGateway"
               ]
             },
+            "storageSecondaryEndpoint": {
+              "condition": "[not(empty(parameters('primaryStorageAccountId')))]",
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "storage-secondary-endpoint",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "location": {
+                    "value": "[parameters('location')]"
+                  },
+                  "primaryStorageAccountId": {
+                    "value": "[parameters('primaryStorageAccountId')]"
+                  },
+                  "primaryStorageAccountName": {
+                    "value": "[parameters('primaryStorageAccountName')]"
+                  },
+                  "privateEndpointSubnetId": {
+                    "value": "[reference('spokeNetwork').outputs.privateEndpointSubnetId.value]"
+                  },
+                  "blobPrivateDnsZoneId": {
+                    "value": "[parameters('privateDnsZoneIds').blob]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.47.16.16243",
+                      "templateHash": "15337722754788976540"
+                    }
+                  },
+                  "parameters": {
+                    "location": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Azure region for the private endpoint (the warm-standby region)."
+                      }
+                    },
+                    "primaryStorageAccountId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Resource ID of the primary region storage account (RA-GZRS)."
+                      }
+                    },
+                    "primaryStorageAccountName": {
+                      "type": "string",
+                      "minLength": 3,
+                      "maxLength": 24,
+                      "metadata": {
+                        "description": "Primary region storage account name, used for deterministic naming."
+                      }
+                    },
+                    "privateEndpointSubnetId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Private endpoint subnet in the warm-standby spoke."
+                      }
+                    },
+                    "blobPrivateDnsZoneId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Shared privatelink.blob zone resource ID; the secondary endpoint registers as <account>-secondary."
+                      }
+                    }
+                  },
+                  "resources": [
+                    {
+                      "type": "Microsoft.Network/privateEndpoints",
+                      "apiVersion": "2024-07-01",
+                      "name": "[format('{0}-secondary-pe', parameters('primaryStorageAccountName'))]",
+                      "location": "[parameters('location')]",
+                      "properties": {
+                        "privateLinkServiceConnections": [
+                          {
+                            "name": "blob-secondary",
+                            "properties": {
+                              "privateLinkServiceId": "[parameters('primaryStorageAccountId')]",
+                              "groupIds": [
+                                "blob_secondary"
+                              ]
+                            }
+                          }
+                        ],
+                        "subnet": {
+                          "id": "[parameters('privateEndpointSubnetId')]"
+                        }
+                      }
+                    },
+                    {
+                      "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+                      "apiVersion": "2024-07-01",
+                      "name": "[format('{0}/{1}', format('{0}-secondary-pe', parameters('primaryStorageAccountName')), 'default')]",
+                      "properties": {
+                        "privateDnsZoneConfigs": [
+                          {
+                            "name": "blob-secondary",
+                            "properties": {
+                              "privateDnsZoneId": "[parameters('blobPrivateDnsZoneId')]"
+                            }
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-secondary-pe', parameters('primaryStorageAccountName')))]"
+                      ]
+                    }
+                  ],
+                  "outputs": {
+                    "id": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-secondary-pe', parameters('primaryStorageAccountName')))]"
+                    }
+                  }
+                }
+              },
+              "dependsOn": [
+                "spokeNetwork"
+              ]
+            },
             "privateConnectivity": {
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -8646,12 +9383,119 @@
             "storageAccountName": {
               "type": "string",
               "value": "[variables('names').storageAccount]"
+            },
+            "storageAccountId": {
+              "type": "string",
+              "value": "[reference('storage').outputs.id.value]"
+            },
+            "storageContainerName": {
+              "type": "string",
+              "value": "[reference('storage').outputs.blobContainerName.value]"
+            },
+            "appServicePrincipalId": {
+              "type": "string",
+              "value": "[reference('appService').outputs.appServicePrincipalId.value]"
+            },
+            "appInsightsName": {
+              "type": "string",
+              "value": "[reference('appInsights').outputs.name.value]"
             }
           }
         }
       },
       "dependsOn": [
-        "global"
+        "global",
+        "primaryStamp"
+      ]
+    },
+    "secondaryStorageReader": {
+      "condition": "[and(parameters('deploySecondaryRegion'), variables('isProd'))]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('storage-reader-{0}', variables('secondaryRegionCode'))]",
+      "resourceGroup": "[variables('primaryResourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "storageAccountName": {
+            "value": "[reference('primaryStamp').outputs.storageAccountName.value]"
+          },
+          "storageContainerName": {
+            "value": "[reference('primaryStamp').outputs.storageContainerName.value]"
+          },
+          "readerPrincipalId": {
+            "value": "[reference('secondaryStamp').outputs.appServicePrincipalId.value]"
+          },
+          "readerAppServiceName": {
+            "value": "[reference('secondaryStamp').outputs.appServiceName.value]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "7740808792062286483"
+            }
+          },
+          "parameters": {
+            "storageAccountName": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 24,
+              "metadata": {
+                "description": "Storage account name in this resource group."
+              }
+            },
+            "storageContainerName": {
+              "type": "string",
+              "minLength": 3,
+              "maxLength": 63,
+              "metadata": {
+                "description": "Blob container the reader may read."
+              }
+            },
+            "readerPrincipalId": {
+              "type": "string",
+              "metadata": {
+                "description": "Principal ID of the App Service managed identity that reads the container."
+              }
+            },
+            "readerAppServiceName": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 60,
+              "metadata": {
+                "description": "Name of the App Service that owns the identity, used to make the assignment GUID deterministic."
+              }
+            }
+          },
+          "variables": {
+            "storageBlobDataReaderRoleId": "2a2b9908-6ea1-4ae2-8e65-a410df84e7d1"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "scope": "[resourceId('Microsoft.Storage/storageAccounts/blobServices/containers', parameters('storageAccountName'), 'default', parameters('storageContainerName'))]",
+              "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), parameters('storageContainerName'), parameters('readerAppServiceName'), variables('storageBlobDataReaderRoleId'))]",
+              "properties": {
+                "principalId": "[parameters('readerPrincipalId')]",
+                "principalType": "ServicePrincipal",
+                "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageBlobDataReaderRoleId'))]"
+              }
+            }
+          ]
+        }
+      },
+      "dependsOn": [
+        "primaryStamp",
+        "secondaryStamp"
       ]
     },
     "frontDoor": {

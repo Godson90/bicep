@@ -71,6 +71,16 @@ param deployAdminAccess bool = false
 @description('Object ID of the Entra ID admin security group granted Virtual Machine Administrator Login on the management VM. Empty skips the assignment.')
 param adminGroupObjectId string = ''
 
+@description('Warm standby only: resource ID of the primary region RA-GZRS storage account, read through its secondary endpoint. Empty for the primary stamp.')
+param primaryStorageAccountId string = ''
+
+@description('Warm standby only: name of the primary region storage account.')
+param primaryStorageAccountName string = ''
+
+@description('Application secrets written to this region\'s Key Vault, as { name: value } (ADR-019).')
+@secure()
+param keyVaultSecrets object = {}
+
 var isProd = environmentName == 'prod'
 var isPrimary = regionRole == 'primary'
 var nameSuffix = uniqueString(subscription().id, environmentName, location)
@@ -94,6 +104,7 @@ var names = {
   bastionPublicIp: 'pip-bas-defenstack-${environmentName}-${regionCode}'
   vpnGateway: 'vpng-defenstack-${environmentName}-${regionCode}'
   vpnGatewayPublicIp: 'pip-vpng-defenstack-${environmentName}-${regionCode}'
+  appInsights: 'appi-defenstack-${environmentName}-${regionCode}'
 }
 // Azure Firewall always takes the first usable address (.4) of AzureFirewallSubnet. The hub needs it before
 // the firewall exists (GatewaySubnet route table); runbook 03 checks it matches the firewall's actual IP.
@@ -111,7 +122,8 @@ module storage 'storage.bicep' = {
   params: {
     location: location
     storageAccountName: names.storageAccount
-    storageAccountSkuName: isProd ? 'Standard_GRS' : 'Standard_LRS'
+    // Prod primary: zone- and geo-redundant with read access to the East US copy (ADR-020). Warm standby: GRS. Dev: LRS (ADR-008).
+    storageAccountSkuName: isProd ? (isPrimary ? 'Standard_RAGZRS' : 'Standard_GRS') : 'Standard_LRS'
     logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
   }
 }
@@ -125,6 +137,7 @@ module keyVault 'keyVault.bicep' = {
     enablePurgeProtection: true
     enabledForTemplateDeployment: true
     enableDeleteLock: isProd
+    secrets: keyVaultSecrets
   }
 }
 
@@ -194,6 +207,16 @@ module spokeNetwork 'spokeNetwork.bicep' = {
   }
 }
 
+// One workspace-based component per region, so a regional outage never takes the other region's telemetry with it (ADR-021).
+module appInsights 'appInsights.bicep' = {
+  name: 'app-insights'
+  params: {
+    location: location
+    componentName: names.appInsights
+    logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
+  }
+}
+
 module appService 'appService.bicep' = {
   name: 'app-service'
   params: {
@@ -206,6 +229,16 @@ module appService 'appService.bicep' = {
     healthCheckPath: healthCheckPath
     zoneRedundant: isProd && isPrimary
     instanceCount: isProd && isPrimary ? 3 : 1
+    applicationInsightsConnectionString: appInsights.outputs.connectionString
+  }
+}
+
+module appInsightsPublisher 'appInsightsPublisher.bicep' = {
+  name: 'app-insights-publisher'
+  params: {
+    componentName: appInsights.outputs.name
+    publisherPrincipalId: appService.outputs.appServicePrincipalId
+    publisherAppServiceName: names.appService
   }
 }
 
@@ -278,6 +311,18 @@ module networkIntegration 'networkIntegration.bicep' = {
   ]
 }
 
+// The warm standby reads the primary's data through the RA-GZRS secondary endpoint (blob_secondary).
+module storageSecondaryEndpoint 'storageSecondaryEndpoint.bicep' = if (!empty(primaryStorageAccountId)) {
+  name: 'storage-secondary-endpoint'
+  params: {
+    location: location
+    primaryStorageAccountId: primaryStorageAccountId
+    primaryStorageAccountName: primaryStorageAccountName
+    privateEndpointSubnetId: spokeNetwork.outputs.privateEndpointSubnetId
+    blobPrivateDnsZoneId: privateDnsZoneIds.blob
+  }
+}
+
 module privateConnectivity 'privateConnectivity.bicep' = {
   name: 'private-connectivity'
   params: {
@@ -306,3 +351,7 @@ output appServiceId string = appService.outputs.appServiceAppId
 output appServiceHostName string = appService.outputs.appServiceAppHostName
 output keyVaultName string = names.keyVault
 output storageAccountName string = names.storageAccount
+output storageAccountId string = storage.outputs.id
+output storageContainerName string = storage.outputs.blobContainerName
+output appServicePrincipalId string = appService.outputs.appServicePrincipalId
+output appInsightsName string = appInsights.outputs.name
