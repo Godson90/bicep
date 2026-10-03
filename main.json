@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "14360959365998541990"
+      "templateHash": "11396280836128805106"
     }
   },
   "definitions": {
@@ -649,7 +649,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "16367298874529328561"
+              "templateHash": "16813384299965939729"
             }
           },
           "definitions": {
@@ -928,7 +928,8 @@
               "bastion": "[format('bas-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
               "bastionPublicIp": "[format('pip-bas-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
               "vpnGateway": "[format('vpng-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
-              "vpnGatewayPublicIp": "[format('pip-vpng-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]"
+              "vpnGatewayPublicIp": "[format('pip-vpng-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
+              "appInsights": "[format('appi-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]"
             },
             "firewallPrivateIp": "[cidrHost(parameters('addressPlan').firewallSubnetPrefix, 3)]",
             "adminSourceCidrs": "[concat(createArray(parameters('addressPlan').bastionSubnetPrefix, parameters('addressPlan').vpnClientAddressPool), parameters('managementSourceCidrs'))]",
@@ -2967,6 +2968,92 @@
                 "azureFirewall"
               ]
             },
+            "appInsights": {
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "app-insights",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "location": {
+                    "value": "[parameters('location')]"
+                  },
+                  "componentName": {
+                    "value": "[variables('names').appInsights]"
+                  },
+                  "logAnalyticsWorkspaceId": {
+                    "value": "[parameters('logAnalyticsWorkspaceId')]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.47.16.16243",
+                      "templateHash": "7524839027847542132"
+                    }
+                  },
+                  "parameters": {
+                    "location": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Azure region for the Application Insights component (the stamp region)."
+                      }
+                    },
+                    "componentName": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 260,
+                      "metadata": {
+                        "description": "Application Insights component name."
+                      }
+                    },
+                    "logAnalyticsWorkspaceId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Central Log Analytics workspace resource ID; telemetry is stored there (workspace-based)."
+                      }
+                    }
+                  },
+                  "resources": [
+                    {
+                      "type": "Microsoft.Insights/components",
+                      "apiVersion": "2020-02-02",
+                      "name": "[parameters('componentName')]",
+                      "location": "[parameters('location')]",
+                      "kind": "web",
+                      "properties": {
+                        "Application_Type": "web",
+                        "WorkspaceResourceId": "[parameters('logAnalyticsWorkspaceId')]",
+                        "IngestionMode": "LogAnalytics",
+                        "DisableLocalAuth": true,
+                        "publicNetworkAccessForIngestion": "Enabled",
+                        "publicNetworkAccessForQuery": "Enabled"
+                      }
+                    }
+                  ],
+                  "outputs": {
+                    "id": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.Insights/components', parameters('componentName'))]"
+                    },
+                    "name": {
+                      "type": "string",
+                      "value": "[parameters('componentName')]"
+                    },
+                    "connectionString": {
+                      "type": "string",
+                      "value": "[reference(resourceId('Microsoft.Insights/components', parameters('componentName')), '2020-02-02').ConnectionString]"
+                    }
+                  }
+                }
+              }
+            },
             "appService": {
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -3001,7 +3088,10 @@
                   "zoneRedundant": {
                     "value": "[and(variables('isProd'), variables('isPrimary'))]"
                   },
-                  "instanceCount": "[if(and(variables('isProd'), variables('isPrimary')), createObject('value', 3), createObject('value', 1))]"
+                  "instanceCount": "[if(and(variables('isProd'), variables('isPrimary')), createObject('value', 3), createObject('value', 1))]",
+                  "applicationInsightsConnectionString": {
+                    "value": "[reference('appInsights').outputs.connectionString.value]"
+                  }
                 },
                 "template": {
                   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
@@ -3010,7 +3100,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "3265374201144656800"
+                      "templateHash": "8665067702236550410"
                     }
                   },
                   "parameters": {
@@ -3075,6 +3165,13 @@
                         "description": "Number of plan instances. Zone-redundant plans require at least 3."
                       }
                     },
+                    "applicationInsightsConnectionString": {
+                      "type": "string",
+                      "defaultValue": "",
+                      "metadata": {
+                        "description": "Application Insights connection string for this region. Empty sends no telemetry."
+                      }
+                    },
                     "appServicePlanName": {
                       "type": "string",
                       "minLength": 1,
@@ -3086,7 +3183,8 @@
                   },
                   "variables": {
                     "appServicePlanSkuName": "[if(equals(parameters('environmentType'), 'prod'), 'P2V3', 'S1')]",
-                    "appServicePlanSkuTier": "[if(equals(parameters('environmentType'), 'prod'), 'PremiumV3', 'Standard')]"
+                    "appServicePlanSkuTier": "[if(equals(parameters('environmentType'), 'prod'), 'PremiumV3', 'Standard')]",
+                    "telemetrySettings": "[if(empty(parameters('applicationInsightsConnectionString')), createArray(), createArray(createObject('name', 'APPLICATIONINSIGHTS_CONNECTION_STRING', 'value', parameters('applicationInsightsConnectionString')), createObject('name', 'APPLICATIONINSIGHTS_AUTHENTICATION_STRING', 'value', 'Authorization=AAD')))]"
                   },
                   "resources": [
                     {
@@ -3125,7 +3223,10 @@
                           "alwaysOn": true,
                           "healthCheckPath": "[parameters('healthCheckPath')]",
                           "scmMinTlsVersion": "1.2",
-                          "remoteDebuggingEnabled": false
+                          "remoteDebuggingEnabled": false,
+                          "ipSecurityRestrictionsDefaultAction": "Deny",
+                          "scmIpSecurityRestrictionsDefaultAction": "Deny",
+                          "appSettings": "[variables('telemetrySettings')]"
                         }
                       },
                       "dependsOn": [
@@ -3196,7 +3297,85 @@
                 }
               },
               "dependsOn": [
+                "appInsights",
                 "spokeNetwork"
+              ]
+            },
+            "appInsightsPublisher": {
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "app-insights-publisher",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "componentName": {
+                    "value": "[reference('appInsights').outputs.name.value]"
+                  },
+                  "publisherPrincipalId": {
+                    "value": "[reference('appService').outputs.appServicePrincipalId.value]"
+                  },
+                  "publisherAppServiceName": {
+                    "value": "[variables('names').appService]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.47.16.16243",
+                      "templateHash": "13762012215394524180"
+                    }
+                  },
+                  "parameters": {
+                    "componentName": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 260,
+                      "metadata": {
+                        "description": "Application Insights component name in this resource group."
+                      }
+                    },
+                    "publisherPrincipalId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Principal ID of the App Service managed identity that publishes telemetry."
+                      }
+                    },
+                    "publisherAppServiceName": {
+                      "type": "string",
+                      "minLength": 2,
+                      "maxLength": 60,
+                      "metadata": {
+                        "description": "Name of the App Service that owns the identity, used to make the assignment GUID deterministic."
+                      }
+                    }
+                  },
+                  "variables": {
+                    "monitoringMetricsPublisherRoleId": "3913510d-42f4-4e42-8a64-420c390055eb"
+                  },
+                  "resources": [
+                    {
+                      "type": "Microsoft.Authorization/roleAssignments",
+                      "apiVersion": "2022-04-01",
+                      "scope": "[resourceId('Microsoft.Insights/components', parameters('componentName'))]",
+                      "name": "[guid(resourceId('Microsoft.Insights/components', parameters('componentName')), parameters('publisherAppServiceName'), variables('monitoringMetricsPublisherRoleId'))]",
+                      "properties": {
+                        "principalId": "[parameters('publisherPrincipalId')]",
+                        "principalType": "ServicePrincipal",
+                        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('monitoringMetricsPublisherRoleId'))]"
+                      }
+                    }
+                  ]
+                }
+              },
+              "dependsOn": [
+                "appInsights",
+                "appService"
               ]
             },
             "virtualMachine": {
@@ -4766,6 +4945,10 @@
             "appServicePrincipalId": {
               "type": "string",
               "value": "[reference('appService').outputs.appServicePrincipalId.value]"
+            },
+            "appInsightsName": {
+              "type": "string",
+              "value": "[reference('appInsights').outputs.name.value]"
             }
           }
         }
@@ -4837,7 +5020,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "16367298874529328561"
+              "templateHash": "16813384299965939729"
             }
           },
           "definitions": {
@@ -5116,7 +5299,8 @@
               "bastion": "[format('bas-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
               "bastionPublicIp": "[format('pip-bas-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
               "vpnGateway": "[format('vpng-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
-              "vpnGatewayPublicIp": "[format('pip-vpng-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]"
+              "vpnGatewayPublicIp": "[format('pip-vpng-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
+              "appInsights": "[format('appi-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]"
             },
             "firewallPrivateIp": "[cidrHost(parameters('addressPlan').firewallSubnetPrefix, 3)]",
             "adminSourceCidrs": "[concat(createArray(parameters('addressPlan').bastionSubnetPrefix, parameters('addressPlan').vpnClientAddressPool), parameters('managementSourceCidrs'))]",
@@ -7155,6 +7339,92 @@
                 "azureFirewall"
               ]
             },
+            "appInsights": {
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "app-insights",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "location": {
+                    "value": "[parameters('location')]"
+                  },
+                  "componentName": {
+                    "value": "[variables('names').appInsights]"
+                  },
+                  "logAnalyticsWorkspaceId": {
+                    "value": "[parameters('logAnalyticsWorkspaceId')]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.47.16.16243",
+                      "templateHash": "7524839027847542132"
+                    }
+                  },
+                  "parameters": {
+                    "location": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Azure region for the Application Insights component (the stamp region)."
+                      }
+                    },
+                    "componentName": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 260,
+                      "metadata": {
+                        "description": "Application Insights component name."
+                      }
+                    },
+                    "logAnalyticsWorkspaceId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Central Log Analytics workspace resource ID; telemetry is stored there (workspace-based)."
+                      }
+                    }
+                  },
+                  "resources": [
+                    {
+                      "type": "Microsoft.Insights/components",
+                      "apiVersion": "2020-02-02",
+                      "name": "[parameters('componentName')]",
+                      "location": "[parameters('location')]",
+                      "kind": "web",
+                      "properties": {
+                        "Application_Type": "web",
+                        "WorkspaceResourceId": "[parameters('logAnalyticsWorkspaceId')]",
+                        "IngestionMode": "LogAnalytics",
+                        "DisableLocalAuth": true,
+                        "publicNetworkAccessForIngestion": "Enabled",
+                        "publicNetworkAccessForQuery": "Enabled"
+                      }
+                    }
+                  ],
+                  "outputs": {
+                    "id": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.Insights/components', parameters('componentName'))]"
+                    },
+                    "name": {
+                      "type": "string",
+                      "value": "[parameters('componentName')]"
+                    },
+                    "connectionString": {
+                      "type": "string",
+                      "value": "[reference(resourceId('Microsoft.Insights/components', parameters('componentName')), '2020-02-02').ConnectionString]"
+                    }
+                  }
+                }
+              }
+            },
             "appService": {
               "type": "Microsoft.Resources/deployments",
               "apiVersion": "2025-04-01",
@@ -7189,7 +7459,10 @@
                   "zoneRedundant": {
                     "value": "[and(variables('isProd'), variables('isPrimary'))]"
                   },
-                  "instanceCount": "[if(and(variables('isProd'), variables('isPrimary')), createObject('value', 3), createObject('value', 1))]"
+                  "instanceCount": "[if(and(variables('isProd'), variables('isPrimary')), createObject('value', 3), createObject('value', 1))]",
+                  "applicationInsightsConnectionString": {
+                    "value": "[reference('appInsights').outputs.connectionString.value]"
+                  }
                 },
                 "template": {
                   "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
@@ -7198,7 +7471,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "3265374201144656800"
+                      "templateHash": "8665067702236550410"
                     }
                   },
                   "parameters": {
@@ -7263,6 +7536,13 @@
                         "description": "Number of plan instances. Zone-redundant plans require at least 3."
                       }
                     },
+                    "applicationInsightsConnectionString": {
+                      "type": "string",
+                      "defaultValue": "",
+                      "metadata": {
+                        "description": "Application Insights connection string for this region. Empty sends no telemetry."
+                      }
+                    },
                     "appServicePlanName": {
                       "type": "string",
                       "minLength": 1,
@@ -7274,7 +7554,8 @@
                   },
                   "variables": {
                     "appServicePlanSkuName": "[if(equals(parameters('environmentType'), 'prod'), 'P2V3', 'S1')]",
-                    "appServicePlanSkuTier": "[if(equals(parameters('environmentType'), 'prod'), 'PremiumV3', 'Standard')]"
+                    "appServicePlanSkuTier": "[if(equals(parameters('environmentType'), 'prod'), 'PremiumV3', 'Standard')]",
+                    "telemetrySettings": "[if(empty(parameters('applicationInsightsConnectionString')), createArray(), createArray(createObject('name', 'APPLICATIONINSIGHTS_CONNECTION_STRING', 'value', parameters('applicationInsightsConnectionString')), createObject('name', 'APPLICATIONINSIGHTS_AUTHENTICATION_STRING', 'value', 'Authorization=AAD')))]"
                   },
                   "resources": [
                     {
@@ -7313,7 +7594,10 @@
                           "alwaysOn": true,
                           "healthCheckPath": "[parameters('healthCheckPath')]",
                           "scmMinTlsVersion": "1.2",
-                          "remoteDebuggingEnabled": false
+                          "remoteDebuggingEnabled": false,
+                          "ipSecurityRestrictionsDefaultAction": "Deny",
+                          "scmIpSecurityRestrictionsDefaultAction": "Deny",
+                          "appSettings": "[variables('telemetrySettings')]"
                         }
                       },
                       "dependsOn": [
@@ -7384,7 +7668,85 @@
                 }
               },
               "dependsOn": [
+                "appInsights",
                 "spokeNetwork"
+              ]
+            },
+            "appInsightsPublisher": {
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "app-insights-publisher",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "componentName": {
+                    "value": "[reference('appInsights').outputs.name.value]"
+                  },
+                  "publisherPrincipalId": {
+                    "value": "[reference('appService').outputs.appServicePrincipalId.value]"
+                  },
+                  "publisherAppServiceName": {
+                    "value": "[variables('names').appService]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.47.16.16243",
+                      "templateHash": "13762012215394524180"
+                    }
+                  },
+                  "parameters": {
+                    "componentName": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 260,
+                      "metadata": {
+                        "description": "Application Insights component name in this resource group."
+                      }
+                    },
+                    "publisherPrincipalId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Principal ID of the App Service managed identity that publishes telemetry."
+                      }
+                    },
+                    "publisherAppServiceName": {
+                      "type": "string",
+                      "minLength": 2,
+                      "maxLength": 60,
+                      "metadata": {
+                        "description": "Name of the App Service that owns the identity, used to make the assignment GUID deterministic."
+                      }
+                    }
+                  },
+                  "variables": {
+                    "monitoringMetricsPublisherRoleId": "3913510d-42f4-4e42-8a64-420c390055eb"
+                  },
+                  "resources": [
+                    {
+                      "type": "Microsoft.Authorization/roleAssignments",
+                      "apiVersion": "2022-04-01",
+                      "scope": "[resourceId('Microsoft.Insights/components', parameters('componentName'))]",
+                      "name": "[guid(resourceId('Microsoft.Insights/components', parameters('componentName')), parameters('publisherAppServiceName'), variables('monitoringMetricsPublisherRoleId'))]",
+                      "properties": {
+                        "principalId": "[parameters('publisherPrincipalId')]",
+                        "principalType": "ServicePrincipal",
+                        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('monitoringMetricsPublisherRoleId'))]"
+                      }
+                    }
+                  ]
+                }
+              },
+              "dependsOn": [
+                "appInsights",
+                "appService"
               ]
             },
             "virtualMachine": {
@@ -8954,6 +9316,10 @@
             "appServicePrincipalId": {
               "type": "string",
               "value": "[reference('appService').outputs.appServicePrincipalId.value]"
+            },
+            "appInsightsName": {
+              "type": "string",
+              "value": "[reference('appInsights').outputs.name.value]"
             }
           }
         }
