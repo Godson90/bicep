@@ -77,6 +77,10 @@ param primaryStorageAccountId string = ''
 @description('Warm standby only: name of the primary region storage account.')
 param primaryStorageAccountName string = ''
 
+@description('Application secrets written to this region\'s Key Vault, as { name: value } (ADR-019).')
+@secure()
+param keyVaultSecrets object = {}
+
 var isProd = environmentName == 'prod'
 var isPrimary = regionRole == 'primary'
 var nameSuffix = uniqueString(subscription().id, environmentName, location)
@@ -133,6 +137,7 @@ module keyVault 'keyVault.bicep' = {
     enablePurgeProtection: true
     enabledForTemplateDeployment: true
     enableDeleteLock: isProd
+    secrets: keyVaultSecrets
   }
 }
 

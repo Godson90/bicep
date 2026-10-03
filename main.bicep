@@ -53,6 +53,10 @@ param adminGroupObjectId string = ''
 @description('Custom domain served by Front Door, for example app.example.com, hosted at an external DNS provider. Empty serves only the azurefd.net hostname.')
 param customDomainHostName string = ''
 
+@description('Application secrets written to every regional Key Vault, as { name: value }. The pipeline supplies them from the KEYVAULT_SECRETS_JSON environment secret; never put values in a committed parameter file (ADR-019).')
+@secure()
+param keyVaultSecrets object = {}
+
 @description('Relative path probed by App Service health check in every region.')
 param healthCheckPath string = '/'
 
@@ -129,6 +133,7 @@ module primaryStamp 'modules/regionStamp.bicep' = {
     virtualMachineAdminPassword: virtualMachineAdminPassword
     deployAdminAccess: deployPrimaryAdminAccess
     adminGroupObjectId: adminGroupObjectId
+    keyVaultSecrets: keyVaultSecrets
   }
 }
 
@@ -150,6 +155,7 @@ module secondaryStamp 'modules/regionStamp.bicep' = if (deploySecondaryRegion) {
     deployAdminAccess: deploySecondaryAdminAccess
     primaryStorageAccountId: primaryStamp.outputs.storageAccountId
     primaryStorageAccountName: primaryStamp.outputs.storageAccountName
+    keyVaultSecrets: keyVaultSecrets
   }
 }
 
