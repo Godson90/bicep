@@ -259,3 +259,57 @@ Describe 'Region stamp flow logs (Phase 6)' {
         $parameters.logAnalyticsWorkspaceId.value | Should -Be "[parameters('logAnalyticsWorkspaceId')]"
     }
 }
+
+Describe 'Region stamp alerts (Phase 6)' {
+    BeforeAll {
+        $alertParameters = Get-StampModuleParameters 'metric-alerts'
+        $rules = @($alertParameters.rules.value)
+    }
+
+    It 'names the alerts per environment and region and notifies the shared action group' {
+        $alertParameters.namePrefix.value | Should -Be "[format('alert-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]"
+        $alertParameters.actionGroupId.value | Should -Be "[parameters('actionGroupId')]"
+        $stamp.parameters.PSObject.Properties.Name | Should -Contain 'alertThresholds'
+    }
+
+    It 'defines exactly the seven regional rules' {
+        @($rules | ForEach-Object { $_.name }) -join ',' |
+            Should -Be 'firewall-health,firewall-snat-ports,app-http-5xx,app-health-check,key-vault-availability,key-vault-forbidden,vpn-p2s-connections'
+    }
+
+    It 'alerts on <Metric> <Operator> <Threshold> (<Aggregation>) at Sev<Severity> as <Name>' -ForEach @(
+        @{ Name = 'firewall-health'; Metric = 'FirewallHealth'; Namespace = 'Microsoft.Network/azureFirewalls'; Operator = 'LessThan'; Threshold = '90'; Aggregation = 'Average'; Severity = 1; Resource = "[reference('azureFirewall').outputs.id.value]" }
+        @{ Name = 'firewall-snat-ports'; Metric = 'SNATPortUtilization'; Namespace = 'Microsoft.Network/azureFirewalls'; Operator = 'GreaterThan'; Threshold = '80'; Aggregation = 'Maximum'; Severity = 2; Resource = "[reference('azureFirewall').outputs.id.value]" }
+        @{ Name = 'app-http-5xx'; Metric = 'Http5xx'; Namespace = 'Microsoft.Web/sites'; Operator = 'GreaterThan'; Threshold = "[string(parameters('alertThresholds').appServiceHttp5xx)]"; Aggregation = 'Total'; Severity = 2; Resource = "[reference('appService').outputs.appServiceAppId.value]" }
+        @{ Name = 'app-health-check'; Metric = 'HealthCheckStatus'; Namespace = 'Microsoft.Web/sites'; Operator = 'LessThan'; Threshold = '100'; Aggregation = 'Average'; Severity = 1; Resource = "[reference('appService').outputs.appServiceAppId.value]" }
+        @{ Name = 'key-vault-availability'; Metric = 'Availability'; Namespace = 'Microsoft.KeyVault/vaults'; Operator = 'LessThan'; Threshold = '99.9'; Aggregation = 'Average'; Severity = 2; Resource = "[reference('keyVault').outputs.id.value]" }
+        @{ Name = 'key-vault-forbidden'; Metric = 'ServiceApiResult'; Namespace = 'Microsoft.KeyVault/vaults'; Operator = 'GreaterThan'; Threshold = "[string(parameters('alertThresholds').keyVaultForbidden)]"; Aggregation = 'Count'; Severity = 3; Resource = "[reference('keyVault').outputs.id.value]" }
+        @{ Name = 'vpn-p2s-connections'; Metric = 'P2SConnectionCount'; Namespace = 'Microsoft.Network/virtualNetworkGateways'; Operator = 'GreaterThan'; Threshold = "[string(parameters('alertThresholds').vpnP2sConnections)]"; Aggregation = 'Maximum'; Severity = 3; Resource = "[if(parameters('deployAdminAccess'), reference('vpnGateway').outputs.id.value, '')]" }
+    ) {
+        $rule = $rules | Where-Object { $_.name -eq $Name }
+        $rule | Should -Not -BeNullOrEmpty
+        $rule.metricName | Should -BeExactly $Metric
+        $rule.metricNamespace | Should -BeExactly $Namespace
+        $rule.operator | Should -Be $Operator
+        $rule.threshold | Should -Be $Threshold
+        $rule.timeAggregation | Should -Be $Aggregation
+        $rule.severity | Should -Be $Severity
+        $rule.resourceId | Should -Be $Resource
+        $rule.description | Should -Not -BeNullOrEmpty
+    }
+
+    It 'counts only Key Vault results with status code 403' {
+        $rule = $rules | Where-Object { $_.name -eq 'key-vault-forbidden' }
+        @($rule.dimensions).Count | Should -Be 1
+        $rule.dimensions[0].name | Should -Be 'StatusCode'
+        $rule.dimensions[0].operator | Should -Be 'Include'
+        @($rule.dimensions[0].values) | Should -Be @('403')
+    }
+
+    It 'creates the VPN alert only where the gateway exists' {
+        ($rules | Where-Object { $_.name -eq 'vpn-p2s-connections' }).deploy | Should -Be "[parameters('deployAdminAccess')]"
+        foreach ($rule in $rules | Where-Object { $_.name -ne 'vpn-p2s-connections' }) {
+            $rule.PSObject.Properties.Name | Should -Not -Contain 'deploy' -Because $rule.name
+        }
+    }
+}

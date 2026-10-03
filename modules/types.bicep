@@ -84,3 +84,73 @@ type hubPeeringPlan = {
   @description('Private-endpoint subnet prefixes in the Host region that hold the AMPLS endpoint. Used by the Client rule.')
   monitorPrivateEndpointPrefixes: string[]
 }
+
+@export()
+@description('A dimension filter on a metric alert, for example StatusCode = 403.')
+type metricAlertDimension = {
+  @description('Dimension name, for example StatusCode or Action.')
+  name: string
+
+  @description('Include matches only the values; Exclude matches everything else.')
+  operator: 'Include' | 'Exclude'
+
+  @description('Dimension values.')
+  values: string[]
+}
+
+@export()
+@description('One static-threshold metric alert on a single resource (Phase 6).')
+type metricAlertRule = {
+  @description('Short rule name, appended to the alert name prefix, for example firewall-health.')
+  name: string
+
+  @description('What the alert means. Shown in the alert email; runbook 06 has the triage steps.')
+  description: string
+
+  @description('Alert severity: 0 Critical, 1 Error, 2 Warning, 3 Informational, 4 Verbose.')
+  severity: 0 | 1 | 2 | 3 | 4
+
+  @description('Resource ID the metric is read from.')
+  resourceId: string
+
+  @description('Metric namespace, the resource type, for example Microsoft.Network/azureFirewalls.')
+  metricNamespace: string
+
+  @description('Exact metric name, for example FirewallHealth.')
+  metricName: string
+
+  @description('Comparison against the threshold.')
+  operator: 'GreaterThan' | 'GreaterThanOrEqual' | 'LessThan' | 'LessThanOrEqual'
+
+  @description('Threshold as text, for example \'90\' or \'99.9\'. Bicep has no decimal literals; the module converts it with json().')
+  threshold: string
+
+  @description('How the metric is aggregated over the window.')
+  timeAggregation: 'Average' | 'Minimum' | 'Maximum' | 'Total' | 'Count'
+
+  @description('Dimension filters. Omit for none.')
+  dimensions: metricAlertDimension[]?
+
+  @description('False skips the rule, for example the VPN alert in a region without a gateway. Defaults to true.')
+  deploy: bool?
+}
+
+@export()
+@description('Thresholds for the count-based platform alerts (Phase 6). Health and percentage alerts use fixed thresholds.')
+type alertThresholdSet = {
+  @description('App Service HTTP 5xx responses per region in a 15-minute window.')
+  @minValue(1)
+  appServiceHttp5xx: int
+
+  @description('Key Vault requests refused with 403 per region in a 15-minute window.')
+  @minValue(1)
+  keyVaultForbidden: int
+
+  @description('Point-to-site VPN connections on the gateway at any time in a 15-minute window.')
+  @minValue(1)
+  vpnP2sConnections: int
+
+  @description('Front Door WAF blocked requests in a 15-minute window.')
+  @minValue(1)
+  frontDoorWafBlocks: int
+}

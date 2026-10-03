@@ -133,3 +133,9 @@ Describe 'Route and custom domain (Phase 4)' {
         $template.outputs.customDomainValidationToken.value | Should -Match 'validationToken'
     }
 }
+
+Describe 'Front Door alert target (Phase 6)' {
+    It 'outputs the profile resource ID for the Front Door metric alerts' {
+        $template.outputs.id.value | Should -Be "[resourceId('Microsoft.Cdn/profiles', parameters('profileName'))]"
+    }
+}

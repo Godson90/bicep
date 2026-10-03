@@ -50,20 +50,26 @@ jobs:
           az bicep install --version "$BICEP_VERSION"
 
       - name: Validate
+        env:
+          ALERT_EMAIL: ${{ vars.ALERT_EMAIL }}
         run: |
           az deployment sub validate \
             --location "$DEPLOYMENT_LOCATION" \
             --name "gh-${{ github.run_id }}-${{ github.run_attempt }}" \
             --parameters "params/${TARGET_ENV}.bicepparam" \
+            --parameters alertEmail="$ALERT_EMAIL" \
             --output none
 
       - name: What-if
+        env:
+          ALERT_EMAIL: ${{ vars.ALERT_EMAIL }}
         run: |
           set -o pipefail
           az deployment sub what-if \
             --location "$DEPLOYMENT_LOCATION" \
             --name "gh-${{ github.run_id }}-${{ github.run_attempt }}" \
             --parameters "params/${TARGET_ENV}.bicepparam" \
+            --parameters alertEmail="$ALERT_EMAIL" \
             --exclude-change-types Ignore NoChange 2>&1 \
             | sed -r 's/\x1B\[[0-9;]*[mK]//g' > whatif.txt
           {
@@ -89,6 +95,17 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment || 'dev' }}
     steps:
+      # Prod alerts must reach someone: stop before any Azure call when the prod environment has no ALERT_EMAIL (runbook 06).
+      - name: Require ALERT_EMAIL for prod
+        if: env.TARGET_ENV == 'prod'
+        env:
+          ALERT_EMAIL: ${{ vars.ALERT_EMAIL }}
+        run: |
+          if [ -z "$ALERT_EMAIL" ]; then
+            echo "::error::Set the ALERT_EMAIL variable on the prod GitHub environment before deploying prod (runbook 06)."
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
 
       - uses: azure/login@v2
@@ -110,12 +127,15 @@ jobs:
         run: ./scripts/ConvertTo-KeyVaultSecretsParameter.ps1 -Json $env:KEYVAULT_SECRETS_JSON -OutFile "$env:RUNNER_TEMP/keyvault-secrets.json"
 
       - name: Deploy
+        env:
+          ALERT_EMAIL: ${{ vars.ALERT_EMAIL }}
         run: |
           az deployment sub create \
             --location "$DEPLOYMENT_LOCATION" \
             --name "gh-${{ github.run_id }}-${{ github.run_attempt }}" \
             --parameters "params/${TARGET_ENV}.bicepparam" \
             --parameters keyVaultSecrets=@"$RUNNER_TEMP/keyvault-secrets.json" \
+            --parameters alertEmail="$ALERT_EMAIL" \
             --output table
 
       - name: Remove the secrets file
