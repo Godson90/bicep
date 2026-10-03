@@ -54,6 +54,8 @@ Every `main.bicep` parameter, with the value each committed `.bicepparam` file s
 | `deployPrimaryAdminAccess` | `true` | *(default)* | *(default)* | Bastion and the VPN gateway in the primary region ([runbook 03](03-admin-access.md)) |
 | `deploySecondaryAdminAccess` | `false` | *(default)* | *(default)* | Turned on only during failover |
 | `adminGroupObjectId` | `''` | dev admin group | prod admin group | Entra group granted `Virtual Machine Administrator Login` on the jump host (runbook 03 §4) |
+| `customDomainHostName` | `''` | `''` | `''` until the domain exists | Front Door custom domain at the external DNS host ([runbook 04](04-ingress.md) §5.1) |
+| `keyVaultSecrets` (`@secure()`) | `{}` | from `KEYVAULT_SECRETS_JSON` | from `KEYVAULT_SECRETS_JSON` | Never set in a parameter file; the pipeline supplies it ([runbook 05](05-app-and-data.md) §5.1) |
 | `healthCheckPath` | `/` | *(default)* | *(default)* | No application code yet (`ADR-006`) |
 | `enableVirtualMachine` | `false` | *(default)* | *(default)* | Optional management VM, primary region only |
 | `virtualMachineOsType` | `Linux` | *(default)* | *(default)* | Only relevant if `enableVirtualMachine = true` |

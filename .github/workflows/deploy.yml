@@ -102,10 +102,44 @@ jobs:
           az config set bicep.use_binary_from_path=false
           az bicep install --version "$BICEP_VERSION"
 
+      # Application secrets come from the environment secret KEYVAULT_SECRETS_JSON and are written to every regional vault (ADR-019).
+      - name: Prepare Key Vault secrets
+        shell: pwsh
+        env:
+          KEYVAULT_SECRETS_JSON: ${{ secrets.KEYVAULT_SECRETS_JSON }}
+        run: ./scripts/ConvertTo-KeyVaultSecretsParameter.ps1 -Json $env:KEYVAULT_SECRETS_JSON -OutFile "$env:RUNNER_TEMP/keyvault-secrets.json"
+
       - name: Deploy
         run: |
           az deployment sub create \
             --location "$DEPLOYMENT_LOCATION" \
             --name "gh-${{ github.run_id }}-${{ github.run_attempt }}" \
             --parameters "params/${TARGET_ENV}.bicepparam" \
+            --parameters keyVaultSecrets=@"$RUNNER_TEMP/keyvault-secrets.json" \
             --output table
+
+      - name: Remove the secrets file
+        if: always()
+        run: rm -f "$RUNNER_TEMP/keyvault-secrets.json"
+
+      # The approval wait can outlast the first login's token (up to 15 minutes per app), so refresh it immediately
+      # before the step that needs it.
+      - name: Refresh Azure login before approval
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # Front Door reaches each App Service over Private Link; its connections stay Pending until approved (runbook 04).
+      - name: Approve Front Door private endpoint connections
+        shell: pwsh
+        run: |
+          $outputs = az deployment sub show --name "gh-${{ github.run_id }}-${{ github.run_attempt }}" --query properties.outputs --output json | ConvertFrom-Json
+          $ids = $outputs.appServiceIds.value
+          $profileName = $outputs.frontDoorProfileName.value
+          $resourceGroupName = $outputs.globalResourceGroupName.value
+          if ($LASTEXITCODE -ne 0 -or -not $ids) { throw 'Could not read appServiceIds from the deployment outputs.' }
+          if (-not $profileName) { throw 'Could not read frontDoorProfileName from the deployment outputs.' }
+          if (-not $resourceGroupName) { throw 'Could not read globalResourceGroupName from the deployment outputs.' }
+          ./scripts/Approve-FrontDoorPrivateEndpoints.ps1 -AppServiceId $ids -FrontDoorProfileName $profileName -FrontDoorResourceGroupName $resourceGroupName

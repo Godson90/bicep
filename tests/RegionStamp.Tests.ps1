@@ -37,9 +37,9 @@ Describe 'Region stamp availability' {
         $parameters.instanceCount | Should -Be "[if(and(variables('isProd'), variables('isPrimary')), createObject('value', 3), createObject('value', 1))]"
     }
 
-    It 'uses geo-redundant storage in prod and locally redundant storage in dev' {
+    It 'uses RA-GZRS in the prod primary region, GRS in the warm standby and LRS in dev (Phase 5)' {
         (Get-StampModuleParameters 'storage').storageAccountSkuName |
-            Should -Be "[if(variables('isProd'), createObject('value', 'Standard_GRS'), createObject('value', 'Standard_LRS'))]"
+            Should -Be "[if(variables('isProd'), if(variables('isPrimary'), createObject('value', 'Standard_RAGZRS'), createObject('value', 'Standard_GRS')), createObject('value', 'Standard_LRS'))]"
     }
 
     It 'deploys the optional management VM in the primary region only' {
@@ -184,5 +184,11 @@ Describe 'Region stamp admin access (Phase 3)' {
         foreach ($key in 'bastion', 'bastionPublicIp', 'vpnGateway', 'vpnGatewayPublicIp') {
             $stamp.variables.names.$key | Should -Match "parameters\('environmentName'\), parameters\('regionCode'\)"
         }
+    }
+}
+
+Describe 'Region stamp ingress output (Phase 4)' {
+    It 'outputs the App Service resource ID for the Front Door Private Link origin' {
+        $stamp.outputs.appServiceId.value | Should -Be "[reference('appService').outputs.appServiceAppId.value]"
     }
 }

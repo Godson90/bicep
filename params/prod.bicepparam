@@ -37,3 +37,5 @@ param secondaryAddressPlan = {
   managementSubnetPrefix: '10.10.3.0/24'
 }
 param allowedOutboundFqdns = []
+// Front Door custom domain at the external DNS host; empty until the domain exists (runbook 04).
+param customDomainHostName = ''

@@ -50,6 +50,13 @@ param deploySecondaryAdminAccess bool = false
 @description('Object ID of the Entra ID admin security group granted Virtual Machine Administrator Login on the management VM. Empty skips the assignment.')
 param adminGroupObjectId string = ''
 
+@description('Custom domain served by Front Door, for example app.example.com, hosted at an external DNS provider. Empty serves only the azurefd.net hostname.')
+param customDomainHostName string = ''
+
+@description('Application secrets written to every regional Key Vault, as { name: value }. The pipeline supplies them from the KEYVAULT_SECRETS_JSON environment secret; never put values in a committed parameter file (ADR-019).')
+@secure()
+param keyVaultSecrets object = {}
+
 @description('Relative path probed by App Service health check in every region.')
 param healthCheckPath string = '/'
 
@@ -126,6 +133,7 @@ module primaryStamp 'modules/regionStamp.bicep' = {
     virtualMachineAdminPassword: virtualMachineAdminPassword
     deployAdminAccess: deployPrimaryAdminAccess
     adminGroupObjectId: adminGroupObjectId
+    keyVaultSecrets: keyVaultSecrets
   }
 }
 
@@ -145,6 +153,21 @@ module secondaryStamp 'modules/regionStamp.bicep' = if (deploySecondaryRegion) {
     managementSourceCidrs: managementSourceCidrs
     healthCheckPath: healthCheckPath
     deployAdminAccess: deploySecondaryAdminAccess
+    primaryStorageAccountId: isProd ? primaryStamp.outputs.storageAccountId : ''
+    primaryStorageAccountName: isProd ? primaryStamp.outputs.storageAccountName : ''
+    keyVaultSecrets: keyVaultSecrets
+  }
+}
+
+// The warm-standby App Service may read (never write) the primary application container (ADR-020).
+module secondaryStorageReader 'modules/storageReaderAssignment.bicep' = if (deploySecondaryRegion && isProd) {
+  name: 'storage-reader-${secondaryRegionCode}'
+  scope: resourceGroup(primaryResourceGroupName)
+  params: {
+    storageAccountName: primaryStamp.outputs.storageAccountName
+    storageContainerName: primaryStamp.outputs.storageContainerName
+    readerPrincipalId: secondaryStamp!.outputs.appServicePrincipalId
+    readerAppServiceName: secondaryStamp!.outputs.appServiceName
   }
 }
 
@@ -171,6 +194,42 @@ var secondaryVirtualNetworks = deploySecondaryRegion
     ]
   : []
 
+// Origins in failover order: the primary region first (priority 1), then the warm standby (priority 2).
+var primaryOrigin = {
+  name: 'app-${primaryRegionCode}'
+  appServiceId: primaryStamp.outputs.appServiceId
+  hostName: primaryStamp.outputs.appServiceHostName
+  location: primaryLocation
+}
+var secondaryOrigins = deploySecondaryRegion
+  ? [
+      {
+        name: 'app-${secondaryRegionCode}'
+        appServiceId: secondaryStamp!.outputs.appServiceId
+        hostName: secondaryStamp!.outputs.appServiceHostName
+        location: secondaryLocation
+      }
+    ]
+  : []
+
+// Public ingress: one Front Door per environment in the global resource group, after both stamps exist.
+module frontDoor 'modules/frontDoor.bicep' = {
+  name: 'front-door-${environmentName}'
+  scope: resourceGroup(globalResourceGroupName)
+  params: {
+    profileName: 'afd-defenstack-${environmentName}'
+    endpointName: 'fde-defenstack-${environmentName}'
+    wafPolicyName: 'wafdefenstack${environmentName}'
+    origins: concat([
+      primaryOrigin
+    ], secondaryOrigins)
+    healthProbePath: healthCheckPath
+    customDomainHostName: customDomainHostName
+    logAnalyticsWorkspaceId: global.outputs.logAnalyticsWorkspaceId
+    enableDeleteLock: isProd
+  }
+}
+
 // Link every region's hub (firewall DNS proxy) and spoke to each shared zone.
 module privateDnsLinks 'modules/privateDnsZoneLinks.bicep' = [for zone in items(privateDnsZoneNames): {
   name: 'dns-links-${zone.key}'
@@ -187,3 +246,13 @@ output primaryResourceGroupName string = primaryResourceGroupName
 output primaryBastionName string = primaryStamp.outputs.bastionName
 output primaryVpnGatewayName string = primaryStamp.outputs.vpnGatewayName
 output primaryFirewallPrivateIp string = primaryStamp.outputs.firewallPrivateIp
+output frontDoorEndpointHostName string = frontDoor.outputs.endpointHostName
+output frontDoorCustomDomainValidationToken string = frontDoor.outputs.customDomainValidationToken
+output frontDoorPrivateLinkRequestMessage string = frontDoor.outputs.privateLinkRequestMessage
+output frontDoorProfileName string = frontDoor.outputs.profileName
+output globalResourceGroupName string = globalResourceGroupName
+output appServiceIds array = concat([
+  primaryStamp.outputs.appServiceId
+], deploySecondaryRegion ? [
+  secondaryStamp!.outputs.appServiceId
+] : [])

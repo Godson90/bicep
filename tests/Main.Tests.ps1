@@ -100,3 +100,58 @@ Describe 'Admin access (Phase 3)' {
         }
     }
 }
+
+Describe 'Public ingress (Phase 4)' {
+    BeforeAll {
+        $frontDoor = Get-TemplateResourceBySymbol -Template $main -Symbol 'frontDoor'
+        $frontDoorParameters = $frontDoor.properties.parameters
+    }
+
+    It 'deploys one Front Door per environment into the global resource group, after both stamps' {
+        $frontDoor.resourceGroup | Should -Be "[variables('globalResourceGroupName')]"
+        $frontDoor.name | Should -Be "[format('front-door-{0}', parameters('environmentName'))]"
+        @($frontDoor.dependsOn) | Should -Contain 'primaryStamp'
+        @($frontDoor.dependsOn) | Should -Contain 'secondaryStamp'
+    }
+
+    It 'names the profile, endpoint and WAF policy with the environment' {
+        $frontDoorParameters.profileName.value | Should -Be "[format('afd-defenstack-{0}', parameters('environmentName'))]"
+        $frontDoorParameters.endpointName.value | Should -Be "[format('fde-defenstack-{0}', parameters('environmentName'))]"
+        $frontDoorParameters.wafPolicyName.value | Should -Be "[format('wafdefenstack{0}', parameters('environmentName'))]"
+    }
+
+    It 'puts the primary App Service first (priority 1) and the warm standby second, only when deployed' {
+        $value = $frontDoorParameters.origins.value
+        $value | Should -Match "^\[concat\(createArray\(createObject\('name', format\('app-\{0\}', variables\('primaryRegionCode'\)\)"
+        $value | Should -Match "reference\('primaryStamp'\)\.outputs\.appServiceId\.value"
+        $value | Should -Match "if\(parameters\('deploySecondaryRegion'\), createArray\(createObject\('name', format\('app-\{0\}', variables\('secondaryRegionCode'\)\)"
+        $value | Should -Match "reference\('secondaryStamp'\)\.outputs\.appServiceId\.value"
+        $value.IndexOf('primaryStamp') | Should -BeLessThan $value.IndexOf('secondaryStamp')
+    }
+
+    It 'probes the App Service health check path and locks Front Door in prod only' {
+        $frontDoorParameters.healthProbePath.value | Should -Be "[parameters('healthCheckPath')]"
+        $frontDoorParameters.enableDeleteLock.value | Should -Be "[variables('isProd')]"
+    }
+
+    It 'takes an optional custom domain, empty by default' {
+        $main.parameters.customDomainHostName.defaultValue | Should -Be ''
+        $frontDoorParameters.customDomainHostName.value | Should -Be "[parameters('customDomainHostName')]"
+    }
+
+    It 'outputs the endpoint hostname, the TXT validation token, the request message and every App Service ID for approval' {
+        foreach ($output in 'frontDoorEndpointHostName', 'frontDoorCustomDomainValidationToken', 'frontDoorPrivateLinkRequestMessage', 'appServiceIds') {
+            $main.outputs.PSObject.Properties.Name | Should -Contain $output
+        }
+        $main.outputs.appServiceIds.type | Should -Be 'array'
+        $main.outputs.appServiceIds.value | Should -Match "if\(parameters\('deploySecondaryRegion'\)"
+    }
+
+    It 'outputs the Front Door profile name and the global resource group name, so the pipeline can poll the origin group (final review A)' {
+        foreach ($output in 'frontDoorProfileName', 'globalResourceGroupName') {
+            $main.outputs.PSObject.Properties.Name | Should -Contain $output
+        }
+        $main.outputs.frontDoorProfileName.value | Should -Be "[reference('frontDoor').outputs.profileName.value]"
+        $main.outputs.globalResourceGroupName.value | Should -Be "[variables('globalResourceGroupName')]"
+    }
+}

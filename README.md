@@ -6,7 +6,7 @@ This deployment is a **subscription-scope**, multi-region stack: `main.bicep` (`
 
 - Design: `docs/superpowers/specs/2026-09-25-secure-connectivity-design.md`
 - Architecture: `docs/architecture/overview.md` - topology, traffic flows, address plan, naming convention, and resource inventory
-- Runbooks: `docs/runbooks/` - start with `00-pipeline-and-identity.md`, `00b-configure-pipeline-credentials.md` (pipeline Azure login via OIDC), `00a-apply-phase0-fixes.md`, `01-deploy-stack.md` (deploy dev or prod), `01a-migrate-from-defenstack.md` (retire the Phase 0 resource group), `02-firewall.md` (Premium firewall rule changes and allowlist requests), and `03-admin-access.md` (Bastion, point-to-site VPN client setup, jump host sign-in, break-glass)
+- Runbooks: `docs/runbooks/` - start with `00-pipeline-and-identity.md`, `00b-configure-pipeline-credentials.md` (pipeline Azure login via OIDC), `00a-apply-phase0-fixes.md`, `01-deploy-stack.md` (deploy dev or prod), `01a-migrate-from-defenstack.md` (retire the Phase 0 resource group), `02-firewall.md` (Premium firewall rule changes and allowlist requests), and `03-admin-access.md` (Bastion, point-to-site VPN client setup, jump host sign-in, break-glass), `04-ingress.md` (Front Door, WAF tuning, Private Link approval, custom domain cutover), and `05-app-and-data.md` (storage resilience, Application Insights, deploy-time Key Vault secrets, restore procedures)
 - Runbook structure (mandatory for every change): `docs/runbooks/_template.md`
 
 ### Module layout
