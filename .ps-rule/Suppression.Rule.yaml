@@ -52,3 +52,15 @@ spec:
       - vnet-defenstack-dev-wus3-hub-bastion-nsg
       - vnet-defenstack-prod-wus3-hub-bastion-nsg
       - vnet-defenstack-prod-eus-hub-bastion-nsg
+---
+# Synopsis: Dev storage is locally redundant; prod uses RA-GZRS (primary) and GRS (warm standby). Storage names are hashed, so the dev account is matched by SKU (ADR-008, ADR-020).
+apiVersion: github.com/microsoft/PSRule/v1
+kind: SuppressionGroup
+metadata:
+  name: DefenStack.DevLocallyRedundantStorage
+spec:
+  rule:
+    - Azure.Storage.UseReplication
+  if:
+    field: sku.name
+    equals: Standard_LRS

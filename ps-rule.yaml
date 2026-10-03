@@ -18,8 +18,6 @@ rule:
   # the ADR that accepts it. Gaps that apply only to some targets (dev, the East US warm standby)
   # are suppressed per target in .ps-rule/Suppression.Rule.yaml instead.
   exclude:
-    # Phase 5: storage moves to RA-GZRS.
-    - Azure.Storage.UseReplication
     # ADR-002: no organization-wide tagging convention exists yet.
     - Azure.Resource.UseTags
     # ADR-004: zero-trust default-deny-all-inbound is the intended design for these NSGs.
