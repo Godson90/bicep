@@ -82,6 +82,20 @@ Describe 'New-GitHubDeploymentIdentity.ps1' {
         }
     }
 
+    It 'targets NetworkWatcherRG by default and accepts only a valid resource group name (Phase 6)' {
+        $parameter = (Get-Command $scriptPath).Parameters['NetworkWatcherResourceGroupName']
+        $parameter | Should -Not -BeNullOrEmpty
+        (Get-Content $scriptPath -Raw) | Should -Match '\[string\]\$NetworkWatcherResourceGroupName = ''NetworkWatcherRG'''
+        Set-AzShadow (New-BaseResponses)
+        try {
+            { & $scriptPath -ResourceGroupNames $resourceGroups -GitHubRepository 'Godson90/bicep' -EnvironmentName 'dev' -NetworkWatcherResourceGroupName 'bad/name' -WhatIf } |
+                Should -Throw
+        }
+        finally {
+            Remove-AzShadow
+        }
+    }
+
     It 'rejects a delegatable role ID that is not a GUID' {
         Set-AzShadow (New-BaseResponses)
         try {
@@ -171,6 +185,14 @@ Describe 'New-GitHubDeploymentIdentity.ps1' {
                 @($creates | Where-Object { $_ -like "*--role Role Based Access Control Administrator --scope $scope *" }).Count | Should -Be 1
             }
             @($creates | Where-Object { $_ -like '*--role Contributor --scope /subscriptions/22222222-2222-2222-2222-222222222222 *' }).Count | Should -Be 0
+        }
+
+        It 'assigns Network Contributor on NetworkWatcherRG only, so the pipeline can manage VNet flow logs (Phase 6)' {
+            $networkWatcherScope = '/subscriptions/22222222-2222-2222-2222-222222222222/resourceGroups/NetworkWatcherRG'
+            $networkContributor = @($creates | Where-Object { $_ -like '*--role Network Contributor *' })
+            $networkContributor.Count | Should -Be 1
+            $networkContributor[0] | Should -BeLike "*--scope $networkWatcherScope *"
+            @($creates | Where-Object { $_ -like "*--scope $networkWatcherScope *" }).Count | Should -Be 1
         }
 
         It 'constrains RBAC Administrator with the exact ABAC condition for the delegatable roles (Storage Blob Data Contributor, Virtual Machine Administrator Login, Storage Blob Data Reader, Monitoring Metrics Publisher)' {
