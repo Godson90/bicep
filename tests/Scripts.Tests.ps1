@@ -299,6 +299,35 @@ Describe 'New-GitHubDeploymentIdentity.ps1' {
     }
 }
 
+Describe 'Role GUIDs are all delegatable' {
+    It 'includes every role-definition GUID used in modules/*.bicep in the default -DelegatableRoleDefinitionIds list' {
+        $guidPattern = '[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}'
+        $roleGuids = [System.Collections.Generic.HashSet[string]]::new()
+        foreach ($file in Get-ChildItem (Get-RepoPath 'modules') -Filter '*.bicep') {
+            $text = Get-Content $file.FullName -Raw
+            foreach ($match in [regex]::Matches($text, "subscriptionResourceId\('Microsoft\.Authorization/roleDefinitions',\s*'($guidPattern)'\)")) {
+                [void]$roleGuids.Add($match.Groups[1].Value.ToLowerInvariant())
+            }
+            foreach ($match in [regex]::Matches($text, "(?:roleDefinitionId|roleId|\w*RoleId)\s*=\s*'($guidPattern)'")) {
+                [void]$roleGuids.Add($match.Groups[1].Value.ToLowerInvariant())
+            }
+        }
+
+        # The test must not pass vacuously: it has to find at least one GUID to check.
+        $roleGuids.Count | Should -BeGreaterThan 0
+
+        # Strip comments first, so a parenthesis inside one (e.g. "(app identity, container scope)")
+        # cannot be mistaken for the end of the @(...) array below.
+        $scriptTextNoComments = (Get-Content $scriptPath -Raw) -replace '#[^\r\n]*', ''
+        $defaultBlock = [regex]::Match($scriptTextNoComments, '\$DelegatableRoleDefinitionIds\s*=\s*@\((.*?)\)', 'Singleline').Groups[1].Value
+        $defaultBlock | Should -Not -BeNullOrEmpty
+
+        foreach ($roleGuid in $roleGuids) {
+            $defaultBlock | Should -Match ([regex]::Escape($roleGuid))
+        }
+    }
+}
+
 AfterAll {
     Remove-Variable -Name AzCalls, FederatedCredentialPayloads, RoleDefinitionPayload -Scope Global -ErrorAction SilentlyContinue
 }

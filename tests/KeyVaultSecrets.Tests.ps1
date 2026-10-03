@@ -72,6 +72,14 @@ Describe 'ConvertTo-KeyVaultSecretsParameter.ps1 (Phase 5)' {
         $written.'db-password' | Should -Be 'another'
         ($output -join ' ') | Should -Match 'api-key, db-password'
         ($output -join ' ') | Should -Not -Match 's3cret-value'
+        ($output -join ' ') | Should -Not -Match 'another'
+    }
+
+    It 'keeps an ISO-8601 date-like value as a string, on PowerShell versions that do not coerce it' {
+        & $converter -Json '{"issued-at":"2026-10-02T00:00:00Z"}' -OutFile $outFile | Out-Null
+        $written = Get-Content $outFile -Raw | ConvertFrom-Json
+        $written.'issued-at' | Should -BeOfType [string]
+        $written.'issued-at' | Should -Be '2026-10-02T00:00:00Z'
     }
 
     It 'rejects <Case>' -ForEach @(
@@ -84,9 +92,16 @@ Describe 'ConvertTo-KeyVaultSecretsParameter.ps1 (Phase 5)' {
         { & $converter -Json $Json -OutFile $outFile } | Should -Throw $Message
     }
 
-    It 'never echoes a value in an error message' {
+    It 'never echoes a value in an error message, for <Case>' -ForEach @(
+        @{ Case = 'invalid JSON'; Json = '{"a":"do-not-leak-1"'; Sentinel = 'do-not-leak-1' }
+        @{ Case = 'a non-object'; Json = '["do-not-leak-2"]'; Sentinel = 'do-not-leak-2' }
+        @{ Case = 'a bad name'; Json = '{"bad_name":"do-not-leak-3"}'; Sentinel = 'do-not-leak-3' }
+        @{ Case = 'a non-string value'; Json = '{"api-key":["do-not-leak-4"]}'; Sentinel = 'do-not-leak-4' }
+        @{ Case = 'an empty value'; Json = '{"api-key":""}'; Sentinel = 'do-not-leak-5' }
+    ) {
         $message = ''
-        try { & $converter -Json '{"bad_name":"do-not-leak"}' -OutFile $outFile } catch { $message = $_.Exception.Message }
-        $message | Should -Not -Match 'do-not-leak'
+        try { & $converter -Json $Json -OutFile $outFile } catch { $message = $_.Exception.Message }
+        $message | Should -Not -BeNullOrEmpty
+        $message | Should -Not -Match $Sentinel
     }
 }

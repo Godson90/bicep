@@ -97,13 +97,27 @@ Data protection is unchanged from Phase 0 (F7) on every account:
 
    Check the what-if:
    - In `rg-defenstack-dev-wus3`: **create** `appi-defenstack-dev-wus3` and a role assignment on it; **modify** the App Service (two app settings and two default-deny restrictions).
-   - In prod, also: the primary storage account `sku.name` `Standard_GRS` → `Standard_RAGZRS`, and in `rg-defenstack-prod-eus` a new private endpoint `<primary account>-secondary-pe`, plus a role assignment in `rg-defenstack-prod-wus3`.
+   - In prod, also: if the step 4 prod conversion below has **not** been run yet, the primary storage account shows `sku.name` `Standard_GRS` → `Standard_RAGZRS`. Once that conversion has completed, the what-if shows no SKU change for the account. Either way, expect in `rg-defenstack-prod-eus` a new private endpoint `<primary account>-secondary-pe`, plus a role assignment in `rg-defenstack-prod-wus3`.
    - The plan job and what-if run without `KEYVAULT_SECRETS_JSON`, so they never show secret writes. That is expected.
    - **Stop** if the what-if shows any storage account or vault being recreated.
 
    Prod only: run the same `validate` with `params/prod.bicepparam` before the prod deployment. It is the first deployment of the RA-GZRS account with point-in-time restore (§9).
-4. **Deploy through the pipeline:** GitHub → Actions → `deploy` → **Run workflow** → `dev` (prod: the two-approval flow, `ADR-012`). Check that the step **Prepare Key Vault secrets** logs `Prepared <n> Key Vault secret(s): <names>` (names only, never values), and that **Deploy** succeeds.
-5. **Record the component names:** `az monitor app-insights component show -g rg-defenstack-dev-wus3 --app appi-defenstack-dev-wus3 --query "{name:name, workspace:workspaceResourceId, localAuth:disableLocalAuth}" -o json`. Expected: the workspace ID ends in `log-defenstack-dev`, and `"localAuth": true`, which means local auth is disabled.
+4. **Prod only, existing account: convert the primary storage account to RA-GZRS first.** This is needed only when the prod primary account already exists with a SKU other than `Standard_RAGZRS`. A brand-new account created directly as RA-GZRS does not need this step.
+
+   Check the current SKU:
+
+   ```powershell
+   az storage account show -g rg-defenstack-prod-wus3 -n <account> --query sku.name -o tsv
+   ```
+
+   1. Add read access in place: `az storage account update -g rg-defenstack-prod-wus3 -n <account> --sku Standard_RAGRS`.
+   2. Start the zone conversion: `az storage account migration start -g rg-defenstack-prod-wus3 --account-name <account> --sku Standard_RAGZRS --no-wait`.
+   3. Poll until it finishes: `az storage account migration show -g rg-defenstack-prod-wus3 --account-name <account> --migration-name default --query "properties.migrationStatus" -o tsv`. Expected: `Complete`. It can take hours to days. The account stays readable and writable throughout.
+   4. Only then run the prod pipeline deploy (step 5 below).
+
+   Reference: [Change how a storage account is replicated](https://learn.microsoft.com/en-us/azure/storage/common/redundancy-migration).
+5. **Deploy through the pipeline:** GitHub → Actions → `deploy` → **Run workflow** → `dev` (prod: the two-approval flow, `ADR-012`). Check that the step **Prepare Key Vault secrets** logs `Prepared <n> Key Vault secret(s): <names>` (names only, never values), and that **Deploy** succeeds.
+6. **Record the component names:** `az monitor app-insights component show -g rg-defenstack-dev-wus3 --app appi-defenstack-dev-wus3 --query "{name:name, workspace:workspaceResourceId, localAuth:disableLocalAuth}" -o json`. Expected: the workspace ID ends in `log-defenstack-dev`, and `"localAuth": true`, which means local auth is disabled.
 
 ## 5. Manual and post-deployment steps
 
@@ -163,7 +177,7 @@ The examples use the dev primary account `<st>` and container `def-blob`, run ov
 | Warm-standby read endpoint (prod) | `az network private-endpoint show -g rg-defenstack-prod-eus -n <primary account>-secondary-pe --query "{group:privateLinkServiceConnections[0].groupIds[0], state:privateLinkServiceConnections[0].privateLinkServiceConnectionState.status}" -o json` | `blob_secondary`, `Approved` |
 | Secondary name resolves privately (prod, from the East US jump host or VPN) | `nslookup <primary account>-secondary.blob.core.windows.net` | An address in `10.10.1.0/24` |
 | Warm-standby reader role (prod) | `az role assignment list --scope <primary account id>/blobServices/default/containers/def-blob --query "[?roleDefinitionName=='Storage Blob Data Reader'].principalId" -o tsv` | The East US App Service principal ID |
-| App Insights is workspace-based with key auth off | §4 step 5 command | Workspace `log-defenstack-<env>`, `"localAuth": true` |
+| App Insights is workspace-based with key auth off | §4 step 6 command | Workspace `log-defenstack-<env>`, `"localAuth": true` |
 | App Service telemetry settings | `az webapp config appsettings list -n <app> -g <rg> --query "[?starts_with(name,'APPLICATIONINSIGHTS')].{name:name, value:value}" -o table` | Connection string present; `APPLICATIONINSIGHTS_AUTHENTICATION_STRING` = `Authorization=AAD` |
 | Publisher role | `az role assignment list --scope $(az monitor app-insights component show -g <rg> --app appi-defenstack-<env>-<region> --query id -o tsv) --query "[].roleDefinitionName" -o tsv` | `Monitoring Metrics Publisher` |
 | Default-deny restrictions | `az webapp config access-restriction show -n <app> -g <rg> --query "{site:ipSecurityRestrictionsDefaultAction, scm:scmIpSecurityRestrictionsDefaultAction}" -o json` | `Deny`, `Deny` |
@@ -174,7 +188,7 @@ Paste every output into the Phase 5 PR (spec §6 definition of done).
 
 ## 7. Rollback
 
-- **Storage SKU:** an RA-GZRS → GRS change, done by reverting the commit and redeploying, is supported, but Azure converts redundancy asynchronously and it can take hours. Never go to LRS in prod.
+- **Storage SKU:** going back from RA-GZRS to GRS removes zone redundancy, which is also a conversion, not a revert-and-redeploy. Run `az storage account migration start -g rg-defenstack-prod-wus3 --account-name <account> --sku Standard_RAGRS --no-wait` first, wait for it to report `Complete` (§4 step 4's polling command), then revert the commit. Never go to LRS in prod.
 - **Warm-standby read endpoint and reader role:** reverting does not delete them, because deployments are incremental. Remove them by hand:
   - `az network private-endpoint delete -g rg-defenstack-prod-eus -n <primary account>-secondary-pe`
   - `az role assignment delete --assignee <eus app principal> --scope <container id> --role 'Storage Blob Data Reader'`
@@ -213,6 +227,7 @@ Paste every output into the Phase 5 PR (spec §6 definition of done).
 | Step **Prepare Key Vault secrets** fails with `Secret name '<x>' is invalid` / `must have a non-empty string value` / `not valid JSON` | `KEYVAULT_SECRETS_JSON` breaks the rules in §4 step 2 | Fix the secret in the environment; the message names the secret, never the value |
 | **Deploy** fails with `unrecognized arguments` or an error about combining a `.bicepparam` file with other parameters | Azure CLI too old to combine `--parameters <file>.bicepparam` with `--parameters name=value` | Use the CLI the workflow installs (GitHub's `ubuntu-latest` image); locally, upgrade the CLI (§2) |
 | **Deploy** fails writing `Microsoft.KeyVault/vaults/secrets` with `Forbidden` | The deploying identity lacks `Microsoft.KeyVault/vaults/secrets/write` on the vault's resource group | Check the pipeline identity's `Contributor` on the region resource group (runbook 00b §6) |
+| Prod **Deploy** fails at the storage account update with an error about changing to `Standard_RAGZRS`, or about the SKU change not being supported | The account still has its old SKU, and adding zone redundancy needs a conversion, not an in-place update | Run the §4 step 4 prod conversion, wait for `Complete`, then re-run the deploy. Record the exact error text in the PR |
 | Prod **Deploy** rejects the storage update, for example a property combination not supported with `Standard_RAGZRS` (point-in-time restore or change feed) | A platform limit on RA-GZRS accounts that only the first prod deployment exercises | Record the exact error in the PR. Then either drop `restorePolicy` on the prod primary account (keep versioning and soft delete) or keep `Standard_GRS`, and update `ADR-020` |
 | `AppRequests` stays empty, or the app logs `401` from the ingestion endpoint | The App Service identity lacks Monitoring Metrics Publisher, or `APPLICATIONINSIGHTS_AUTHENTICATION_STRING` is missing | Check the two §6 rows; redeploy |
 | `AuthorizationFailed ... roleAssignments/write` for Storage Blob Data Reader or Monitoring Metrics Publisher | §4 step 1 was skipped | Re-apply the constrained assignment (§4 step 1) |

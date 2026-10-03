@@ -20,7 +20,7 @@ No application secrets exist yet; there is no app code.
 - The pipeline needs no data-plane role on the vaults. Its existing `Contributor` on each region resource group covers `Microsoft.KeyVault/vaults/secrets/write`.
 - Anyone who can edit the environment secret, or run the deploy job, controls the secret values. The prod environment's required reviewers and two-approval flow (`ADR-012`) gate prod.
 - Removing a name from the JSON does not delete the secret: deployments are incremental. Deletion is a manual, per-vault step (runbook 05 §5.1).
-- Every deployment writes a new version of each secret, even when the value is unchanged. Consumers must read `latest`, not a pinned version.
+- A deployment may write a new version of each secret even when the value is unchanged. Consumers must read `latest`, not a pinned version.
 - Writing secrets through Azure Resource Manager to a private, RBAC-mode vault is verified by the first dev deployment with a non-empty secret (runbook 05 §6 and §9).
 
 ## Revisit when

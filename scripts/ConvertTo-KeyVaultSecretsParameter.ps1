@@ -28,7 +28,13 @@ $ErrorActionPreference = 'Stop'
 $secrets = [ordered]@{}
 if (-not [string]::IsNullOrWhiteSpace($Json)) {
     try {
-        $parsed = $Json | ConvertFrom-Json
+        # PowerShell 7.5+ can keep ISO-8601 strings as strings instead of coercing them to [datetime].
+        if ((Get-Command ConvertFrom-Json).Parameters.ContainsKey('DateKind')) {
+            $parsed = $Json | ConvertFrom-Json -DateKind String
+        }
+        else {
+            $parsed = $Json | ConvertFrom-Json
+        }
     }
     catch {
         throw 'KEYVAULT_SECRETS_JSON is not valid JSON. Expected an object such as {"api-key": "value"}.'
@@ -39,6 +45,9 @@ if (-not [string]::IsNullOrWhiteSpace($Json)) {
     foreach ($property in $parsed.PSObject.Properties) {
         if ($property.Name -cnotmatch '^[0-9A-Za-z-]{1,127}$') {
             throw "Secret name '$($property.Name)' is invalid: use 1-127 letters, digits or hyphens."
+        }
+        if ($property.Value -is [datetime]) {
+            throw "Secret '$($property.Name)' has a date-like value that this PowerShell version converts to a date; run the step under PowerShell 7.5 or later."
         }
         if ($property.Value -isnot [string] -or [string]::IsNullOrEmpty($property.Value)) {
             throw "Secret '$($property.Name)' must have a non-empty string value."

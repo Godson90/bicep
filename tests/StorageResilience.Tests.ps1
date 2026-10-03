@@ -39,9 +39,17 @@ Describe 'Warm-standby read endpoint on the primary geo-replica (Phase 5)' {
     It 'is wired from the primary stamp outputs into the secondary stamp only' {
         $secondary = Get-TemplateResourceBySymbol -Template $main -Symbol 'secondaryStamp'
         $primary = Get-TemplateResourceBySymbol -Template $main -Symbol 'primaryStamp'
-        $secondary.properties.parameters.primaryStorageAccountId.value | Should -Be "[reference('primaryStamp').outputs.storageAccountId.value]"
-        $secondary.properties.parameters.primaryStorageAccountName.value | Should -Be "[reference('primaryStamp').outputs.storageAccountName.value]"
+        $secondary.properties.parameters.primaryStorageAccountId | Should -Be "[if(variables('isProd'), createObject('value', reference('primaryStamp').outputs.storageAccountId.value), createObject('value', ''))]"
+        $secondary.properties.parameters.primaryStorageAccountName | Should -Be "[if(variables('isProd'), createObject('value', reference('primaryStamp').outputs.storageAccountName.value), createObject('value', ''))]"
         $primary.properties.parameters.PSObject.Properties.Name | Should -Not -Contain 'primaryStorageAccountId'
+    }
+
+    It 'passes the primary storage account to the secondary stamp, and deploys the warm-standby reader, only in prod' {
+        $secondary = Get-TemplateResourceBySymbol -Template $main -Symbol 'secondaryStamp'
+        $secondary.properties.parameters.primaryStorageAccountId | Should -Match "variables\('isProd'\)"
+        $secondary.properties.parameters.primaryStorageAccountName | Should -Match "variables\('isProd'\)"
+        $reader = Get-TemplateResourceBySymbol -Template $main -Symbol 'secondaryStorageReader'
+        $reader.condition | Should -Match "variables\('isProd'\)"
     }
 
     It 'outputs what main needs from each stamp' {
@@ -61,7 +69,7 @@ Describe 'Warm-standby read-only data access (Phase 5)' {
 
     It 'is assigned in the primary resource group to the warm-standby App Service identity, only with the secondary region' {
         $module = Get-TemplateResourceBySymbol -Template $main -Symbol 'secondaryStorageReader'
-        $module.condition | Should -Be "[parameters('deploySecondaryRegion')]"
+        $module.condition | Should -Be "[and(parameters('deploySecondaryRegion'), variables('isProd'))]"
         $module.resourceGroup | Should -Be "[variables('primaryResourceGroupName')]"
         $module.properties.parameters.readerPrincipalId.value | Should -Be "[reference('secondaryStamp').outputs.appServicePrincipalId.value]"
         $module.properties.parameters.storageAccountName.value | Should -Be "[reference('primaryStamp').outputs.storageAccountName.value]"

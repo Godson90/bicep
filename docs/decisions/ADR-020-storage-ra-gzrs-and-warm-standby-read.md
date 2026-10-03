@@ -18,6 +18,8 @@ The spec (§3) asks for prod storage on **RA-GZRS**, geo-copied to East US, cons
 - The RA-GZRS premium and geo-replication transfer apply to the prod primary account only (`docs/cost.md` "Phase 5 delta").
 - A PSRule failure on any future non-LRS account without replication is no longer hidden by a global exclusion.
 - Combining RA-GZRS with point-in-time restore and change feed is first exercised by the prod deployment. If Azure rejects the combination, runbook 05 §9 says what to change and requires this ADR to be updated.
+- Moving the existing prod account from GRS to RA-GZRS is a customer-initiated conversion (hours to days), done before the deploy, per runbook 05 §4.
+- Reverting is also a conversion.
 
 ## Revisit when
 Phase 8 designs account failover, or the application needs writable storage in East US during normal operation.

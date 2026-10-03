@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "12712774969457220055"
+      "templateHash": "8359658680150663647"
     }
   },
   "definitions": {
@@ -5050,12 +5050,8 @@
           "deployAdminAccess": {
             "value": "[parameters('deploySecondaryAdminAccess')]"
           },
-          "primaryStorageAccountId": {
-            "value": "[reference('primaryStamp').outputs.storageAccountId.value]"
-          },
-          "primaryStorageAccountName": {
-            "value": "[reference('primaryStamp').outputs.storageAccountName.value]"
-          },
+          "primaryStorageAccountId": "[if(variables('isProd'), createObject('value', reference('primaryStamp').outputs.storageAccountId.value), createObject('value', ''))]",
+          "primaryStorageAccountName": "[if(variables('isProd'), createObject('value', reference('primaryStamp').outputs.storageAccountName.value), createObject('value', ''))]",
           "keyVaultSecrets": {
             "value": "[parameters('keyVaultSecrets')]"
           }
@@ -9413,7 +9409,7 @@
       ]
     },
     "secondaryStorageReader": {
-      "condition": "[parameters('deploySecondaryRegion')]",
+      "condition": "[and(parameters('deploySecondaryRegion'), variables('isProd'))]",
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
       "name": "[format('storage-reader-{0}', variables('secondaryRegionCode'))]",
