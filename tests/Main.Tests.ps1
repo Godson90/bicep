@@ -198,3 +198,53 @@ Describe 'Azure Monitor Private Link Scope (Phase 6)' {
         $main.outputs.monitorPrivateLinkScopeName.value | Should -Be "[reference('monitorPrivateLinkScope').outputs.name.value]"
     }
 }
+
+Describe 'Hub-to-hub peering and firewall routing (Phase 6)' {
+    BeforeAll {
+        $primaryPeering = Get-TemplateResourceBySymbol -Template $main -Symbol 'primaryHubPeering'
+        $secondaryPeering = Get-TemplateResourceBySymbol -Template $main -Symbol 'secondaryHubPeering'
+    }
+
+    It 'peers the hubs both ways only when the secondary region is deployed' {
+        foreach ($peering in $primaryPeering, $secondaryPeering) {
+            $peering.condition | Should -Be "[parameters('deploySecondaryRegion')]"
+        }
+        $primaryPeering.resourceGroup | Should -Be "[variables('primaryResourceGroupName')]"
+        $secondaryPeering.resourceGroup | Should -Be "[variables('secondaryResourceGroupName')]"
+    }
+
+    It 'points each hub at the other hub' {
+        $primaryPeering.properties.parameters.localVnetName.value | Should -Be "[reference('primaryStamp').outputs.hubVnetName.value]"
+        $primaryPeering.properties.parameters.remoteVnetId.value | Should -Be "[reference('secondaryStamp').outputs.hubVnetId.value]"
+        $primaryPeering.properties.parameters.peeringName.value | Should -Be "[format('hub-to-{0}-hub', variables('secondaryRegionCode'))]"
+        $secondaryPeering.properties.parameters.localVnetName.value | Should -Be "[reference('secondaryStamp').outputs.hubVnetName.value]"
+        $secondaryPeering.properties.parameters.remoteVnetId.value | Should -Be "[reference('primaryStamp').outputs.hubVnetId.value]"
+        $secondaryPeering.properties.parameters.peeringName.value | Should -Be "[format('hub-to-{0}-hub', variables('primaryRegionCode'))]"
+    }
+
+    It 'creates the two sides one after the other' {
+        @($secondaryPeering.dependsOn) | Should -Contain 'primaryHubPeering'
+    }
+
+    It 'makes the primary (AMPLS endpoint) region the Host and the secondary the Client, only with DR' {
+        $primary.properties.parameters.hubPeering | Should -Match "^\[if\(parameters\('deploySecondaryRegion'\), createObject\('value', createObject\("
+        $primary.properties.parameters.hubPeering | Should -Match "'monitorRole', 'Host'"
+        $primary.properties.parameters.hubPeering | Should -Match "createObject\('value', null\(\)\)\)\]$"
+        $secondary.properties.parameters.hubPeering.value.monitorRole | Should -Be 'Client'
+    }
+
+    It 'routes each region''s firewall to the other firewall at the first usable address of its AzureFirewallSubnet' {
+        $primary.properties.parameters.hubPeering | Should -Match "'remoteFirewallPrivateIp', cidrHost\(parameters\('secondaryAddressPlan'\)\.firewallSubnetPrefix, 3\)"
+        $primary.properties.parameters.hubPeering | Should -Match "'remoteSpokeAddressPrefixes', parameters\('secondaryAddressPlan'\)\.spokeAddressSpace"
+        $secondary.properties.parameters.hubPeering.value.remoteFirewallPrivateIp | Should -Be "[cidrHost(parameters('primaryAddressPlan').firewallSubnetPrefix, 3)]"
+        $secondary.properties.parameters.hubPeering.value.remoteSpokeAddressPrefixes | Should -Be "[parameters('primaryAddressPlan').spokeAddressSpace]"
+        $secondary.properties.parameters.hubPeering.value.monitorClientPrefixes | Should -Be "[variables('monitorClientPrefixes')]"
+        $primary.properties.parameters.hubPeering | Should -Match "'monitorClientPrefixes', variables\('monitorClientPrefixes'\)"
+    }
+
+    It 'allows only the East US App Service and management subnets to the primary private-endpoint subnet' {
+        $main.variables.monitorClientPrefixes |
+            Should -Be "[if(parameters('deploySecondaryRegion'), createArray(parameters('secondaryAddressPlan').appServiceIntegrationSubnetPrefix, parameters('secondaryAddressPlan').managementSubnetPrefix), createArray())]"
+        @($main.variables.monitorPrivateEndpointPrefixes) | Should -Be @("[parameters('primaryAddressPlan').privateEndpointSubnetPrefix]")
+    }
+}

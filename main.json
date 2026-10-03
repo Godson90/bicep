@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "798421267350042295"
+      "templateHash": "14488013884002204099"
     }
   },
   "definitions": {
@@ -312,7 +312,11 @@
       "oms": "privatelink.oms.opinsights.azure.com",
       "ods": "privatelink.ods.opinsights.azure.com",
       "agentsvc": "privatelink.agentsvc.azure-automation.net"
-    }
+    },
+    "monitorClientPrefixes": "[if(parameters('deploySecondaryRegion'), createArray(parameters('secondaryAddressPlan').appServiceIntegrationSubnetPrefix, parameters('secondaryAddressPlan').managementSubnetPrefix), createArray())]",
+    "monitorPrivateEndpointPrefixes": [
+      "[parameters('primaryAddressPlan').privateEndpointSubnetPrefix]"
+    ]
   },
   "resources": {
     "global": {
@@ -669,7 +673,8 @@
           },
           "keyVaultSecrets": {
             "value": "[parameters('keyVaultSecrets')]"
-          }
+          },
+          "hubPeering": "[if(parameters('deploySecondaryRegion'), createObject('value', createObject('remoteFirewallPrivateIp', cidrHost(parameters('secondaryAddressPlan').firewallSubnetPrefix, 3), 'remoteSpokeAddressPrefixes', parameters('secondaryAddressPlan').spokeAddressSpace, 'monitorRole', 'Host', 'monitorClientPrefixes', variables('monitorClientPrefixes'), 'monitorPrivateEndpointPrefixes', variables('monitorPrivateEndpointPrefixes'))), createObject('value', null()))]"
         },
         "template": {
           "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
@@ -679,10 +684,64 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "11283561421743270098"
+              "templateHash": "10421658605003321235"
             }
           },
           "definitions": {
+            "hubPeeringPlan": {
+              "type": "object",
+              "properties": {
+                "remoteFirewallPrivateIp": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "Private IP of the other region's firewall, the next hop for the other region's spoke."
+                  }
+                },
+                "remoteSpokeAddressPrefixes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "metadata": {
+                    "description": "Spoke address prefixes of the other region, routed from this AzureFirewallSubnet to the other firewall."
+                  }
+                },
+                "monitorRole": {
+                  "type": "string",
+                  "allowedValues": [
+                    "Client",
+                    "Host"
+                  ],
+                  "metadata": {
+                    "description": "This region's part in Azure Monitor traffic: Host owns the AMPLS private endpoint, Client forwards its spoke to it."
+                  }
+                },
+                "monitorClientPrefixes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "metadata": {
+                    "description": "Spoke subnets of the Client region allowed to reach the AMPLS private endpoint on TCP 443."
+                  }
+                },
+                "monitorPrivateEndpointPrefixes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "metadata": {
+                    "description": "Private-endpoint subnet prefixes in the Host region that hold the AMPLS endpoint. Used by the Client rule."
+                  }
+                }
+              },
+              "metadata": {
+                "description": "Prod with DR only: how this region's firewall carries traffic to and from the other region over the hub-to-hub global peering (Phase 6).",
+                "__bicep_imported_from!": {
+                  "sourceTemplate": "types.bicep"
+                }
+              }
+            },
             "privateDnsZoneSet": {
               "type": "object",
               "properties": {
@@ -964,6 +1023,13 @@
               "metadata": {
                 "description": "Application secrets written to this region's Key Vault, as { name: value } (ADR-019)."
               }
+            },
+            "hubPeering": {
+              "$ref": "#/definitions/hubPeeringPlan",
+              "nullable": true,
+              "metadata": {
+                "description": "Prod with DR only: routing and Azure Monitor rules for the hub-to-hub peering with the other region. Absent in dev and in prod without DR."
+              }
             }
           },
           "variables": {
@@ -994,6 +1060,8 @@
             },
             "firewallPrivateIp": "[cidrHost(parameters('addressPlan').firewallSubnetPrefix, 3)]",
             "adminSourceCidrs": "[concat(createArray(parameters('addressPlan').bastionSubnetPrefix, parameters('addressPlan').vpnClientAddressPool), parameters('managementSourceCidrs'))]",
+            "monitorPeeringRole": "[coalesce(tryGet(parameters('hubPeering'), 'monitorRole'), 'None')]",
+            "peerTrafficSourceCidrs": "[if(equals(variables('monitorPeeringRole'), 'Host'), createArray(parameters('addressPlan').firewallSubnetPrefix), createArray())]",
             "privateEndpointSubnetName": "private-endpoints",
             "appServiceIntegrationSubnetName": "appservice-integration"
           },
@@ -1431,6 +1499,12 @@
                   },
                   "enableDeleteLock": {
                     "value": "[variables('isProd')]"
+                  },
+                  "remoteSpokeAddressPrefixes": {
+                    "value": "[coalesce(tryGet(parameters('hubPeering'), 'remoteSpokeAddressPrefixes'), createArray())]"
+                  },
+                  "remoteFirewallPrivateIp": {
+                    "value": "[coalesce(tryGet(parameters('hubPeering'), 'remoteFirewallPrivateIp'), '')]"
                   }
                 },
                 "template": {
@@ -1440,7 +1514,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "3739191848790486457"
+                      "templateHash": "16668379759022033190"
                     }
                   },
                   "parameters": {
@@ -1506,6 +1580,20 @@
                       "metadata": {
                         "description": "Apply a CanNotDelete lock to the hub VNet."
                       }
+                    },
+                    "remoteSpokeAddressPrefixes": {
+                      "type": "array",
+                      "defaultValue": [],
+                      "metadata": {
+                        "description": "Spoke address prefixes of the other region, reached through the hub-to-hub peering (prod with DR). Empty leaves AzureFirewallSubnet without a route table."
+                      }
+                    },
+                    "remoteFirewallPrivateIp": {
+                      "type": "string",
+                      "defaultValue": "",
+                      "metadata": {
+                        "description": "Private IP of the other region's firewall, the next hop for remoteSpokeAddressPrefixes."
+                      }
                     }
                   },
                   "variables": {
@@ -1513,7 +1601,9 @@
                     "bastionSubnetName": "AzureBastionSubnet",
                     "gatewaySubnetName": "GatewaySubnet",
                     "bastionNsgName": "[format('{0}-bastion-nsg', parameters('vnetName'))]",
-                    "gatewayRouteTableName": "[format('{0}-gateway-rt', parameters('vnetName'))]"
+                    "gatewayRouteTableName": "[format('{0}-gateway-rt', parameters('vnetName'))]",
+                    "firewallRouteTableName": "[format('{0}-firewall-rt', parameters('vnetName'))]",
+                    "firewallRoutes": "[concat(map(parameters('remoteSpokeAddressPrefixes'), lambda('prefix', 'i', createObject('name', format('remote-spoke-{0}-through-peer-firewall', lambdaVariables('i')), 'properties', createObject('addressPrefix', lambdaVariables('prefix'), 'nextHopType', 'VirtualAppliance', 'nextHopIpAddress', parameters('remoteFirewallPrivateIp'))))), createArray(createObject('name', 'default-to-internet', 'properties', createObject('addressPrefix', '0.0.0.0/0', 'nextHopType', 'Internet'))))]"
                   },
                   "resources": [
                     {
@@ -1692,6 +1782,17 @@
                       }
                     },
                     {
+                      "condition": "[not(empty(parameters('remoteSpokeAddressPrefixes')))]",
+                      "type": "Microsoft.Network/routeTables",
+                      "apiVersion": "2024-07-01",
+                      "name": "[variables('firewallRouteTableName')]",
+                      "location": "[parameters('location')]",
+                      "properties": {
+                        "disableBgpRoutePropagation": false,
+                        "routes": "[variables('firewallRoutes')]"
+                      }
+                    },
+                    {
                       "type": "Microsoft.Network/virtualNetworks",
                       "apiVersion": "2025-09-01",
                       "name": "[parameters('vnetName')]",
@@ -1709,7 +1810,8 @@
                           {
                             "name": "[variables('firewallSubnetName')]",
                             "properties": {
-                              "addressPrefix": "[parameters('firewallSubnetAddressPrefix')]"
+                              "addressPrefix": "[parameters('firewallSubnetAddressPrefix')]",
+                              "routeTable": "[if(empty(parameters('remoteSpokeAddressPrefixes')), null(), createObject('id', resourceId('Microsoft.Network/routeTables', variables('firewallRouteTableName'))))]"
                             }
                           },
                           {
@@ -1734,6 +1836,7 @@
                       },
                       "dependsOn": [
                         "[resourceId('Microsoft.Network/networkSecurityGroups', variables('bastionNsgName'))]",
+                        "[resourceId('Microsoft.Network/routeTables', variables('firewallRouteTableName'))]",
                         "[resourceId('Microsoft.Network/routeTables', variables('gatewayRouteTableName'))]"
                       ]
                     },
@@ -1830,6 +1933,15 @@
                   "idpsMode": "[if(variables('isProd'), createObject('value', 'Deny'), createObject('value', 'Alert'))]",
                   "enableDeleteLock": {
                     "value": "[variables('isProd')]"
+                  },
+                  "monitorPeeringRole": {
+                    "value": "[variables('monitorPeeringRole')]"
+                  },
+                  "monitorClientPrefixes": {
+                    "value": "[coalesce(tryGet(parameters('hubPeering'), 'monitorClientPrefixes'), createArray())]"
+                  },
+                  "monitorPrivateEndpointPrefixes": {
+                    "value": "[coalesce(tryGet(parameters('hubPeering'), 'monitorPrivateEndpointPrefixes'), createArray())]"
                   }
                 },
                 "template": {
@@ -1839,7 +1951,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "10458303694276730508"
+                      "templateHash": "12657588790443054316"
                     }
                   },
                   "parameters": {
@@ -1965,6 +2077,32 @@
                       "defaultValue": false,
                       "metadata": {
                         "description": "Apply CanNotDelete locks to the firewall, its policy, and its public IP."
+                      }
+                    },
+                    "monitorPeeringRole": {
+                      "type": "string",
+                      "defaultValue": "None",
+                      "allowedValues": [
+                        "None",
+                        "Host",
+                        "Client"
+                      ],
+                      "metadata": {
+                        "description": "This region's part in cross-region Azure Monitor traffic over the hub peering: Host, Client, or None (dev, or prod without DR)."
+                      }
+                    },
+                    "monitorClientPrefixes": {
+                      "type": "array",
+                      "defaultValue": [],
+                      "metadata": {
+                        "description": "Spoke subnets of the Client region allowed to reach the AMPLS private endpoint on TCP 443."
+                      }
+                    },
+                    "monitorPrivateEndpointPrefixes": {
+                      "type": "array",
+                      "defaultValue": [],
+                      "metadata": {
+                        "description": "Client role: private-endpoint subnet prefixes in the Host region that hold the AMPLS endpoint."
                       }
                     }
                   },
@@ -2123,6 +2261,15 @@
                           },
                           "allowedOutboundFqdns": {
                             "value": "[parameters('allowedOutboundFqdns')]"
+                          },
+                          "monitorPeeringRole": {
+                            "value": "[parameters('monitorPeeringRole')]"
+                          },
+                          "monitorClientPrefixes": {
+                            "value": "[parameters('monitorClientPrefixes')]"
+                          },
+                          "monitorPrivateEndpointPrefixes": {
+                            "value": "[parameters('monitorPrivateEndpointPrefixes')]"
                           }
                         },
                         "template": {
@@ -2132,7 +2279,7 @@
                             "_generator": {
                               "name": "bicep",
                               "version": "0.47.16.16243",
-                              "templateHash": "2762860099593226356"
+                              "templateHash": "15645242146748151595"
                             }
                           },
                           "parameters": {
@@ -2166,10 +2313,86 @@
                               "metadata": {
                                 "description": "Approved outbound FQDNs for application traffic. An empty list deploys no application allowlist."
                               }
+                            },
+                            "monitorPeeringRole": {
+                              "type": "string",
+                              "defaultValue": "None",
+                              "allowedValues": [
+                                "None",
+                                "Host",
+                                "Client"
+                              ],
+                              "metadata": {
+                                "description": "This region's part in cross-region Azure Monitor traffic over the hub peering (prod with DR): Host owns the AMPLS private endpoint, Client forwards its spoke to it, None deploys no cross-region rules."
+                              }
+                            },
+                            "monitorClientPrefixes": {
+                              "type": "array",
+                              "defaultValue": [],
+                              "metadata": {
+                                "description": "Spoke subnets of the Client region allowed to reach the AMPLS private endpoint on TCP 443."
+                              }
+                            },
+                            "monitorPrivateEndpointPrefixes": {
+                              "type": "array",
+                              "defaultValue": [],
+                              "metadata": {
+                                "description": "Client role: private-endpoint subnet prefixes in the Host region that hold the AMPLS endpoint."
+                              }
                             }
                           },
                           "variables": {
-                            "entraLoginHost": "[split(environment().authentication.loginEndpoint, '/')[2]]"
+                            "entraLoginHost": "[split(environment().authentication.loginEndpoint, '/')[2]]",
+                            "monitorHostCollection": {
+                              "name": "peer-spoke-to-azure-monitor",
+                              "priority": 250,
+                              "ruleCollectionType": "FirewallPolicyFilterRuleCollection",
+                              "action": {
+                                "type": "Allow"
+                              },
+                              "rules": [
+                                {
+                                  "ruleType": "ApplicationRule",
+                                  "name": "azure-monitor-private-link",
+                                  "sourceAddresses": "[parameters('monitorClientPrefixes')]",
+                                  "protocols": [
+                                    {
+                                      "protocolType": "Https",
+                                      "port": 443
+                                    }
+                                  ],
+                                  "targetFqdns": [
+                                    "*.applicationinsights.azure.com",
+                                    "*.monitor.azure.com",
+                                    "*.ods.opinsights.azure.com",
+                                    "*.oms.opinsights.azure.com",
+                                    "*.agentsvc.azure-automation.net"
+                                  ]
+                                }
+                              ]
+                            },
+                            "monitorClientCollection": {
+                              "name": "spoke-to-peer-azure-monitor",
+                              "priority": 250,
+                              "ruleCollectionType": "FirewallPolicyFilterRuleCollection",
+                              "action": {
+                                "type": "Allow"
+                              },
+                              "rules": [
+                                {
+                                  "ruleType": "NetworkRule",
+                                  "name": "azure-monitor-private-endpoint",
+                                  "ipProtocols": [
+                                    "TCP"
+                                  ],
+                                  "sourceAddresses": "[parameters('monitorClientPrefixes')]",
+                                  "destinationAddresses": "[parameters('monitorPrivateEndpointPrefixes')]",
+                                  "destinationPorts": [
+                                    "443"
+                                  ]
+                                }
+                              ]
+                            }
                           },
                           "resources": [
                             {
@@ -2393,6 +2616,20 @@
                               "dependsOn": [
                                 "[resourceId('Microsoft.Network/firewallPolicies/ruleCollectionGroups', parameters('firewallPolicyName'), 'platform-egress')]"
                               ]
+                            },
+                            {
+                              "condition": "[not(equals(parameters('monitorPeeringRole'), 'None'))]",
+                              "type": "Microsoft.Network/firewallPolicies/ruleCollectionGroups",
+                              "apiVersion": "2025-01-01",
+                              "name": "[format('{0}/{1}', parameters('firewallPolicyName'), 'cross-region-monitoring')]",
+                              "properties": {
+                                "priority": 250,
+                                "ruleCollections": "[if(equals(parameters('monitorPeeringRole'), 'Host'), createArray(variables('monitorHostCollection')), createArray(variables('monitorClientCollection')))]"
+                              },
+                              "dependsOn": [
+                                "[resourceId('Microsoft.Network/firewallPolicies/ruleCollectionGroups', parameters('firewallPolicyName'), 'approved-https-egress')]",
+                                "[resourceId('Microsoft.Network/firewallPolicies/ruleCollectionGroups', parameters('firewallPolicyName'), 'platform-egress')]"
+                              ]
                             }
                           ]
                         }
@@ -2461,7 +2698,7 @@
                     "value": "[parameters('addressPlan').managementSubnetPrefix]"
                   },
                   "approvedPrivateEndpointSourceCidrs": {
-                    "value": "[concat(createArray(parameters('addressPlan').appServiceIntegrationSubnetPrefix, parameters('addressPlan').managementSubnetPrefix, parameters('addressPlan').vpnClientAddressPool), parameters('additionalPrivateEndpointSourceCidrs'))]"
+                    "value": "[concat(createArray(parameters('addressPlan').appServiceIntegrationSubnetPrefix, parameters('addressPlan').managementSubnetPrefix, parameters('addressPlan').vpnClientAddressPool), variables('peerTrafficSourceCidrs'), parameters('additionalPrivateEndpointSourceCidrs'))]"
                   },
                   "privateEndpointSubnetName": {
                     "value": "[variables('privateEndpointSubnetName')]"
@@ -5130,6 +5367,15 @@
           "primaryStorageAccountName": "[if(variables('isProd'), createObject('value', reference('primaryStamp').outputs.storageAccountName.value), createObject('value', ''))]",
           "keyVaultSecrets": {
             "value": "[parameters('keyVaultSecrets')]"
+          },
+          "hubPeering": {
+            "value": {
+              "remoteFirewallPrivateIp": "[cidrHost(parameters('primaryAddressPlan').firewallSubnetPrefix, 3)]",
+              "remoteSpokeAddressPrefixes": "[parameters('primaryAddressPlan').spokeAddressSpace]",
+              "monitorRole": "Client",
+              "monitorClientPrefixes": "[variables('monitorClientPrefixes')]",
+              "monitorPrivateEndpointPrefixes": "[variables('monitorPrivateEndpointPrefixes')]"
+            }
           }
         },
         "template": {
@@ -5140,10 +5386,64 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "11283561421743270098"
+              "templateHash": "10421658605003321235"
             }
           },
           "definitions": {
+            "hubPeeringPlan": {
+              "type": "object",
+              "properties": {
+                "remoteFirewallPrivateIp": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "Private IP of the other region's firewall, the next hop for the other region's spoke."
+                  }
+                },
+                "remoteSpokeAddressPrefixes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "metadata": {
+                    "description": "Spoke address prefixes of the other region, routed from this AzureFirewallSubnet to the other firewall."
+                  }
+                },
+                "monitorRole": {
+                  "type": "string",
+                  "allowedValues": [
+                    "Client",
+                    "Host"
+                  ],
+                  "metadata": {
+                    "description": "This region's part in Azure Monitor traffic: Host owns the AMPLS private endpoint, Client forwards its spoke to it."
+                  }
+                },
+                "monitorClientPrefixes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "metadata": {
+                    "description": "Spoke subnets of the Client region allowed to reach the AMPLS private endpoint on TCP 443."
+                  }
+                },
+                "monitorPrivateEndpointPrefixes": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "metadata": {
+                    "description": "Private-endpoint subnet prefixes in the Host region that hold the AMPLS endpoint. Used by the Client rule."
+                  }
+                }
+              },
+              "metadata": {
+                "description": "Prod with DR only: how this region's firewall carries traffic to and from the other region over the hub-to-hub global peering (Phase 6).",
+                "__bicep_imported_from!": {
+                  "sourceTemplate": "types.bicep"
+                }
+              }
+            },
             "privateDnsZoneSet": {
               "type": "object",
               "properties": {
@@ -5425,6 +5725,13 @@
               "metadata": {
                 "description": "Application secrets written to this region's Key Vault, as { name: value } (ADR-019)."
               }
+            },
+            "hubPeering": {
+              "$ref": "#/definitions/hubPeeringPlan",
+              "nullable": true,
+              "metadata": {
+                "description": "Prod with DR only: routing and Azure Monitor rules for the hub-to-hub peering with the other region. Absent in dev and in prod without DR."
+              }
             }
           },
           "variables": {
@@ -5455,6 +5762,8 @@
             },
             "firewallPrivateIp": "[cidrHost(parameters('addressPlan').firewallSubnetPrefix, 3)]",
             "adminSourceCidrs": "[concat(createArray(parameters('addressPlan').bastionSubnetPrefix, parameters('addressPlan').vpnClientAddressPool), parameters('managementSourceCidrs'))]",
+            "monitorPeeringRole": "[coalesce(tryGet(parameters('hubPeering'), 'monitorRole'), 'None')]",
+            "peerTrafficSourceCidrs": "[if(equals(variables('monitorPeeringRole'), 'Host'), createArray(parameters('addressPlan').firewallSubnetPrefix), createArray())]",
             "privateEndpointSubnetName": "private-endpoints",
             "appServiceIntegrationSubnetName": "appservice-integration"
           },
@@ -5892,6 +6201,12 @@
                   },
                   "enableDeleteLock": {
                     "value": "[variables('isProd')]"
+                  },
+                  "remoteSpokeAddressPrefixes": {
+                    "value": "[coalesce(tryGet(parameters('hubPeering'), 'remoteSpokeAddressPrefixes'), createArray())]"
+                  },
+                  "remoteFirewallPrivateIp": {
+                    "value": "[coalesce(tryGet(parameters('hubPeering'), 'remoteFirewallPrivateIp'), '')]"
                   }
                 },
                 "template": {
@@ -5901,7 +6216,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "3739191848790486457"
+                      "templateHash": "16668379759022033190"
                     }
                   },
                   "parameters": {
@@ -5967,6 +6282,20 @@
                       "metadata": {
                         "description": "Apply a CanNotDelete lock to the hub VNet."
                       }
+                    },
+                    "remoteSpokeAddressPrefixes": {
+                      "type": "array",
+                      "defaultValue": [],
+                      "metadata": {
+                        "description": "Spoke address prefixes of the other region, reached through the hub-to-hub peering (prod with DR). Empty leaves AzureFirewallSubnet without a route table."
+                      }
+                    },
+                    "remoteFirewallPrivateIp": {
+                      "type": "string",
+                      "defaultValue": "",
+                      "metadata": {
+                        "description": "Private IP of the other region's firewall, the next hop for remoteSpokeAddressPrefixes."
+                      }
                     }
                   },
                   "variables": {
@@ -5974,7 +6303,9 @@
                     "bastionSubnetName": "AzureBastionSubnet",
                     "gatewaySubnetName": "GatewaySubnet",
                     "bastionNsgName": "[format('{0}-bastion-nsg', parameters('vnetName'))]",
-                    "gatewayRouteTableName": "[format('{0}-gateway-rt', parameters('vnetName'))]"
+                    "gatewayRouteTableName": "[format('{0}-gateway-rt', parameters('vnetName'))]",
+                    "firewallRouteTableName": "[format('{0}-firewall-rt', parameters('vnetName'))]",
+                    "firewallRoutes": "[concat(map(parameters('remoteSpokeAddressPrefixes'), lambda('prefix', 'i', createObject('name', format('remote-spoke-{0}-through-peer-firewall', lambdaVariables('i')), 'properties', createObject('addressPrefix', lambdaVariables('prefix'), 'nextHopType', 'VirtualAppliance', 'nextHopIpAddress', parameters('remoteFirewallPrivateIp'))))), createArray(createObject('name', 'default-to-internet', 'properties', createObject('addressPrefix', '0.0.0.0/0', 'nextHopType', 'Internet'))))]"
                   },
                   "resources": [
                     {
@@ -6153,6 +6484,17 @@
                       }
                     },
                     {
+                      "condition": "[not(empty(parameters('remoteSpokeAddressPrefixes')))]",
+                      "type": "Microsoft.Network/routeTables",
+                      "apiVersion": "2024-07-01",
+                      "name": "[variables('firewallRouteTableName')]",
+                      "location": "[parameters('location')]",
+                      "properties": {
+                        "disableBgpRoutePropagation": false,
+                        "routes": "[variables('firewallRoutes')]"
+                      }
+                    },
+                    {
                       "type": "Microsoft.Network/virtualNetworks",
                       "apiVersion": "2025-09-01",
                       "name": "[parameters('vnetName')]",
@@ -6170,7 +6512,8 @@
                           {
                             "name": "[variables('firewallSubnetName')]",
                             "properties": {
-                              "addressPrefix": "[parameters('firewallSubnetAddressPrefix')]"
+                              "addressPrefix": "[parameters('firewallSubnetAddressPrefix')]",
+                              "routeTable": "[if(empty(parameters('remoteSpokeAddressPrefixes')), null(), createObject('id', resourceId('Microsoft.Network/routeTables', variables('firewallRouteTableName'))))]"
                             }
                           },
                           {
@@ -6195,6 +6538,7 @@
                       },
                       "dependsOn": [
                         "[resourceId('Microsoft.Network/networkSecurityGroups', variables('bastionNsgName'))]",
+                        "[resourceId('Microsoft.Network/routeTables', variables('firewallRouteTableName'))]",
                         "[resourceId('Microsoft.Network/routeTables', variables('gatewayRouteTableName'))]"
                       ]
                     },
@@ -6291,6 +6635,15 @@
                   "idpsMode": "[if(variables('isProd'), createObject('value', 'Deny'), createObject('value', 'Alert'))]",
                   "enableDeleteLock": {
                     "value": "[variables('isProd')]"
+                  },
+                  "monitorPeeringRole": {
+                    "value": "[variables('monitorPeeringRole')]"
+                  },
+                  "monitorClientPrefixes": {
+                    "value": "[coalesce(tryGet(parameters('hubPeering'), 'monitorClientPrefixes'), createArray())]"
+                  },
+                  "monitorPrivateEndpointPrefixes": {
+                    "value": "[coalesce(tryGet(parameters('hubPeering'), 'monitorPrivateEndpointPrefixes'), createArray())]"
                   }
                 },
                 "template": {
@@ -6300,7 +6653,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "10458303694276730508"
+                      "templateHash": "12657588790443054316"
                     }
                   },
                   "parameters": {
@@ -6426,6 +6779,32 @@
                       "defaultValue": false,
                       "metadata": {
                         "description": "Apply CanNotDelete locks to the firewall, its policy, and its public IP."
+                      }
+                    },
+                    "monitorPeeringRole": {
+                      "type": "string",
+                      "defaultValue": "None",
+                      "allowedValues": [
+                        "None",
+                        "Host",
+                        "Client"
+                      ],
+                      "metadata": {
+                        "description": "This region's part in cross-region Azure Monitor traffic over the hub peering: Host, Client, or None (dev, or prod without DR)."
+                      }
+                    },
+                    "monitorClientPrefixes": {
+                      "type": "array",
+                      "defaultValue": [],
+                      "metadata": {
+                        "description": "Spoke subnets of the Client region allowed to reach the AMPLS private endpoint on TCP 443."
+                      }
+                    },
+                    "monitorPrivateEndpointPrefixes": {
+                      "type": "array",
+                      "defaultValue": [],
+                      "metadata": {
+                        "description": "Client role: private-endpoint subnet prefixes in the Host region that hold the AMPLS endpoint."
                       }
                     }
                   },
@@ -6584,6 +6963,15 @@
                           },
                           "allowedOutboundFqdns": {
                             "value": "[parameters('allowedOutboundFqdns')]"
+                          },
+                          "monitorPeeringRole": {
+                            "value": "[parameters('monitorPeeringRole')]"
+                          },
+                          "monitorClientPrefixes": {
+                            "value": "[parameters('monitorClientPrefixes')]"
+                          },
+                          "monitorPrivateEndpointPrefixes": {
+                            "value": "[parameters('monitorPrivateEndpointPrefixes')]"
                           }
                         },
                         "template": {
@@ -6593,7 +6981,7 @@
                             "_generator": {
                               "name": "bicep",
                               "version": "0.47.16.16243",
-                              "templateHash": "2762860099593226356"
+                              "templateHash": "15645242146748151595"
                             }
                           },
                           "parameters": {
@@ -6627,10 +7015,86 @@
                               "metadata": {
                                 "description": "Approved outbound FQDNs for application traffic. An empty list deploys no application allowlist."
                               }
+                            },
+                            "monitorPeeringRole": {
+                              "type": "string",
+                              "defaultValue": "None",
+                              "allowedValues": [
+                                "None",
+                                "Host",
+                                "Client"
+                              ],
+                              "metadata": {
+                                "description": "This region's part in cross-region Azure Monitor traffic over the hub peering (prod with DR): Host owns the AMPLS private endpoint, Client forwards its spoke to it, None deploys no cross-region rules."
+                              }
+                            },
+                            "monitorClientPrefixes": {
+                              "type": "array",
+                              "defaultValue": [],
+                              "metadata": {
+                                "description": "Spoke subnets of the Client region allowed to reach the AMPLS private endpoint on TCP 443."
+                              }
+                            },
+                            "monitorPrivateEndpointPrefixes": {
+                              "type": "array",
+                              "defaultValue": [],
+                              "metadata": {
+                                "description": "Client role: private-endpoint subnet prefixes in the Host region that hold the AMPLS endpoint."
+                              }
                             }
                           },
                           "variables": {
-                            "entraLoginHost": "[split(environment().authentication.loginEndpoint, '/')[2]]"
+                            "entraLoginHost": "[split(environment().authentication.loginEndpoint, '/')[2]]",
+                            "monitorHostCollection": {
+                              "name": "peer-spoke-to-azure-monitor",
+                              "priority": 250,
+                              "ruleCollectionType": "FirewallPolicyFilterRuleCollection",
+                              "action": {
+                                "type": "Allow"
+                              },
+                              "rules": [
+                                {
+                                  "ruleType": "ApplicationRule",
+                                  "name": "azure-monitor-private-link",
+                                  "sourceAddresses": "[parameters('monitorClientPrefixes')]",
+                                  "protocols": [
+                                    {
+                                      "protocolType": "Https",
+                                      "port": 443
+                                    }
+                                  ],
+                                  "targetFqdns": [
+                                    "*.applicationinsights.azure.com",
+                                    "*.monitor.azure.com",
+                                    "*.ods.opinsights.azure.com",
+                                    "*.oms.opinsights.azure.com",
+                                    "*.agentsvc.azure-automation.net"
+                                  ]
+                                }
+                              ]
+                            },
+                            "monitorClientCollection": {
+                              "name": "spoke-to-peer-azure-monitor",
+                              "priority": 250,
+                              "ruleCollectionType": "FirewallPolicyFilterRuleCollection",
+                              "action": {
+                                "type": "Allow"
+                              },
+                              "rules": [
+                                {
+                                  "ruleType": "NetworkRule",
+                                  "name": "azure-monitor-private-endpoint",
+                                  "ipProtocols": [
+                                    "TCP"
+                                  ],
+                                  "sourceAddresses": "[parameters('monitorClientPrefixes')]",
+                                  "destinationAddresses": "[parameters('monitorPrivateEndpointPrefixes')]",
+                                  "destinationPorts": [
+                                    "443"
+                                  ]
+                                }
+                              ]
+                            }
                           },
                           "resources": [
                             {
@@ -6854,6 +7318,20 @@
                               "dependsOn": [
                                 "[resourceId('Microsoft.Network/firewallPolicies/ruleCollectionGroups', parameters('firewallPolicyName'), 'platform-egress')]"
                               ]
+                            },
+                            {
+                              "condition": "[not(equals(parameters('monitorPeeringRole'), 'None'))]",
+                              "type": "Microsoft.Network/firewallPolicies/ruleCollectionGroups",
+                              "apiVersion": "2025-01-01",
+                              "name": "[format('{0}/{1}', parameters('firewallPolicyName'), 'cross-region-monitoring')]",
+                              "properties": {
+                                "priority": 250,
+                                "ruleCollections": "[if(equals(parameters('monitorPeeringRole'), 'Host'), createArray(variables('monitorHostCollection')), createArray(variables('monitorClientCollection')))]"
+                              },
+                              "dependsOn": [
+                                "[resourceId('Microsoft.Network/firewallPolicies/ruleCollectionGroups', parameters('firewallPolicyName'), 'approved-https-egress')]",
+                                "[resourceId('Microsoft.Network/firewallPolicies/ruleCollectionGroups', parameters('firewallPolicyName'), 'platform-egress')]"
+                              ]
                             }
                           ]
                         }
@@ -6922,7 +7400,7 @@
                     "value": "[parameters('addressPlan').managementSubnetPrefix]"
                   },
                   "approvedPrivateEndpointSourceCidrs": {
-                    "value": "[concat(createArray(parameters('addressPlan').appServiceIntegrationSubnetPrefix, parameters('addressPlan').managementSubnetPrefix, parameters('addressPlan').vpnClientAddressPool), parameters('additionalPrivateEndpointSourceCidrs'))]"
+                    "value": "[concat(createArray(parameters('addressPlan').appServiceIntegrationSubnetPrefix, parameters('addressPlan').managementSubnetPrefix, parameters('addressPlan').vpnClientAddressPool), variables('peerTrafficSourceCidrs'), parameters('additionalPrivateEndpointSourceCidrs'))]"
                   },
                   "privateEndpointSubnetName": {
                     "value": "[variables('privateEndpointSubnetName')]"
@@ -9538,6 +10016,177 @@
       "dependsOn": [
         "global",
         "primaryStamp"
+      ]
+    },
+    "primaryHubPeering": {
+      "condition": "[parameters('deploySecondaryRegion')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('hub-peering-{0}-to-{1}', variables('primaryRegionCode'), variables('secondaryRegionCode'))]",
+      "resourceGroup": "[variables('primaryResourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "localVnetName": {
+            "value": "[reference('primaryStamp').outputs.hubVnetName.value]"
+          },
+          "remoteVnetId": {
+            "value": "[reference('secondaryStamp').outputs.hubVnetId.value]"
+          },
+          "peeringName": {
+            "value": "[format('hub-to-{0}-hub', variables('secondaryRegionCode'))]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "12723549004319424294"
+            }
+          },
+          "parameters": {
+            "localVnetName": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 64,
+              "metadata": {
+                "description": "This region's hub VNet name, in this resource group."
+              }
+            },
+            "remoteVnetId": {
+              "type": "string",
+              "metadata": {
+                "description": "Resource ID of the other region's hub VNet."
+              }
+            },
+            "peeringName": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80,
+              "metadata": {
+                "description": "Peering name, for example hub-to-eus-hub."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Network/virtualNetworks/virtualNetworkPeerings",
+              "apiVersion": "2024-07-01",
+              "name": "[format('{0}/{1}', parameters('localVnetName'), parameters('peeringName'))]",
+              "properties": {
+                "allowVirtualNetworkAccess": true,
+                "allowForwardedTraffic": true,
+                "allowGatewayTransit": false,
+                "useRemoteGateways": false,
+                "remoteVirtualNetwork": {
+                  "id": "[parameters('remoteVnetId')]"
+                }
+              }
+            }
+          ],
+          "outputs": {
+            "id": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Network/virtualNetworks/virtualNetworkPeerings', parameters('localVnetName'), parameters('peeringName'))]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "primaryStamp",
+        "secondaryStamp"
+      ]
+    },
+    "secondaryHubPeering": {
+      "condition": "[parameters('deploySecondaryRegion')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('hub-peering-{0}-to-{1}', variables('secondaryRegionCode'), variables('primaryRegionCode'))]",
+      "resourceGroup": "[variables('secondaryResourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "localVnetName": {
+            "value": "[reference('secondaryStamp').outputs.hubVnetName.value]"
+          },
+          "remoteVnetId": {
+            "value": "[reference('primaryStamp').outputs.hubVnetId.value]"
+          },
+          "peeringName": {
+            "value": "[format('hub-to-{0}-hub', variables('primaryRegionCode'))]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "12723549004319424294"
+            }
+          },
+          "parameters": {
+            "localVnetName": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 64,
+              "metadata": {
+                "description": "This region's hub VNet name, in this resource group."
+              }
+            },
+            "remoteVnetId": {
+              "type": "string",
+              "metadata": {
+                "description": "Resource ID of the other region's hub VNet."
+              }
+            },
+            "peeringName": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80,
+              "metadata": {
+                "description": "Peering name, for example hub-to-eus-hub."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Network/virtualNetworks/virtualNetworkPeerings",
+              "apiVersion": "2024-07-01",
+              "name": "[format('{0}/{1}', parameters('localVnetName'), parameters('peeringName'))]",
+              "properties": {
+                "allowVirtualNetworkAccess": true,
+                "allowForwardedTraffic": true,
+                "allowGatewayTransit": false,
+                "useRemoteGateways": false,
+                "remoteVirtualNetwork": {
+                  "id": "[parameters('remoteVnetId')]"
+                }
+              }
+            }
+          ],
+          "outputs": {
+            "id": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Network/virtualNetworks/virtualNetworkPeerings', parameters('localVnetName'), parameters('peeringName'))]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "primaryHubPeering",
+        "primaryStamp",
+        "secondaryStamp"
       ]
     },
     "secondaryStorageReader": {

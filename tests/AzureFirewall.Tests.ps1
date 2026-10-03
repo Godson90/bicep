@@ -74,3 +74,13 @@ Describe 'Azure Firewall deletion protection (Phase 2)' {
         $template.parameters.enableDeleteLock.defaultValue | Should -BeExactly $false
     }
 }
+
+Describe 'Cross-region Azure Monitor rules pass-through (Phase 6)' {
+    It 'passes <_> to the rules module, off by default' -ForEach 'monitorPeeringRole', 'monitorClientPrefixes', 'monitorPrivateEndpointPrefixes' {
+        $rules.properties.parameters.$_.value | Should -Be "[parameters('$_')]"
+    }
+
+    It 'defaults to no cross-region role' {
+        $template.parameters.monitorPeeringRole.defaultValue | Should -Be 'None'
+    }
+}

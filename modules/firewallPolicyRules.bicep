@@ -16,8 +16,78 @@ param vpnClientAddressPrefixes array
 @description('Approved outbound FQDNs for application traffic. An empty list deploys no application allowlist.')
 param allowedOutboundFqdns array = []
 
+@description('This region\'s part in cross-region Azure Monitor traffic over the hub peering (prod with DR): Host owns the AMPLS private endpoint, Client forwards its spoke to it, None deploys no cross-region rules.')
+@allowed([
+  'None'
+  'Host'
+  'Client'
+])
+param monitorPeeringRole string = 'None'
+
+@description('Spoke subnets of the Client region allowed to reach the AMPLS private endpoint on TCP 443.')
+param monitorClientPrefixes array = []
+
+@description('Client role: private-endpoint subnet prefixes in the Host region that hold the AMPLS endpoint.')
+param monitorPrivateEndpointPrefixes array = []
+
 // Entra ID sign-in host for this cloud, for example login.microsoftonline.com.
 var entraLoginHost = split(environment().authentication.loginEndpoint, '/')[2]
+
+// Host: an application rule, so the firewall SNATs the other region's traffic to its own address and the private
+// endpoint's replies return through it (a network rule would keep the remote source, which the spoke cannot route).
+var monitorHostCollection = {
+  name: 'peer-spoke-to-azure-monitor'
+  priority: 250
+  ruleCollectionType: 'FirewallPolicyFilterRuleCollection'
+  action: {
+    type: 'Allow'
+  }
+  rules: [
+    {
+      ruleType: 'ApplicationRule'
+      name: 'azure-monitor-private-link'
+      sourceAddresses: monitorClientPrefixes
+      protocols: [
+        {
+          protocolType: 'Https'
+          port: 443
+        }
+      ]
+      targetFqdns: [
+        '*.applicationinsights.azure.com'
+        '*.monitor.azure.com'
+        '*.ods.opinsights.azure.com'
+        '*.oms.opinsights.azure.com'
+        '*.agentsvc.azure-automation.net'
+      ]
+    }
+  ]
+}
+
+// Client: a network rule that forwards, unchanged, only to the Host region's private-endpoint subnet; the AzureFirewallSubnet
+// route table sends it to the Host firewall over the peering.
+var monitorClientCollection = {
+  name: 'spoke-to-peer-azure-monitor'
+  priority: 250
+  ruleCollectionType: 'FirewallPolicyFilterRuleCollection'
+  action: {
+    type: 'Allow'
+  }
+  rules: [
+    {
+      ruleType: 'NetworkRule'
+      name: 'azure-monitor-private-endpoint'
+      ipProtocols: [
+        'TCP'
+      ]
+      sourceAddresses: monitorClientPrefixes
+      destinationAddresses: monitorPrivateEndpointPrefixes
+      destinationPorts: [
+        '443'
+      ]
+    }
+  ]
+}
 
 resource firewallPolicy 'Microsoft.Network/firewallPolicies@2025-01-01' existing = {
   name: firewallPolicyName
@@ -257,5 +327,25 @@ resource approvedHttpsEgress 'Microsoft.Network/firewallPolicies/ruleCollectionG
   }
   dependsOn: [
     platformEgress
+  ]
+}
+
+// Prod with DR: the other region's spoke reaches the single AMPLS private endpoint through both firewalls. Broader
+// cross-region traffic waits for Phase 8.
+resource crossRegionMonitoring 'Microsoft.Network/firewallPolicies/ruleCollectionGroups@2025-01-01' = if (monitorPeeringRole != 'None') {
+  parent: firewallPolicy
+  name: 'cross-region-monitoring'
+  properties: {
+    priority: 250
+    ruleCollections: monitorPeeringRole == 'Host' ? [
+      monitorHostCollection
+    ] : [
+      monitorClientCollection
+    ]
+  }
+  // approved-https-egress is optional, so wait for platform-egress too and never run beside another group.
+  dependsOn: [
+    platformEgress
+    approvedHttpsEgress
   ]
 }

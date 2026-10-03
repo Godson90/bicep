@@ -65,3 +65,22 @@ type virtualNetworkReference = {
   @description('VNet resource ID.')
   id: string
 }
+
+@export()
+@description('Prod with DR only: how this region\'s firewall carries traffic to and from the other region over the hub-to-hub global peering (Phase 6).')
+type hubPeeringPlan = {
+  @description('Private IP of the other region\'s firewall, the next hop for the other region\'s spoke.')
+  remoteFirewallPrivateIp: string
+
+  @description('Spoke address prefixes of the other region, routed from this AzureFirewallSubnet to the other firewall.')
+  remoteSpokeAddressPrefixes: string[]
+
+  @description('This region\'s part in Azure Monitor traffic: Host owns the AMPLS private endpoint, Client forwards its spoke to it.')
+  monitorRole: 'Host' | 'Client'
+
+  @description('Spoke subnets of the Client region allowed to reach the AMPLS private endpoint on TCP 443.')
+  monitorClientPrefixes: string[]
+
+  @description('Private-endpoint subnet prefixes in the Host region that hold the AMPLS endpoint. Used by the Client rule.')
+  monitorPrivateEndpointPrefixes: string[]
+}

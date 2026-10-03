@@ -66,6 +66,20 @@ param idpsSignatureOverrides array = []
 @description('Apply CanNotDelete locks to the firewall, its policy, and its public IP.')
 param enableDeleteLock bool = false
 
+@description('This region\'s part in cross-region Azure Monitor traffic over the hub peering: Host, Client, or None (dev, or prod without DR).')
+@allowed([
+  'None'
+  'Host'
+  'Client'
+])
+param monitorPeeringRole string = 'None'
+
+@description('Spoke subnets of the Client region allowed to reach the AMPLS private endpoint on TCP 443.')
+param monitorClientPrefixes array = []
+
+@description('Client role: private-endpoint subnet prefixes in the Host region that hold the AMPLS endpoint.')
+param monitorPrivateEndpointPrefixes array = []
+
 var isPremium = firewallTier == 'Premium'
 
 // Static Standard public IP used by Azure Firewall for controlled egress.
@@ -112,6 +126,9 @@ module policyRules 'firewallPolicyRules.bicep' = {
     managementAddressPrefixes: managementAddressPrefixes
     vpnClientAddressPrefixes: vpnClientAddressPrefixes
     allowedOutboundFqdns: allowedOutboundFqdns
+    monitorPeeringRole: monitorPeeringRole
+    monitorClientPrefixes: monitorClientPrefixes
+    monitorPrivateEndpointPrefixes: monitorPrivateEndpointPrefixes
   }
 }
 

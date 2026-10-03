@@ -30,11 +30,39 @@ param bastionTargetAddressPrefixes array
 @description('Apply a CanNotDelete lock to the hub VNet.')
 param enableDeleteLock bool = false
 
+@description('Spoke address prefixes of the other region, reached through the hub-to-hub peering (prod with DR). Empty leaves AzureFirewallSubnet without a route table.')
+param remoteSpokeAddressPrefixes array = []
+
+@description('Private IP of the other region\'s firewall, the next hop for remoteSpokeAddressPrefixes.')
+param remoteFirewallPrivateIp string = ''
+
 var firewallSubnetName = 'AzureFirewallSubnet'
 var bastionSubnetName = 'AzureBastionSubnet'
 var gatewaySubnetName = 'GatewaySubnet'
 var bastionNsgName = '${vnetName}-bastion-nsg'
 var gatewayRouteTableName = '${vnetName}-gateway-rt'
+var firewallRouteTableName = '${vnetName}-firewall-rt'
+// The other region's spoke goes to the other firewall. Once AzureFirewallSubnet has a route table, Azure Firewall
+// requires 0.0.0.0/0 to Internet on it, so the firewall keeps its own egress whatever is learned over BGP.
+var firewallRoutes = concat(
+  map(remoteSpokeAddressPrefixes, (prefix, i) => {
+    name: 'remote-spoke-${i}-through-peer-firewall'
+    properties: {
+      addressPrefix: prefix
+      nextHopType: 'VirtualAppliance'
+      nextHopIpAddress: remoteFirewallPrivateIp
+    }
+  }),
+  [
+    {
+      name: 'default-to-internet'
+      properties: {
+        addressPrefix: '0.0.0.0/0'
+        nextHopType: 'Internet'
+      }
+    }
+  ]
+)
 
 // Rules Microsoft requires on AzureBastionSubnet; SSH/RDP egress is narrowed to the management subnets.
 resource bastionNsg 'Microsoft.Network/networkSecurityGroups@2024-07-01' = {
@@ -205,6 +233,17 @@ resource gatewayRouteTable 'Microsoft.Network/routeTables@2024-07-01' = {
   }
 }
 
+// Prod with DR: cross-region spoke traffic leaves this firewall for the other region's firewall over the hub peering.
+// Gateway route propagation stays on, so the firewall still learns the VPN client pool and can answer admin sessions.
+resource firewallRouteTable 'Microsoft.Network/routeTables@2024-07-01' = if (!empty(remoteSpokeAddressPrefixes)) {
+  name: firewallRouteTableName
+  location: location
+  properties: {
+    disableBgpRoutePropagation: false
+    routes: firewallRoutes
+  }
+}
+
 // Dedicated hub network hosting the firewall, Bastion and the VPN gateway. The Bastion and gateway
 // subnets always exist (they are free) so turning admin access on or off never reshapes the VNet.
 resource hubVnet 'Microsoft.Network/virtualNetworks@2025-09-01' = {
@@ -225,6 +264,9 @@ resource hubVnet 'Microsoft.Network/virtualNetworks@2025-09-01' = {
         name: firewallSubnetName
         properties: {
           addressPrefix: firewallSubnetAddressPrefix
+          routeTable: empty(remoteSpokeAddressPrefixes) ? null : {
+            id: firewallRouteTable.id
+          }
         }
       }
       {

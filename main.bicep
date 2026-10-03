@@ -103,6 +103,16 @@ var privateDnsZoneNames privateDnsZoneSet = {
   agentsvc: 'privatelink.agentsvc.azure-automation.net'
 }
 
+// Prod with DR (Phase 6): the East US App Service and management subnets may reach the one AMPLS endpoint, in the
+// primary private-endpoint subnet, through both firewalls and the hub-to-hub peering. Nothing else crosses yet (Phase 8).
+var monitorClientPrefixes = deploySecondaryRegion ? [
+  secondaryAddressPlan!.appServiceIntegrationSubnetPrefix
+  secondaryAddressPlan!.managementSubnetPrefix
+] : []
+var monitorPrivateEndpointPrefixes = [
+  primaryAddressPlan.privateEndpointSubnetPrefix
+]
+
 // Shared layer: Log Analytics and private DNS zones. Resource groups are pre-created (runbook 01).
 module global 'modules/global.bicep' = {
   name: 'global-${environmentName}'
@@ -139,6 +149,14 @@ module primaryStamp 'modules/regionStamp.bicep' = {
     deployAdminAccess: deployPrimaryAdminAccess
     adminGroupObjectId: adminGroupObjectId
     keyVaultSecrets: keyVaultSecrets
+    // A firewall always takes the first usable address (.4) of its AzureFirewallSubnet (see regionStamp.bicep).
+    hubPeering: deploySecondaryRegion ? {
+      remoteFirewallPrivateIp: cidrHost(secondaryAddressPlan!.firewallSubnetPrefix, 3)
+      remoteSpokeAddressPrefixes: secondaryAddressPlan!.spokeAddressSpace
+      monitorRole: 'Host'
+      monitorClientPrefixes: monitorClientPrefixes
+      monitorPrivateEndpointPrefixes: monitorPrivateEndpointPrefixes
+    } : null
   }
 }
 
@@ -161,7 +179,39 @@ module secondaryStamp 'modules/regionStamp.bicep' = if (deploySecondaryRegion) {
     primaryStorageAccountId: isProd ? primaryStamp.outputs.storageAccountId : ''
     primaryStorageAccountName: isProd ? primaryStamp.outputs.storageAccountName : ''
     keyVaultSecrets: keyVaultSecrets
+    hubPeering: {
+      remoteFirewallPrivateIp: cidrHost(primaryAddressPlan.firewallSubnetPrefix, 3)
+      remoteSpokeAddressPrefixes: primaryAddressPlan.spokeAddressSpace
+      monitorRole: 'Client'
+      monitorClientPrefixes: monitorClientPrefixes
+      monitorPrivateEndpointPrefixes: monitorPrivateEndpointPrefixes
+    }
   }
+}
+
+// Hub-to-hub global peering, both ways, once both hubs exist (brought forward from Phase 8). The sides are created
+// one after the other, since each peering operation updates both VNets.
+module primaryHubPeering 'modules/hubPeering.bicep' = if (deploySecondaryRegion) {
+  name: 'hub-peering-${primaryRegionCode}-to-${secondaryRegionCode}'
+  scope: resourceGroup(primaryResourceGroupName)
+  params: {
+    localVnetName: primaryStamp.outputs.hubVnetName
+    remoteVnetId: secondaryStamp!.outputs.hubVnetId
+    peeringName: 'hub-to-${secondaryRegionCode}-hub'
+  }
+}
+
+module secondaryHubPeering 'modules/hubPeering.bicep' = if (deploySecondaryRegion) {
+  name: 'hub-peering-${secondaryRegionCode}-to-${primaryRegionCode}'
+  scope: resourceGroup(secondaryResourceGroupName)
+  params: {
+    localVnetName: secondaryStamp!.outputs.hubVnetName
+    remoteVnetId: primaryStamp.outputs.hubVnetId
+    peeringName: 'hub-to-${primaryRegionCode}-hub'
+  }
+  dependsOn: [
+    primaryHubPeering
+  ]
 }
 
 // The warm-standby App Service may read (never write) the primary application container (ADR-020).
