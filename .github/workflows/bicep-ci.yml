@@ -32,6 +32,10 @@ jobs:
 
       - name: PSRule for Azure
         shell: pwsh
+        env:
+          # params/governance.bicepparam reads the Defender contact list when it is deployed (runbook 07). A
+          # placeholder lets PSRule check the security contact as it will be deployed.
+          SECURITY_CONTACT_EMAILS: security-contact@example.com
         run: |
           Install-Module -Name PSRule.Rules.Azure -RequiredVersion 1.47.0 -Scope CurrentUser -Force
           New-Item -ItemType Directory -Path reports -Force | Out-Null

@@ -38,10 +38,11 @@ Describe 'Bicep lint' {
 }
 
 Describe 'Generated ARM template' {
-    It 'main.json matches a fresh build of main.bicep' {
+    # Both root entry points commit their build: main.json (pipeline) and governance.json (operator, Phase 7).
+    It '<_>.json matches a fresh build of <_>.bicep' -ForEach 'main', 'governance' {
         [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
-        $expected = ((& bicep build (Get-RepoPath 'main.bicep') --stdout) -join "`n").Trim()
-        $actual = ((Get-Content (Get-RepoPath 'main.json') -Raw -Encoding UTF8) -replace "`r`n", "`n").Trim()
-        $actual | Should -BeExactly $expected -Because 'run "bicep build main.bicep" and commit main.json'
+        $expected = ((& bicep build (Get-RepoPath "$_.bicep") --stdout) -join "`n").Trim()
+        $actual = ((Get-Content (Get-RepoPath "$_.json") -Raw -Encoding UTF8) -replace "`r`n", "`n").Trim()
+        $actual | Should -BeExactly $expected -Because "run ""bicep build $_.bicep"" and commit $_.json"
     }
 }

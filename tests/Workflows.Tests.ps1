@@ -168,3 +168,25 @@ Describe 'Alert email from the ALERT_EMAIL environment variable (Phase 6)' {
         $step | Should -Match 'exit 1'
     }
 }
+
+Describe 'Governance stays outside the pipeline (Phase 7)' {
+    It 'does not redeploy the workload when only governance files change (a redeploy resets the JIT NSG rules, ADR-028)' {
+        $deploy | Should -Match ([regex]::Escape("      - 'modules/**'"))
+        $deploy | Should -Match ([regex]::Escape("      - '!modules/governance/**'"))
+        $deploy | Should -Match ([regex]::Escape("      - '!params/governance.bicepparam'"))
+        # GitHub applies path filters in order, so each exclusion must follow the pattern it narrows.
+        $deploy.IndexOf("'!modules/governance/**'") | Should -BeGreaterThan $deploy.IndexOf("'modules/**'")
+        $deploy.IndexOf("'!params/governance.bicepparam'") | Should -BeGreaterThan $deploy.IndexOf("'params/**'")
+    }
+
+    It 'deploys only the environment parameter files, never governance' {
+        $deploy | Should -Match ([regex]::Escape('--parameters "params/${TARGET_ENV}.bicepparam"'))
+        $deploy | Should -Match 'options: \[dev, prod\]'
+    }
+
+    It 'still runs PSRule over every parameter file, governance included, with a placeholder contact list' {
+        $ci | Should -Match ([regex]::Escape('Assert-PSRule -InputPath params/'))
+        $psRuleStep = $ci.Substring($ci.IndexOf('- name: PSRule for Azure'))
+        $psRuleStep | Should -Match 'SECURITY_CONTACT_EMAILS: security-contact@example\.com'
+    }
+}

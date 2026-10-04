@@ -122,8 +122,10 @@ Baseline captured locally by running, from the repository root:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -Command "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12; Install-Module -Name PSRule.Rules.Azure -RequiredVersion 1.47.0 -Scope CurrentUser -Force"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:PSRULE_AZURE_BICEP_PATH = (Get-Command bicep).Source; Assert-PSRule -InputPath params/ -Module PSRule.Rules.Azure -Format File -Outcome Fail, Error"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$env:PSRULE_AZURE_BICEP_PATH = (Get-Command bicep).Source; $env:SECURITY_CONTACT_EMAILS = 'security-contact@example.com'; Assert-PSRule -InputPath params/ -Module PSRule.Rules.Azure -Format File -Outcome Fail, Error"
 ```
+
+`params/` also holds `governance.bicepparam` (Phase 7), which reads the Defender for Cloud contact list from `SECURITY_CONTACT_EMAILS` when an operator deploys it (runbook 07). Without the placeholder above, `Azure.Defender.SecurityContact` fails on an empty list; `bicep-ci.yml` sets the same placeholder on its PSRule step.
 
 Installed `PSRule.Rules.Azure 1.47.0` on `PSRule v2.9.0`, Bicep CLI on `PATH`
 (`PSRULE_AZURE_BICEP_PATH` set explicitly). Phase 1 moved the layout to

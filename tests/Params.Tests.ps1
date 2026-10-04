@@ -29,7 +29,13 @@ Describe 'Committed parameter files' {
         Get-RepoPath 'params/prod.bicepparam' | Should -Exist
     }
 
-    It '<Name> builds against main.bicep' -ForEach $paramFiles {
+    It 'binds dev and prod to main.bicep and the governance file to governance.bicep (Phase 7)' {
+        Get-Content (Get-RepoPath 'params/dev.bicepparam') -TotalCount 1 | Should -Be "using '../main.bicep'"
+        Get-Content (Get-RepoPath 'params/prod.bicepparam') -TotalCount 1 | Should -Be "using '../main.bicep'"
+        Get-Content (Get-RepoPath 'params/governance.bicepparam') -TotalCount 1 | Should -Be "using '../governance.bicep'"
+    }
+
+    It '<Name> builds against its template' -ForEach $paramFiles {
         $output = & bicep build-params $FullName --stdout 2>&1
         $LASTEXITCODE | Should -Be 0 -Because ($output -join [Environment]::NewLine)
     }
@@ -116,5 +122,38 @@ Describe 'Front Door custom domain (Phase 4)' {
     It 'leaves the custom domain empty in <_> until the external DNS records exist (runbook 04)' -ForEach 'dev', 'prod' {
         $parameters = if ($_ -eq 'dev') { $dev } else { $prod }
         $parameters.customDomainHostName.value | Should -Be ''
+    }
+}
+
+Describe 'Governance parameters (Phase 7)' {
+    BeforeAll {
+        $savedEmails = $env:SECURITY_CONTACT_EMAILS
+        $governanceText = Get-Content (Get-RepoPath 'params/governance.bicepparam') -Raw
+    }
+
+    AfterAll {
+        $env:SECURITY_CONTACT_EMAILS = $savedEmails
+    }
+
+    It 'commits no contact address; the operator sets SECURITY_CONTACT_EMAILS (runbook 07)' {
+        $governanceText | Should -Not -Match '[A-Za-z0-9._-]+@[A-Za-z0-9-]+\.'
+        $governanceText | Should -Match ([regex]::Escape("readEnvironmentVariable('SECURITY_CONTACT_EMAILS', '')"))
+    }
+
+    It 'turns an unset SECURITY_CONTACT_EMAILS into an empty list, which the template refuses (minLength 1)' {
+        $env:SECURITY_CONTACT_EMAILS = $null
+        $parameters = Get-BuiltParameters 'params/governance.bicepparam'
+        @($parameters.securityContactEmails.value).Count | Should -Be 0
+    }
+
+    It 'splits SECURITY_CONTACT_EMAILS on semicolons, trimming spaces and dropping empty entries' {
+        $env:SECURITY_CONTACT_EMAILS = ' secops@example.com ; ;cloud-admins@example.com;'
+        $parameters = Get-BuiltParameters 'params/governance.bicepparam'
+        @($parameters.securityContactEmails.value) | Should -Be @('secops@example.com', 'cloud-admins@example.com')
+    }
+
+    It 'keeps the default 5000 GB malware scanning cap' {
+        $parameters = Get-BuiltParameters 'params/governance.bicepparam'
+        $parameters.malwareScanCapGbPerMonth.value | Should -Be 5000
     }
 }

@@ -1,0 +1,239 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "languageVersion": "2.0",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.47.16.16243",
+      "templateHash": "6399012703544655637"
+    }
+  },
+  "parameters": {
+    "securityContactEmails": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "minLength": 1,
+      "metadata": {
+        "description": "Addresses that receive Defender for Cloud alert emails. The parameter file reads them from the SECURITY_CONTACT_EMAILS environment variable."
+      }
+    },
+    "malwareScanCapGbPerMonth": {
+      "type": "int",
+      "defaultValue": 5000,
+      "minValue": -1,
+      "metadata": {
+        "description": "Monthly cap, in GB per storage account, on Defender for Storage on-upload malware scanning. -1 removes the cap."
+      }
+    }
+  },
+  "resources": {
+    "defenderPlans": {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "governance-defender-plans",
+      "location": "[deployment().location]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "malwareScanCapGbPerMonth": {
+            "value": "[parameters('malwareScanCapGbPerMonth')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+          "languageVersion": "2.0",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "6097385111732995679"
+            }
+          },
+          "parameters": {
+            "malwareScanCapGbPerMonth": {
+              "type": "int",
+              "defaultValue": 5000,
+              "minValue": -1,
+              "metadata": {
+                "description": "Monthly cap, in GB per storage account, on Defender for Storage on-upload malware scanning, which is billed per GB scanned. -1 removes the cap."
+              }
+            }
+          },
+          "variables": {
+            "plans": [
+              {
+                "name": "VirtualMachines",
+                "properties": {
+                  "pricingTier": "Standard",
+                  "subPlan": "P2",
+                  "extensions": [
+                    {
+                      "name": "AgentlessVmScanning",
+                      "isEnabled": "True"
+                    }
+                  ]
+                }
+              },
+              {
+                "name": "AppServices",
+                "properties": {
+                  "pricingTier": "Standard"
+                }
+              },
+              {
+                "name": "StorageAccounts",
+                "properties": {
+                  "pricingTier": "Standard",
+                  "subPlan": "DefenderForStorageV2",
+                  "extensions": [
+                    {
+                      "name": "OnUploadMalwareScanning",
+                      "isEnabled": "True",
+                      "additionalExtensionProperties": {
+                        "CapGBPerMonthPerStorageAccount": "[string(parameters('malwareScanCapGbPerMonth'))]"
+                      }
+                    },
+                    {
+                      "name": "SensitiveDataDiscovery",
+                      "isEnabled": "True"
+                    }
+                  ]
+                }
+              },
+              {
+                "name": "KeyVaults",
+                "properties": {
+                  "pricingTier": "Standard"
+                }
+              },
+              {
+                "name": "Arm",
+                "properties": {
+                  "pricingTier": "Standard"
+                }
+              },
+              {
+                "name": "CloudPosture",
+                "properties": {
+                  "pricingTier": "Standard"
+                }
+              }
+            ]
+          },
+          "resources": {
+            "pricings": {
+              "copy": {
+                "name": "pricings",
+                "count": "[length(variables('plans'))]",
+                "mode": "serial",
+                "batchSize": 1
+              },
+              "type": "Microsoft.Security/pricings",
+              "apiVersion": "2024-01-01",
+              "name": "[variables('plans')[copyIndex()].name]",
+              "properties": "[variables('plans')[copyIndex()].properties]"
+            }
+          },
+          "outputs": {
+            "planNames": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "copy": {
+                "count": "[length(variables('plans'))]",
+                "input": "[variables('plans')[copyIndex()].name]"
+              }
+            }
+          }
+        }
+      }
+    },
+    "securityContacts": {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "governance-security-contacts",
+      "location": "[deployment().location]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "emails": {
+            "value": "[parameters('securityContactEmails')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+          "languageVersion": "2.0",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "9696678609153348573"
+            }
+          },
+          "parameters": {
+            "emails": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minLength": 1,
+              "metadata": {
+                "description": "Addresses that receive Defender for Cloud alert emails. At least one."
+              }
+            }
+          },
+          "resources": {
+            "securityContact": {
+              "type": "Microsoft.Security/securityContacts",
+              "apiVersion": "2023-12-01-preview",
+              "name": "default",
+              "properties": {
+                "isEnabled": true,
+                "emails": "[join(parameters('emails'), ';')]",
+                "notificationsByRole": {
+                  "state": "On",
+                  "roles": [
+                    "Owner"
+                  ]
+                },
+                "notificationsSources": [
+                  {
+                    "sourceType": "Alert",
+                    "minimalSeverity": "High"
+                  }
+                ]
+              }
+            }
+          },
+          "outputs": {
+            "name": {
+              "type": "string",
+              "value": "default"
+            }
+          }
+        }
+      }
+    }
+  },
+  "outputs": {
+    "defenderPlanNames": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "value": "[reference('defenderPlans').outputs.planNames.value]"
+    }
+  }
+}
