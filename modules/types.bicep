@@ -164,3 +164,12 @@ type environmentRegionLayout = {
   @description('Prod regions: the primary, then the warm standby.')
   prod: ('westus3' | 'eastus')[]
 }
+@export()
+@description('Object ID of each environment\'s Entra ID admin group, the group runbook 03 creates (Phase 7 governance). Empty skips that environment.')
+type environmentAdminGroups = {
+  @description('Dev admin group object ID, the adminGroupObjectId of params/dev.bicepparam.')
+  dev: string
+
+  @description('Prod admin group object ID, the adminGroupObjectId of params/prod.bicepparam.')
+  prod: string
+}

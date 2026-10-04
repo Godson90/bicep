@@ -10,6 +10,67 @@ Describe 'VM NIC NSG management access (F1)' {
     }
 }
 
+Describe 'Jump host just-in-time access (Phase 7, ADR-028)' {
+    BeforeAll {
+        $nsg = Get-TemplateResource -Template $template -Type 'Microsoft.Network/networkSecurityGroups' | Select-Object -First 1
+        $nic = Get-TemplateResource -Template $template -Type 'Microsoft.Network/networkInterfaces' | Select-Object -First 1
+        $jit = @(Get-TemplateResource -Template $template -Type 'Microsoft.Security/locations/jitNetworkAccessPolicies')
+        $inboundRules = @($nsg.properties.securityRules | Where-Object { $_ -isnot [string] -and $_.properties.direction -eq 'Inbound' })
+        $denyRule = $template.variables.denyManagementInboundRule
+    }
+
+    It 'has no static allow rule on the NIC: SSH and RDP open only through a JIT grant' {
+        ($nsg.properties.securityRules | ConvertTo-Json -Depth 10) | Should -Not -Match "'Allow'|""Allow"""
+        ($nsg.properties.securityRules | ConvertTo-Json -Depth 10) | Should -Not -Match 'allow-management-ssh-rdp'
+        $template.variables.PSObject.Properties.Name | Should -Not -Contain 'managementInboundRules'
+    }
+
+    It 'denies inbound SSH and RDP from any source at priority 4000, leaving 100-3999 free for JIT allow rules' {
+        @($nsg.properties.securityRules)[0] | Should -Be "[variables('denyManagementInboundRule')]"
+        $denyRule.name | Should -Be 'deny-ssh-rdp-inbound'
+        $denyRule.properties.priority | Should -Be 4000
+        $denyRule.properties.access | Should -Be 'Deny'
+        $denyRule.properties.direction | Should -Be 'Inbound'
+        $denyRule.properties.sourceAddressPrefix | Should -Be '*'
+        @($denyRule.properties.destinationPortRanges) -join ',' | Should -Be '22,3389'
+    }
+
+    It 'keeps the catch-all inbound deny below the SSH/RDP deny' {
+        $inboundRules.Count | Should -Be 1
+        $inboundRules[0].name | Should -Be 'deny-unsolicited-inbound'
+        $inboundRules[0].properties.priority | Should -Be 4096
+    }
+
+    It 'attaches the NSG to the NIC, the NSG closest to the VM, which JIT programs' {
+        $nic.properties.networkSecurityGroup.id | Should -Be "[resourceId('Microsoft.Network/networkSecurityGroups', variables('networkSecurityGroupName'))]"
+    }
+
+    It 'creates one JIT policy, named default in the VM region, with the GA API and kind Basic' {
+        $jit.Count | Should -Be 1
+        $jit[0].apiVersion | Should -Be '2020-01-01'
+        $jit[0].name | Should -Be "[format('{0}/default', parameters('location'))]"
+        $jit[0].kind | Should -Be 'Basic'
+    }
+
+    It 'skips the JIT policy when no admin source is given, so the ports stay closed' {
+        $jit[0].condition | Should -Be "[not(empty(parameters('managementSourceCidrs')))]"
+    }
+
+    It 'covers this VM on TCP 22 and 3389, from the admin sources only, for at most three hours' {
+        $vmEntry = @($jit[0].properties.virtualMachines)
+        $vmEntry.Count | Should -Be 1
+        $vmEntry[0].id | Should -Be "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
+        @($template.variables.jitPorts) -join ',' | Should -Be '22,3389'
+        $ports = $vmEntry[0].copy[0]
+        $ports.name | Should -Be 'ports'
+        $ports.count | Should -Be "[length(variables('jitPorts'))]"
+        $ports.input.number | Should -Be "[variables('jitPorts')[copyIndex('ports')]]"
+        $ports.input.protocol | Should -Be 'TCP'
+        $ports.input.allowedSourceAddressPrefixes | Should -Be "[parameters('managementSourceCidrs')]"
+        $ports.input.maxRequestAccessDuration | Should -Be 'PT3H'
+    }
+}
+
 Describe 'VM monitoring (F3)' {
     BeforeAll {
         $diagnostics = Get-TemplateResource -Template $template -Type 'Microsoft.Insights/diagnosticSettings' | Select-Object -First 1

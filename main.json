@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "2918792867245139280"
+      "templateHash": "14875587064846769639"
     }
   },
   "definitions": {
@@ -245,7 +245,7 @@
       "type": "array",
       "defaultValue": [],
       "metadata": {
-        "description": "Extra CIDR ranges allowed to administer management VMs over SSH/RDP, beyond the AzureBastionSubnet and VPN client pool of each region."
+        "description": "Extra CIDR ranges allowed to administer management VMs over SSH/RDP, beyond the AzureBastionSubnet and VPN client pool of each region. Every session still needs a just-in-time request (ADR-028)."
       }
     },
     "deployPrimaryAdminAccess": {
@@ -942,7 +942,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "2173279781782537292"
+              "templateHash": "11840373502800684373"
             }
           },
           "definitions": {
@@ -4078,7 +4078,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "10677249454727057265"
+                      "templateHash": "17911713465404450679"
                     }
                   },
                   "parameters": {
@@ -4152,7 +4152,7 @@
                       "type": "array",
                       "defaultValue": [],
                       "metadata": {
-                        "description": "CIDR ranges allowed to reach the VM over SSH (22) and RDP (3389). Must match the management subnet NSG; an empty list denies all administrative inbound traffic."
+                        "description": "CIDR ranges a just-in-time (JIT) request may open SSH (22) and RDP (3389) from: the same admin sources the management subnet NSG allows. The NIC NSG denies both ports until JIT grants access (ADR-028). An empty list creates no JIT policy, so the ports stay closed."
                       }
                     },
                     "availabilityZone": {
@@ -4191,7 +4191,26 @@
                     "windowsImageSku": "2022-datacenter-g2",
                     "networkInterfaceName": "[format('{0}-nic', parameters('vmName'))]",
                     "networkSecurityGroupName": "[format('{0}-nsg', parameters('vmName'))]",
-                    "managementInboundRules": "[if(empty(parameters('managementSourceCidrs')), createArray(), createArray(createObject('name', 'allow-management-ssh-rdp', 'properties', createObject('priority', 100, 'access', 'Allow', 'direction', 'Inbound', 'protocol', 'Tcp', 'sourceAddressPrefixes', parameters('managementSourceCidrs'), 'sourcePortRange', '*', 'destinationAddressPrefix', '*', 'destinationPortRanges', createArray('22', '3389')))))]",
+                    "denyManagementInboundRule": {
+                      "name": "deny-ssh-rdp-inbound",
+                      "properties": {
+                        "priority": 4000,
+                        "access": "Deny",
+                        "direction": "Inbound",
+                        "protocol": "*",
+                        "sourceAddressPrefix": "*",
+                        "sourcePortRange": "*",
+                        "destinationAddressPrefix": "*",
+                        "destinationPortRanges": [
+                          "22",
+                          "3389"
+                        ]
+                      }
+                    },
+                    "jitPorts": [
+                      22,
+                      3389
+                    ],
                     "entraLoginExtensionName": "[if(equals(parameters('osType'), 'Linux'), 'AADSSHLoginForLinux', 'AADLoginForWindows')]",
                     "virtualMachineAdministratorLoginRoleId": "1c0163c0-47e6-4577-8991-ea5c82e286e4",
                     "patchSettings": {
@@ -4224,7 +4243,38 @@
                       "name": "[variables('networkSecurityGroupName')]",
                       "location": "[parameters('location')]",
                       "properties": {
-                        "securityRules": "[concat(variables('managementInboundRules'), createArray(createObject('name', 'deny-unsolicited-inbound', 'properties', createObject('priority', 4096, 'access', 'Deny', 'direction', 'Inbound', 'protocol', '*', 'sourceAddressPrefix', '*', 'sourcePortRange', '*', 'destinationAddressPrefix', '*', 'destinationPortRange', '*')), createObject('name', 'deny-ssh-rdp-outbound', 'properties', createObject('priority', 4000, 'access', 'Deny', 'direction', 'Outbound', 'protocol', '*', 'sourceAddressPrefix', '*', 'sourcePortRange', '*', 'destinationAddressPrefix', '*', 'destinationPortRanges', createArray('22', '3389')))))]"
+                        "securityRules": [
+                          "[variables('denyManagementInboundRule')]",
+                          {
+                            "name": "deny-unsolicited-inbound",
+                            "properties": {
+                              "priority": 4096,
+                              "access": "Deny",
+                              "direction": "Inbound",
+                              "protocol": "*",
+                              "sourceAddressPrefix": "*",
+                              "sourcePortRange": "*",
+                              "destinationAddressPrefix": "*",
+                              "destinationPortRange": "*"
+                            }
+                          },
+                          {
+                            "name": "deny-ssh-rdp-outbound",
+                            "properties": {
+                              "priority": 4000,
+                              "access": "Deny",
+                              "direction": "Outbound",
+                              "protocol": "*",
+                              "sourceAddressPrefix": "*",
+                              "sourcePortRange": "*",
+                              "destinationAddressPrefix": "*",
+                              "destinationPortRanges": [
+                                "22",
+                                "3389"
+                              ]
+                            }
+                          }
+                        ]
                       }
                     },
                     {
@@ -4430,6 +4480,35 @@
                         "principalId": "[parameters('adminGroupObjectId')]",
                         "principalType": "Group",
                         "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('virtualMachineAdministratorLoginRoleId'))]"
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
+                      ]
+                    },
+                    {
+                      "condition": "[not(empty(parameters('managementSourceCidrs')))]",
+                      "type": "Microsoft.Security/locations/jitNetworkAccessPolicies",
+                      "apiVersion": "2020-01-01",
+                      "name": "[format('{0}/default', parameters('location'))]",
+                      "kind": "Basic",
+                      "properties": {
+                        "virtualMachines": [
+                          {
+                            "copy": [
+                              {
+                                "name": "ports",
+                                "count": "[length(variables('jitPorts'))]",
+                                "input": {
+                                  "number": "[variables('jitPorts')[copyIndex('ports')]]",
+                                  "protocol": "TCP",
+                                  "allowedSourceAddressPrefixes": "[parameters('managementSourceCidrs')]",
+                                  "maxRequestAccessDuration": "PT3H"
+                                }
+                              }
+                            ],
+                            "id": "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
+                          }
+                        ]
                       },
                       "dependsOn": [
                         "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
@@ -6433,7 +6512,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "2173279781782537292"
+              "templateHash": "11840373502800684373"
             }
           },
           "definitions": {
@@ -9569,7 +9648,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "10677249454727057265"
+                      "templateHash": "17911713465404450679"
                     }
                   },
                   "parameters": {
@@ -9643,7 +9722,7 @@
                       "type": "array",
                       "defaultValue": [],
                       "metadata": {
-                        "description": "CIDR ranges allowed to reach the VM over SSH (22) and RDP (3389). Must match the management subnet NSG; an empty list denies all administrative inbound traffic."
+                        "description": "CIDR ranges a just-in-time (JIT) request may open SSH (22) and RDP (3389) from: the same admin sources the management subnet NSG allows. The NIC NSG denies both ports until JIT grants access (ADR-028). An empty list creates no JIT policy, so the ports stay closed."
                       }
                     },
                     "availabilityZone": {
@@ -9682,7 +9761,26 @@
                     "windowsImageSku": "2022-datacenter-g2",
                     "networkInterfaceName": "[format('{0}-nic', parameters('vmName'))]",
                     "networkSecurityGroupName": "[format('{0}-nsg', parameters('vmName'))]",
-                    "managementInboundRules": "[if(empty(parameters('managementSourceCidrs')), createArray(), createArray(createObject('name', 'allow-management-ssh-rdp', 'properties', createObject('priority', 100, 'access', 'Allow', 'direction', 'Inbound', 'protocol', 'Tcp', 'sourceAddressPrefixes', parameters('managementSourceCidrs'), 'sourcePortRange', '*', 'destinationAddressPrefix', '*', 'destinationPortRanges', createArray('22', '3389')))))]",
+                    "denyManagementInboundRule": {
+                      "name": "deny-ssh-rdp-inbound",
+                      "properties": {
+                        "priority": 4000,
+                        "access": "Deny",
+                        "direction": "Inbound",
+                        "protocol": "*",
+                        "sourceAddressPrefix": "*",
+                        "sourcePortRange": "*",
+                        "destinationAddressPrefix": "*",
+                        "destinationPortRanges": [
+                          "22",
+                          "3389"
+                        ]
+                      }
+                    },
+                    "jitPorts": [
+                      22,
+                      3389
+                    ],
                     "entraLoginExtensionName": "[if(equals(parameters('osType'), 'Linux'), 'AADSSHLoginForLinux', 'AADLoginForWindows')]",
                     "virtualMachineAdministratorLoginRoleId": "1c0163c0-47e6-4577-8991-ea5c82e286e4",
                     "patchSettings": {
@@ -9715,7 +9813,38 @@
                       "name": "[variables('networkSecurityGroupName')]",
                       "location": "[parameters('location')]",
                       "properties": {
-                        "securityRules": "[concat(variables('managementInboundRules'), createArray(createObject('name', 'deny-unsolicited-inbound', 'properties', createObject('priority', 4096, 'access', 'Deny', 'direction', 'Inbound', 'protocol', '*', 'sourceAddressPrefix', '*', 'sourcePortRange', '*', 'destinationAddressPrefix', '*', 'destinationPortRange', '*')), createObject('name', 'deny-ssh-rdp-outbound', 'properties', createObject('priority', 4000, 'access', 'Deny', 'direction', 'Outbound', 'protocol', '*', 'sourceAddressPrefix', '*', 'sourcePortRange', '*', 'destinationAddressPrefix', '*', 'destinationPortRanges', createArray('22', '3389')))))]"
+                        "securityRules": [
+                          "[variables('denyManagementInboundRule')]",
+                          {
+                            "name": "deny-unsolicited-inbound",
+                            "properties": {
+                              "priority": 4096,
+                              "access": "Deny",
+                              "direction": "Inbound",
+                              "protocol": "*",
+                              "sourceAddressPrefix": "*",
+                              "sourcePortRange": "*",
+                              "destinationAddressPrefix": "*",
+                              "destinationPortRange": "*"
+                            }
+                          },
+                          {
+                            "name": "deny-ssh-rdp-outbound",
+                            "properties": {
+                              "priority": 4000,
+                              "access": "Deny",
+                              "direction": "Outbound",
+                              "protocol": "*",
+                              "sourceAddressPrefix": "*",
+                              "sourcePortRange": "*",
+                              "destinationAddressPrefix": "*",
+                              "destinationPortRanges": [
+                                "22",
+                                "3389"
+                              ]
+                            }
+                          }
+                        ]
                       }
                     },
                     {
@@ -9921,6 +10050,35 @@
                         "principalId": "[parameters('adminGroupObjectId')]",
                         "principalType": "Group",
                         "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('virtualMachineAdministratorLoginRoleId'))]"
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
+                      ]
+                    },
+                    {
+                      "condition": "[not(empty(parameters('managementSourceCidrs')))]",
+                      "type": "Microsoft.Security/locations/jitNetworkAccessPolicies",
+                      "apiVersion": "2020-01-01",
+                      "name": "[format('{0}/default', parameters('location'))]",
+                      "kind": "Basic",
+                      "properties": {
+                        "virtualMachines": [
+                          {
+                            "copy": [
+                              {
+                                "name": "ports",
+                                "count": "[length(variables('jitPorts'))]",
+                                "input": {
+                                  "number": "[variables('jitPorts')[copyIndex('ports')]]",
+                                  "protocol": "TCP",
+                                  "allowedSourceAddressPrefixes": "[parameters('managementSourceCidrs')]",
+                                  "maxRequestAccessDuration": "PT3H"
+                                }
+                              }
+                            ],
+                            "id": "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
+                          }
+                        ]
                       },
                       "dependsOn": [
                         "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"

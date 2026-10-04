@@ -6,10 +6,33 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "7816187800415472646"
+      "templateHash": "13557392049006583760"
     }
   },
   "definitions": {
+    "environmentAdminGroups": {
+      "type": "object",
+      "properties": {
+        "dev": {
+          "type": "string",
+          "metadata": {
+            "description": "Dev admin group object ID, the adminGroupObjectId of params/dev.bicepparam."
+          }
+        },
+        "prod": {
+          "type": "string",
+          "metadata": {
+            "description": "Prod admin group object ID, the adminGroupObjectId of params/prod.bicepparam."
+          }
+        }
+      },
+      "metadata": {
+        "description": "Object ID of each environment's Entra ID admin group, the group runbook 03 creates (Phase 7 governance). Empty skips that environment.",
+        "__bicep_imported_from!": {
+          "sourceTemplate": "modules/types.bicep"
+        }
+      }
+    },
     "environmentRegionLayout": {
       "type": "object",
       "properties": {
@@ -133,6 +156,16 @@
         "description": "Regions each environment runs in, mirroring the dev and prod parameter files: dev primary-only, prod with the East US warm standby."
       }
     },
+    "adminGroupObjectIds": {
+      "$ref": "#/definitions/environmentAdminGroups",
+      "defaultValue": {
+        "dev": "",
+        "prod": ""
+      },
+      "metadata": {
+        "description": "The Entra ID admin group of each environment (runbook 03), granted the DefenStack JIT Requester role at its primary regional resource group, where the jump host runs. Empty skips that environment."
+      }
+    },
     "legacyResourceGroupName": {
       "type": "string",
       "defaultValue": "defenStack",
@@ -158,7 +191,8 @@
       "westus3",
       "eastus"
     ],
-    "stamps": "[flatten(map(parameters('environments'), lambda('environmentName', map(parameters('environmentRegions')[lambdaVariables('environmentName')], lambda('location', createObject('environmentName', lambdaVariables('environmentName'), 'location', lambdaVariables('location'), 'regionCode', variables('regionCodes')[lambdaVariables('location')], 'resourceGroupName', format('rg-defenstack-{0}-{1}', lambdaVariables('environmentName'), variables('regionCodes')[lambdaVariables('location')])))))))]",
+    "stamps": "[flatten(map(parameters('environments'), lambda('environmentName', map(parameters('environmentRegions')[lambdaVariables('environmentName')], lambda('location', 'index', createObject('environmentName', lambdaVariables('environmentName'), 'location', lambdaVariables('location'), 'isPrimary', equals(lambdaVariables('index'), 0), 'regionCode', variables('regionCodes')[lambdaVariables('location')], 'resourceGroupName', format('rg-defenstack-{0}-{1}', lambdaVariables('environmentName'), variables('regionCodes')[lambdaVariables('location')])))))))]",
+    "jumpHostStamps": "[filter(variables('stamps'), lambda('stamp', and(lambdaVariables('stamp').isPrimary, not(empty(parameters('adminGroupObjectIds')[lambdaVariables('stamp').environmentName])))))]",
     "allowedPublicIpNames": "[flatten(map(variables('stamps'), lambda('stamp', __bicep.publicIpNames(lambdaVariables('stamp').environmentName, lambdaVariables('stamp').regionCode))))]",
     "diagnosticResourceTypes": [
       "Microsoft.Network/azureFirewalls",
@@ -849,6 +883,142 @@
       "dependsOn": [
         "policies"
       ]
+    },
+    "jitRequesterRole": {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "governance-jit-requester-role",
+      "location": "[deployment().location]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "8331059933449062623"
+            }
+          },
+          "variables": {
+            "roleActions": [
+              "Microsoft.Security/locations/jitNetworkAccessPolicies/read",
+              "Microsoft.Security/locations/jitNetworkAccessPolicies/initiate/action",
+              "Microsoft.Security/locations/jitNetworkAccessPolicies/*/read",
+              "Microsoft.Compute/virtualMachines/read",
+              "Microsoft.Network/networkInterfaces/read",
+              "Microsoft.Network/networkInterfaces/*/read",
+              "Microsoft.Network/publicIPAddresses/read"
+            ]
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Authorization/roleDefinitions",
+              "apiVersion": "2022-04-01",
+              "name": "[guid(subscription().id, 'DefenStack JIT Requester')]",
+              "properties": {
+                "roleName": "DefenStack JIT Requester",
+                "description": "Request just-in-time SSH/RDP access to DefenStack jump hosts (ADR-028, runbook 07). Assigned to each environment admin group at its primary regional resource group.",
+                "type": "CustomRole",
+                "permissions": [
+                  {
+                    "actions": "[variables('roleActions')]",
+                    "notActions": [],
+                    "dataActions": [],
+                    "notDataActions": []
+                  }
+                ],
+                "assignableScopes": [
+                  "[subscription().id]"
+                ]
+              }
+            }
+          ],
+          "outputs": {
+            "roleDefinitionId": {
+              "type": "string",
+              "value": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', guid(subscription().id, 'DefenStack JIT Requester'))]"
+            }
+          }
+        }
+      }
+    },
+    "jitRequesterAssignments": {
+      "copy": {
+        "name": "jitRequesterAssignments",
+        "count": "[length(variables('jumpHostStamps'))]"
+      },
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('governance-jit-requester-{0}-{1}', variables('jumpHostStamps')[copyIndex()].environmentName, variables('jumpHostStamps')[copyIndex()].regionCode)]",
+      "resourceGroup": "[variables('jumpHostStamps')[copyIndex()].resourceGroupName]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "principalId": {
+            "value": "[parameters('adminGroupObjectIds')[variables('jumpHostStamps')[copyIndex()].environmentName]]"
+          },
+          "roleDefinitionId": {
+            "value": "[reference('jitRequesterRole').outputs.roleDefinitionId.value]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "10448205009198665644"
+            }
+          },
+          "parameters": {
+            "principalId": {
+              "type": "string",
+              "minLength": 36,
+              "maxLength": 36,
+              "metadata": {
+                "description": "Object ID of the environment's Entra ID admin group."
+              }
+            },
+            "roleDefinitionId": {
+              "type": "string",
+              "metadata": {
+                "description": "Resource ID of the DefenStack JIT Requester role definition."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Authorization/roleAssignments",
+              "apiVersion": "2022-04-01",
+              "name": "[guid(resourceGroup().id, parameters('principalId'), parameters('roleDefinitionId'))]",
+              "properties": {
+                "principalId": "[parameters('principalId')]",
+                "principalType": "Group",
+                "roleDefinitionId": "[parameters('roleDefinitionId')]",
+                "description": "Request just-in-time access to the jump host (ADR-028, runbook 07)."
+              }
+            }
+          ],
+          "outputs": {
+            "roleAssignmentId": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Authorization/roleAssignments', guid(resourceGroup().id, parameters('principalId'), parameters('roleDefinitionId')))]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "jitRequesterRole"
+      ]
     }
   },
   "outputs": {
@@ -865,6 +1035,10 @@
         "type": "string"
       },
       "value": "[variables('allowedPublicIpNames')]"
+    },
+    "jitRequesterRoleDefinitionId": {
+      "type": "string",
+      "value": "[reference('jitRequesterRole').outputs.roleDefinitionId.value]"
     }
   }
 }

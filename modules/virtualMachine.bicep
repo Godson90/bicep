@@ -34,7 +34,7 @@ param vmSize string = 'Standard_B2s'
 @description('Log Analytics workspace resource ID for VM diagnostics.')
 param logAnalyticsWorkspaceId string
 
-@description('CIDR ranges allowed to reach the VM over SSH (22) and RDP (3389). Must match the management subnet NSG; an empty list denies all administrative inbound traffic.')
+@description('CIDR ranges a just-in-time (JIT) request may open SSH (22) and RDP (3389) from: the same admin sources the management subnet NSG allows. The NIC NSG denies both ports until JIT grants access (ADR-028). An empty list creates no JIT policy, so the ports stay closed.')
 param managementSourceCidrs array = []
 
 @description('Availability zone the VM is pinned to. Fixed at creation.')
@@ -59,23 +59,27 @@ var windowsImageOffer = 'WindowsServer'
 var windowsImageSku = '2022-datacenter-g2'
 var networkInterfaceName = '${vmName}-nic'
 var networkSecurityGroupName = '${vmName}-nsg'
-var managementInboundRules = empty(managementSourceCidrs) ? [] : [
-  {
-    name: 'allow-management-ssh-rdp'
-    properties: {
-      priority: 100
-      access: 'Allow'
-      direction: 'Inbound'
-      protocol: 'Tcp'
-      sourceAddressPrefixes: managementSourceCidrs
-      sourcePortRange: '*'
-      destinationAddressPrefix: '*'
-      destinationPortRanges: [
-        '22'
-        '3389'
-      ]
-    }
+// SSH and RDP stay closed at the NIC unless a JIT request is granted. Defender for Cloud adds its time-bound allow
+// rules to this NSG above this deny, so priorities 100-3999 stay free for them (ADR-028).
+var denyManagementInboundRule = {
+  name: 'deny-ssh-rdp-inbound'
+  properties: {
+    priority: 4000
+    access: 'Deny'
+    direction: 'Inbound'
+    protocol: '*'
+    sourceAddressPrefix: '*'
+    sourcePortRange: '*'
+    destinationAddressPrefix: '*'
+    destinationPortRanges: [
+      '22'
+      '3389'
+    ]
   }
+}
+var jitPorts = [
+  22
+  3389
 ]
 
 var entraLoginExtensionName = osType == 'Linux' ? 'AADSSHLoginForLinux' : 'AADLoginForWindows'
@@ -148,12 +152,14 @@ var osLogSource = osType == 'Linux' ? {
   ]
 }
 
-// NIC-level NSG keeps the VM boundary explicit without changing shared subnet policy.
+// NIC-level NSG: the subnet NSG admits only Bastion and VPN clients; this NSG keeps SSH and RDP closed until a JIT
+// grant opens them.
 resource networkSecurityGroup 'Microsoft.Network/networkSecurityGroups@2024-07-01' = {
   name: networkSecurityGroupName
   location: location
   properties: {
-    securityRules: concat(managementInboundRules, [
+    securityRules: [
+      denyManagementInboundRule
       {
         name: 'deny-unsolicited-inbound'
         properties: {
@@ -183,7 +189,7 @@ resource networkSecurityGroup 'Microsoft.Network/networkSecurityGroups@2024-07-0
           ]
         }
       }
-    ])
+    ]
   }
 }
 
@@ -410,6 +416,27 @@ resource administratorLogin 'Microsoft.Authorization/roleAssignments@2022-04-01'
     principalId: adminGroupObjectId
     principalType: 'Group'
     roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', virtualMachineAdministratorLoginRoleId)
+  }
+}
+
+// Just-in-time access (Phase 7, ADR-028): a granted request opens SSH and RDP on the NIC NSG for up to three hours,
+// from the admin sources only. Needs Defender for Servers, which governance.bicep enables (runbook 07). The portal and
+// az security jit-policy use the policy named default in the VM's resource group and region.
+resource jitPolicy 'Microsoft.Security/locations/jitNetworkAccessPolicies@2020-01-01' = if (!empty(managementSourceCidrs)) {
+  name: '${location}/default'
+  kind: 'Basic'
+  properties: {
+    virtualMachines: [
+      {
+        id: virtualMachine.id
+        ports: [for port in jitPorts: {
+          number: port
+          protocol: 'TCP'
+          allowedSourceAddressPrefixes: managementSourceCidrs
+          maxRequestAccessDuration: 'PT3H'
+        }]
+      }
+    ]
   }
 }
 

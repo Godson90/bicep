@@ -171,6 +171,14 @@ Describe 'Governance parameters (Phase 7)' {
         { [datetime]::ParseExact($expires, 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture) } | Should -Not -Throw
     }
 
+    It 'grants JIT requests to the same admin group each environment file signs in with (runbook 03)' {
+        $parameters = Get-BuiltParameters 'params/governance.bicepparam'
+        foreach ($pair in @(@{ Name = 'dev'; File = $dev }, @{ Name = 'prod'; File = $prod })) {
+            $expected = if ($pair.File.PSObject.Properties.Name -contains 'adminGroupObjectId') { $pair.File.adminGroupObjectId.value } else { '' }
+            $parameters.adminGroupObjectIds.value.($pair.Name) | Should -BeExactly $expected -Because $pair.Name
+        }
+    }
+
     It 'mirrors the environment parameter files in the governance region layout' {
         $governance = Get-BicepTemplate -RelativePath 'governance.bicep'
         $main = Get-BicepTemplate -RelativePath 'main.bicep'

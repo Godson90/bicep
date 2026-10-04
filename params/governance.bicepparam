@@ -15,6 +15,12 @@ param environments = [
   'dev'
   'prod'
 ]
+// The admin groups get the DefenStack JIT Requester role at their primary regional resource group. Keep each value
+// equal to adminGroupObjectId in params/<env>.bicepparam (runbook 03, section 4); empty skips that environment.
+param adminGroupObjectIds = {
+  dev: ''
+  prod: ''
+}
 // The legacy waiver ends here; extend it only with a dated reason in runbook 01a.
 param legacyResourceGroupName = 'defenStack'
 param legacyWaiverExpiresOn = '2027-03-31'

@@ -3,7 +3,7 @@
 // pipeline never do, so the pipeline identity needs no rights over Defender for Cloud or Azure Policy (ADR-026).
 targetScope = 'subscription'
 
-import { environmentRegionLayout } from 'modules/types.bicep'
+import { environmentAdminGroups, environmentRegionLayout } from 'modules/types.bicep'
 
 @description('Addresses that receive Defender for Cloud alert emails. The parameter file reads them from the SECURITY_CONTACT_EMAILS environment variable.')
 @minLength(1)
@@ -38,6 +38,12 @@ param environmentRegions environmentRegionLayout = {
   ]
 }
 
+@description('The Entra ID admin group of each environment (runbook 03), granted the DefenStack JIT Requester role at its primary regional resource group, where the jump host runs. Empty skips that environment.')
+param adminGroupObjectIds environmentAdminGroups = {
+  dev: ''
+  prod: ''
+}
+
 @description('Legacy resource group that gets a dated waiver from the deny assignments until runbook 01a tears it down. Empty skips the waiver.')
 param legacyResourceGroupName string = 'defenStack'
 
@@ -56,10 +62,11 @@ var platformLocations = [
   'eastus'
 ]
 
-// Every region stamp in this subscription, named as main.bicep names them.
-var stamps = flatten(map(environments, environmentName => map(environmentRegions[environmentName], location => {
+// Every region stamp in this subscription, named as main.bicep names them. The first region is the primary.
+var stamps = flatten(map(environments, environmentName => map(environmentRegions[environmentName], (location, index) => {
   environmentName: environmentName
   location: location
+  isPrimary: index == 0
   regionCode: regionCodes[location]
   resourceGroupName: 'rg-defenstack-${environmentName}-${regionCodes[location]}'
 })))
@@ -72,6 +79,9 @@ func publicIpNames(environmentName string, regionCode string) string[] => [
   'pip-vpng-defenstack-${environmentName}-${regionCode}-1'
   'pip-vpng-defenstack-${environmentName}-${regionCode}-2'
 ]
+
+// The jump host runs in the primary stamp only (regionStamp.bicep), so the JIT Requester role is assigned there.
+var jumpHostStamps = filter(stamps, stamp => stamp.isPrimary && !empty(adminGroupObjectIds[stamp.environmentName]))
 
 var allowedPublicIpNames = flatten(map(stamps, stamp => publicIpNames(stamp.environmentName, stamp.regionCode)))
 
@@ -135,5 +145,20 @@ module legacyWaiver 'modules/governance/legacyWaiver.bicep' = if (!empty(legacyR
   }
 }
 
+module jitRequesterRole 'modules/governance/jitRequesterRole.bicep' = {
+  name: 'governance-jit-requester-role'
+}
+
+// Requesting JIT access is separate from signing in: the admin group also holds Virtual Machine Administrator Login.
+module jitRequesterAssignments 'modules/governance/jitRequesterAssignment.bicep' = [for stamp in jumpHostStamps: {
+  name: 'governance-jit-requester-${stamp.environmentName}-${stamp.regionCode}'
+  scope: resourceGroup(stamp.resourceGroupName)
+  params: {
+    principalId: adminGroupObjectIds[stamp.environmentName]
+    roleDefinitionId: jitRequesterRole.outputs.roleDefinitionId
+  }
+}]
+
 output defenderPlanNames string[] = defenderPlans.outputs.planNames
 output allowedPublicIpNames string[] = allowedPublicIpNames
+output jitRequesterRoleDefinitionId string = jitRequesterRole.outputs.roleDefinitionId
