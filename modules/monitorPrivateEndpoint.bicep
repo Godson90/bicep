@@ -1,5 +1,7 @@
 // The platform's single Azure Monitor private endpoint, in the primary spoke's private-endpoint subnet. Its NSG
 // already admits HTTPS from the approved sources, and the shared zones make it resolvable from every linked VNet.
+// The endpoint joins the spoke's AMPLS application security group, the only destination the NSG opens to the
+// peer region's firewall-SNATed traffic (ADR-022).
 import { privateDnsZoneSet } from 'types.bicep'
 
 @description('Azure region for the private endpoint (the primary region).')
@@ -19,6 +21,9 @@ param privateEndpointSubnetId string
 @description('Resource IDs of the shared private DNS zones created by the global layer.')
 param privateDnsZoneIds privateDnsZoneSet
 
+@description('Resource ID of the primary spoke\'s AMPLS application security group, which the endpoint joins.')
+param applicationSecurityGroupId string
+
 resource privateEndpoint 'Microsoft.Network/privateEndpoints@2024-07-01' = {
   name: '${privateLinkScopeName}-pe'
   location: location
@@ -37,6 +42,11 @@ resource privateEndpoint 'Microsoft.Network/privateEndpoints@2024-07-01' = {
     subnet: {
       id: privateEndpointSubnetId
     }
+    applicationSecurityGroups: [
+      {
+        id: applicationSecurityGroupId
+      }
+    ]
   }
 }
 

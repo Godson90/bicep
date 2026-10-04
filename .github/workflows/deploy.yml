@@ -36,6 +36,17 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment == 'prod' && 'prod' || 'dev-plan' }}
     steps:
+      # Same check as apply: a prod plan without ALERT_EMAIL would show a what-if that apply then refuses (runbook 06).
+      - name: Require ALERT_EMAIL for prod
+        if: env.TARGET_ENV == 'prod'
+        env:
+          ALERT_EMAIL: ${{ vars.ALERT_EMAIL }}
+        run: |
+          if [ -z "$ALERT_EMAIL" ]; then
+            echo "::error::Set the ALERT_EMAIL variable on the prod GitHub environment before deploying prod (runbook 06)."
+            exit 1
+          fi
+
       - uses: actions/checkout@v4
 
       - uses: azure/login@v2

@@ -44,11 +44,15 @@ param enableDeleteLock bool = false
 @description('CIDR ranges allowed to reach management VMs over SSH (22) and RDP (3389), such as AzureBastionSubnet or the P2S VPN client pool. An empty list denies all administrative inbound traffic.')
 param managementSourceCidrs array = []
 
+@description('CIDR ranges allowed to reach only the AMPLS private endpoint (its application security group) over HTTPS: the local AzureFirewallSubnet in the region that hosts the endpoint, which SNATs the other region\'s Azure Monitor traffic (Phase 6). An empty list adds no rule.')
+param monitorPeerSourceCidrs array = []
+
 var appServiceRouteTableName = '${vnetName}-appservice-egress-rt'
 var virtualMachineRouteTableName = '${vnetName}-${virtualMachineSubnetName}-egress-rt'
 var privateEndpointNsgName = '${vnetName}-${privateEndpointSubnetName}-nsg'
 var appServiceIntegrationNsgName = '${vnetName}-${appServiceIntegrationSubnetName}-nsg'
 var virtualMachineNsgName = '${vnetName}-${virtualMachineSubnetName}-nsg'
+var amplsAsgName = '${vnetName}-ampls-asg'
 
 // Administrative inbound is only rendered when approved management sources are supplied.
 var managementInboundRules = empty(managementSourceCidrs) ? [] : [
@@ -86,13 +90,41 @@ var denyLateralTraversalRule = {
     ]
   }
 }
+// The peer region's monitoring traffic arrives from the local firewall's SNAT address; it may reach the AMPLS
+// endpoint alone, never the subnet's other private endpoints (ADR-022).
+var peerMonitoringRule = {
+  name: 'allow-peer-monitoring-https'
+  properties: {
+    priority: 110
+    access: 'Allow'
+    direction: 'Inbound'
+    protocol: 'Tcp'
+    sourceAddressPrefixes: monitorPeerSourceCidrs
+    sourcePortRange: '*'
+    destinationApplicationSecurityGroups: [
+      {
+        id: amplsAsg.id
+      }
+    ]
+    destinationPortRange: '443'
+  }
+}
+var peerMonitoringInboundRules = empty(monitorPeerSourceCidrs) ? [] : [
+  peerMonitoringRule
+]
+
+// Membership marks the AMPLS private endpoint as the only target of the peer monitoring rule. Free of charge.
+resource amplsAsg 'Microsoft.Network/applicationSecurityGroups@2024-07-01' = {
+  name: amplsAsgName
+  location: location
+}
 
 // NSG for the private endpoint subnet; source CIDRs are explicit deployment inputs.
 resource privateEndpointNsg 'Microsoft.Network/networkSecurityGroups@2024-07-01' = {
   name: privateEndpointNsgName
   location: location
   properties: {
-    securityRules: [
+    securityRules: concat([
       {
         name: 'allow-approved-https'
         properties: {
@@ -106,6 +138,7 @@ resource privateEndpointNsg 'Microsoft.Network/networkSecurityGroups@2024-07-01'
           destinationPortRange: '443'
         }
       }
+    ], peerMonitoringInboundRules, [
       {
         name: 'deny-unsolicited-inbound'
         properties: {
@@ -120,7 +153,7 @@ resource privateEndpointNsg 'Microsoft.Network/networkSecurityGroups@2024-07-01'
         }
       }
       denyLateralTraversalRule
-    ]
+    ])
   }
 }
 
@@ -260,3 +293,4 @@ output name string = vnet.outputs.name
 output privateEndpointSubnetId string = vnet.outputs.privateEndpointSubnetId
 output appServiceIntegrationSubnetId string = vnet.outputs.appServiceIntegrationSubnetId
 output virtualMachineSubnetId string = resourceId('Microsoft.Network/virtualNetworks/subnets', vnet.outputs.name, virtualMachineSubnetName)
+output amplsAsgId string = amplsAsg.id

@@ -364,6 +364,27 @@ resource dataCollectionRuleAssociation 'Microsoft.Insights/dataCollectionRuleAss
   }
 }
 
+// Regional configuration endpoint for the agent, scoped into the AMPLS by main.bicep so the agent fetches its
+// configuration over the private endpoint rather than through the firewall (Phase 6, ADR-022).
+resource dataCollectionEndpoint 'Microsoft.Insights/dataCollectionEndpoints@2023-03-11' = {
+  name: '${vmName}-dce'
+  location: location
+  properties: {
+    networkAcls: {
+      publicNetworkAccess: 'Disabled'
+    }
+  }
+}
+
+// Azure Monitor requires this exact association name for the endpoint the agent reads its configuration from.
+resource dataCollectionEndpointAssociation 'Microsoft.Insights/dataCollectionRuleAssociations@2023-03-11' = {
+  name: 'configurationAccessEndpoint'
+  scope: virtualMachine
+  properties: {
+    dataCollectionEndpointId: dataCollectionEndpoint.id
+  }
+}
+
 // Entra ID sign-in (az ssh vm / Bastion native client with --auth-type AAD); local admin stays for break-glass.
 resource entraLogin 'Microsoft.Compute/virtualMachines/extensions@2026-04-01' = {
   parent: virtualMachine
@@ -439,3 +460,4 @@ output id string = virtualMachine.id
 output name string = virtualMachine.name
 output networkInterfaceId string = networkInterface.id
 output dataCollectionRuleId string = dataCollectionRule.id
+output dataCollectionEndpointId string = dataCollectionEndpoint.id

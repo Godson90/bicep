@@ -251,7 +251,7 @@ flowchart LR
         PE["AMPLS private endpoint (private-endpoints subnet)"]
     end
     subgraph EUS["East US (prod with DR)"]
-        APP2["App Service and jump host"]
+        APP2["App Service and management subnets"]
         FW2["Firewall (Client: network rule)"]
     end
     subgraph GLOBAL["rg-defenstack-env-global"]
@@ -361,7 +361,7 @@ One row per `names.*` key in `modules/regionStamp.bicep`, plus the resource grou
 | Resource group | Contents |
 |---|---|
 | `rg-defenstack-prod-global` | Log Analytics workspace `log-defenstack-prod` (`replication.enabled: true, location: eastus`); the same seven private DNS zones, each with 4 VNet links (wus3 hub, wus3 spoke, eus hub, eus spoke); Sentinel, AMPLS `ampls-defenstack-prod`, action group `ag-defenstack-prod` and the global alerts, as in dev; Front Door Premium `afd-defenstack-prod` with origins `app-wus3` (priority 1) and `app-eus` (priority 2), and WAF policy `wafdefenstackprod`; `enableDeleteLock: true` on the zones, the workspace, the Front Door profile and the WAF policy |
-| `rg-defenstack-prod-wus3` (primary) | Same shape as dev's region resource group, but: VPN gateway `VpnGw2AZ`; Firewall Premium with IDPS `Deny`, `threatIntelMode: Deny`; App Service Plan `asp-defenstack-prod-wus3` zone-redundant, 3 instances (`isProd && isPrimary`); Storage account `Standard_RAGZRS` (`ADR-020`), with a Storage Blob Data Reader assignment on `def-blob` for the East US App Service; the AMPLS endpoint `ampls-defenstack-prod-pe`; flow-log account `stflwus3…` (ZRS); hub peering `hub-to-eus-hub` and route table `vnet-defenstack-prod-wus3-hub-firewall-rt`; rule collection group `cross-region-monitoring` (Host); the private-endpoint NSG also admits its own `AzureFirewallSubnet`; `enableDeleteLock: true` on the hub VNet, spoke VNet, Key Vault, firewall, firewall policy, and firewall public IP |
+| `rg-defenstack-prod-wus3` (primary) | Same shape as dev's region resource group, but: VPN gateway `VpnGw2AZ`; Firewall Premium with IDPS `Deny`, `threatIntelMode: Deny`; App Service Plan `asp-defenstack-prod-wus3` zone-redundant, 3 instances (`isProd && isPrimary`); Storage account `Standard_RAGZRS` (`ADR-020`), with a Storage Blob Data Reader assignment on `def-blob` for the East US App Service; the AMPLS endpoint `ampls-defenstack-prod-pe`; flow-log account `stflwus3…` (ZRS); hub peering `hub-to-eus-hub` and route table `vnet-defenstack-prod-wus3-hub-firewall-rt`; rule collection group `cross-region-monitoring` (Host); the private-endpoint NSG also admits its own `AzureFirewallSubnet`, to the AMPLS endpoint's application security group only; `enableDeleteLock: true` on the hub VNet, spoke VNet, Key Vault, firewall, firewall policy, and firewall public IP |
 | `rg-defenstack-prod-eus` (secondary, warm standby) | Same resource types as `rg-defenstack-prod-wus3`, deployed only when `deploySecondaryRegion = true`, except Bastion and the VPN gateway (their subnets exist; the resources arrive with `deploySecondaryAdminAccess = true` during failover): App Service Plan `asp-defenstack-prod-eus`, 1 instance, non-zonal (no scale-out until failover, `ADR-008`); Storage account `Standard_GRS`; private endpoint `<primary account>-secondary-pe` on the primary account's read-only secondary (`blob_secondary`); hub↔spoke peering local to this region; hub peering `hub-to-wus3-hub`, route table `vnet-defenstack-prod-eus-hub-firewall-rt` and `cross-region-monitoring` (Client); flow-log account `stfleus…` (ZRS); seven metric alerts (six until the VPN gateway is deployed); `enableDeleteLock: true` on the same set of resources as the primary (hub VNet, spoke VNet, Key Vault, firewall, firewall policy, firewall public IP) |
 
 ### NetworkWatcherRG (shared by every environment in the subscription)
@@ -371,7 +371,6 @@ One row per `names.*` key in `modules/regionStamp.bicep`, plus the resource grou
 | `NetworkWatcherRG` | `NetworkWatcher_westus3` and `NetworkWatcher_eastus` (created by Azure or by an operator, never by this template); under them, the flow logs `<vnet>-flowlog` for every deployed hub and spoke. The pipeline identities hold `Network Contributor` here (`ADR-023`) |
 
 The subscription also holds the diagnostic setting `activity-log-defenstack-<env>` (`ADR-025`).
-
 
 ## 7. Design decisions
 

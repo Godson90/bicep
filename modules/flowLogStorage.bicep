@@ -24,8 +24,9 @@ param softDeleteRetentionDays int = 7
 
 var storageBlobDataContributorRoleId = 'ba92f5b4-2d11-453d-a403-e96b0029c9fe'
 
-// No shared key and no public network access: Network Watcher reaches it as a trusted Azure service and
-// authenticates with the identity below (shared-key writes would fail).
+// No shared key, and a firewall that denies every network: Network Watcher reaches it as a trusted Azure service
+// and authenticates with the identity below (shared-key writes would fail). Public network access stays Enabled
+// so the firewall, and its trusted-services exception, apply; Disabled would likely ignore the exception (ADR-023).
 resource storageAccount 'Microsoft.Storage/storageAccounts@2026-04-01' = {
   name: storageAccountName
   location: location
@@ -39,11 +40,13 @@ resource storageAccount 'Microsoft.Storage/storageAccounts@2026-04-01' = {
     allowSharedKeyAccess: false
     defaultToOAuthAuthentication: true
     minimumTlsVersion: 'TLS1_2'
-    publicNetworkAccess: 'Disabled'
+    publicNetworkAccess: 'Enabled'
     supportsHttpsTrafficOnly: true
     networkAcls: {
       defaultAction: 'Deny'
       bypass: 'AzureServices'
+      ipRules: []
+      virtualNetworkRules: []
     }
   }
 

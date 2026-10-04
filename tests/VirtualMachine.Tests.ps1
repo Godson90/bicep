@@ -48,6 +48,42 @@ Describe 'VM monitoring (F3)' {
     }
 }
 
+Describe 'VM data collection endpoint in the AMPLS (final review I-2)' {
+    BeforeAll {
+        $endpoints = @(Get-TemplateResource -Template $template -Type 'Microsoft.Insights/dataCollectionEndpoints')
+        $associations = Get-TemplateResource -Template $template -Type 'Microsoft.Insights/dataCollectionRuleAssociations'
+        $ruleAssociation = $associations | Where-Object { $_.name -eq "[format('{0}-dcra', parameters('vmName'))]" }
+        $configurationAssociation = $associations | Where-Object { $_.name -eq 'configurationAccessEndpoint' }
+    }
+
+    It 'creates one regional data collection endpoint, named after the VM, with public network access disabled' {
+        $endpoints.Count | Should -Be 1
+        $endpoints[0].apiVersion | Should -Be '2023-03-11'
+        $endpoints[0].name | Should -Be "[format('{0}-dce', parameters('vmName'))]"
+        $endpoints[0].location | Should -Be "[parameters('location')]"
+        $endpoints[0].properties.networkAcls.publicNetworkAccess | Should -Be 'Disabled'
+    }
+
+    It 'associates the endpoint with the VM as its configurationAccessEndpoint' {
+        @($configurationAssociation).Count | Should -Be 1
+        $configurationAssociation.apiVersion | Should -Be '2023-03-11'
+        $configurationAssociation.scope | Should -Be "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
+        $configurationAssociation.properties.dataCollectionEndpointId | Should -Be "[resourceId('Microsoft.Insights/dataCollectionEndpoints', format('{0}-dce', parameters('vmName')))]"
+        $configurationAssociation.properties.PSObject.Properties.Name | Should -Not -Contain 'dataCollectionRuleId'
+    }
+
+    It 'keeps the existing DCR association unchanged' {
+        $associations.Count | Should -Be 2
+        @($ruleAssociation).Count | Should -Be 1
+        $ruleAssociation.properties.dataCollectionRuleId | Should -Be "[resourceId('Microsoft.Insights/dataCollectionRules', variables('dataCollectionRuleName'))]"
+        $ruleAssociation.properties.PSObject.Properties.Name | Should -Not -Contain 'dataCollectionEndpointId'
+    }
+
+    It 'outputs the data collection endpoint ID' {
+        $template.outputs.dataCollectionEndpointId.value | Should -Be "[resourceId('Microsoft.Insights/dataCollectionEndpoints', format('{0}-dce', parameters('vmName')))]"
+    }
+}
+
 Describe 'VM monitoring on Windows (F3)' {
     It 'installs the Windows agent and collects System and Application events when osType is Windows' {
         $template.variables.azureMonitorAgentName | Should -Match "'AzureMonitorWindowsAgent'"

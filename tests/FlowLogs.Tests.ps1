@@ -15,10 +15,13 @@ Describe 'Flow-log storage account (Phase 6)' {
         $account.properties.defaultToOAuthAuthentication | Should -BeExactly $true
     }
 
-    It 'disables public network access and denies by default, letting only trusted Azure services through' {
-        $account.properties.publicNetworkAccess | Should -Be 'Disabled'
+    It 'denies every network by default with no IP or VNet rules, letting only trusted Azure services through (final review M-4)' {
+        # publicNetworkAccess Enabled keeps the firewall in force; Disabled would likely ignore the trusted-services bypass (ADR-023).
+        $account.properties.publicNetworkAccess | Should -Be 'Enabled'
         $account.properties.networkAcls.defaultAction | Should -Be 'Deny'
         $account.properties.networkAcls.bypass | Should -Be 'AzureServices'
+        @($account.properties.networkAcls.ipRules).Count | Should -Be 0
+        @($account.properties.networkAcls.virtualNetworkRules).Count | Should -Be 0
     }
 
     It 'keeps the account hardening baseline (TLS 1.2, HTTPS only, no public blobs)' {

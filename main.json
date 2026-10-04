@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "15520697166429246536"
+      "templateHash": "2918792867245139280"
     }
   },
   "definitions": {
@@ -942,7 +942,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "14891135540847517529"
+              "templateHash": "2173279781782537292"
             }
           },
           "definitions": {
@@ -3009,7 +3009,10 @@
                     "value": "[parameters('addressPlan').managementSubnetPrefix]"
                   },
                   "approvedPrivateEndpointSourceCidrs": {
-                    "value": "[concat(createArray(parameters('addressPlan').appServiceIntegrationSubnetPrefix, parameters('addressPlan').managementSubnetPrefix, parameters('addressPlan').vpnClientAddressPool), variables('peerTrafficSourceCidrs'), parameters('additionalPrivateEndpointSourceCidrs'))]"
+                    "value": "[concat(createArray(parameters('addressPlan').appServiceIntegrationSubnetPrefix, parameters('addressPlan').managementSubnetPrefix, parameters('addressPlan').vpnClientAddressPool), parameters('additionalPrivateEndpointSourceCidrs'))]"
+                  },
+                  "monitorPeerSourceCidrs": {
+                    "value": "[variables('peerTrafficSourceCidrs')]"
                   },
                   "privateEndpointSubnetName": {
                     "value": "[variables('privateEndpointSubnetName')]"
@@ -3032,7 +3035,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "10208180429047590210"
+                      "templateHash": "18374893256131726039"
                     }
                   },
                   "parameters": {
@@ -3132,6 +3135,13 @@
                       "metadata": {
                         "description": "CIDR ranges allowed to reach management VMs over SSH (22) and RDP (3389), such as AzureBastionSubnet or the P2S VPN client pool. An empty list denies all administrative inbound traffic."
                       }
+                    },
+                    "monitorPeerSourceCidrs": {
+                      "type": "array",
+                      "defaultValue": [],
+                      "metadata": {
+                        "description": "CIDR ranges allowed to reach only the AMPLS private endpoint (its application security group) over HTTPS: the local AzureFirewallSubnet in the region that hosts the endpoint, which SNATs the other region's Azure Monitor traffic (Phase 6). An empty list adds no rule."
+                      }
                     }
                   },
                   "variables": {
@@ -3140,6 +3150,7 @@
                     "privateEndpointNsgName": "[format('{0}-{1}-nsg', parameters('vnetName'), parameters('privateEndpointSubnetName'))]",
                     "appServiceIntegrationNsgName": "[format('{0}-{1}-nsg', parameters('vnetName'), parameters('appServiceIntegrationSubnetName'))]",
                     "virtualMachineNsgName": "[format('{0}-{1}-nsg', parameters('vnetName'), parameters('virtualMachineSubnetName'))]",
+                    "amplsAsgName": "[format('{0}-ampls-asg', parameters('vnetName'))]",
                     "managementInboundRules": "[if(empty(parameters('managementSourceCidrs')), createArray(), createArray(createObject('name', 'allow-management-ssh-rdp', 'properties', createObject('priority', 100, 'access', 'Allow', 'direction', 'Inbound', 'protocol', 'Tcp', 'sourceAddressPrefixes', parameters('managementSourceCidrs'), 'sourcePortRange', '*', 'destinationAddressPrefix', parameters('virtualMachineSubnetAddressPrefix'), 'destinationPortRanges', createArray('22', '3389')))))]",
                     "denyLateralTraversalRule": {
                       "name": "deny-ssh-rdp-outbound",
@@ -3156,45 +3167,44 @@
                           "3389"
                         ]
                       }
-                    }
+                    },
+                    "peerMonitoringRule": {
+                      "name": "allow-peer-monitoring-https",
+                      "properties": {
+                        "priority": 110,
+                        "access": "Allow",
+                        "direction": "Inbound",
+                        "protocol": "Tcp",
+                        "sourceAddressPrefixes": "[parameters('monitorPeerSourceCidrs')]",
+                        "sourcePortRange": "*",
+                        "destinationApplicationSecurityGroups": [
+                          {
+                            "id": "[resourceId('Microsoft.Network/applicationSecurityGroups', variables('amplsAsgName'))]"
+                          }
+                        ],
+                        "destinationPortRange": "443"
+                      }
+                    },
+                    "peerMonitoringInboundRules": "[if(empty(parameters('monitorPeerSourceCidrs')), createArray(), createArray(variables('peerMonitoringRule')))]"
                   },
                   "resources": {
+                    "amplsAsg": {
+                      "type": "Microsoft.Network/applicationSecurityGroups",
+                      "apiVersion": "2024-07-01",
+                      "name": "[variables('amplsAsgName')]",
+                      "location": "[parameters('location')]"
+                    },
                     "privateEndpointNsg": {
                       "type": "Microsoft.Network/networkSecurityGroups",
                       "apiVersion": "2024-07-01",
                       "name": "[variables('privateEndpointNsgName')]",
                       "location": "[parameters('location')]",
                       "properties": {
-                        "securityRules": [
-                          {
-                            "name": "allow-approved-https",
-                            "properties": {
-                              "priority": 100,
-                              "access": "Allow",
-                              "direction": "Inbound",
-                              "protocol": "Tcp",
-                              "sourceAddressPrefixes": "[parameters('approvedPrivateEndpointSourceCidrs')]",
-                              "sourcePortRange": "*",
-                              "destinationAddressPrefix": "*",
-                              "destinationPortRange": "443"
-                            }
-                          },
-                          {
-                            "name": "deny-unsolicited-inbound",
-                            "properties": {
-                              "priority": 4096,
-                              "access": "Deny",
-                              "direction": "Inbound",
-                              "protocol": "*",
-                              "sourceAddressPrefix": "*",
-                              "sourcePortRange": "*",
-                              "destinationAddressPrefix": "*",
-                              "destinationPortRange": "*"
-                            }
-                          },
-                          "[variables('denyLateralTraversalRule')]"
-                        ]
-                      }
+                        "securityRules": "[concat(createArray(createObject('name', 'allow-approved-https', 'properties', createObject('priority', 100, 'access', 'Allow', 'direction', 'Inbound', 'protocol', 'Tcp', 'sourceAddressPrefixes', parameters('approvedPrivateEndpointSourceCidrs'), 'sourcePortRange', '*', 'destinationAddressPrefix', '*', 'destinationPortRange', '443'))), variables('peerMonitoringInboundRules'), createArray(createObject('name', 'deny-unsolicited-inbound', 'properties', createObject('priority', 4096, 'access', 'Deny', 'direction', 'Inbound', 'protocol', '*', 'sourceAddressPrefix', '*', 'sourcePortRange', '*', 'destinationAddressPrefix', '*', 'destinationPortRange', '*')), variables('denyLateralTraversalRule')))]"
+                      },
+                      "dependsOn": [
+                        "amplsAsg"
+                      ]
                     },
                     "appServiceIntegrationNsg": {
                       "type": "Microsoft.Network/networkSecurityGroups",
@@ -3597,6 +3607,10 @@
                     "virtualMachineSubnetId": {
                       "type": "string",
                       "value": "[resourceId('Microsoft.Network/virtualNetworks/subnets', reference('vnet').outputs.name.value, parameters('virtualMachineSubnetName'))]"
+                    },
+                    "amplsAsgId": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.Network/applicationSecurityGroups', variables('amplsAsgName'))]"
                     }
                   }
                 }
@@ -4064,7 +4078,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "3538835887109745648"
+                      "templateHash": "10677249454727057265"
                     }
                   },
                   "parameters": {
@@ -4367,6 +4381,30 @@
                       ]
                     },
                     {
+                      "type": "Microsoft.Insights/dataCollectionEndpoints",
+                      "apiVersion": "2023-03-11",
+                      "name": "[format('{0}-dce', parameters('vmName'))]",
+                      "location": "[parameters('location')]",
+                      "properties": {
+                        "networkAcls": {
+                          "publicNetworkAccess": "Disabled"
+                        }
+                      }
+                    },
+                    {
+                      "type": "Microsoft.Insights/dataCollectionRuleAssociations",
+                      "apiVersion": "2023-03-11",
+                      "scope": "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]",
+                      "name": "configurationAccessEndpoint",
+                      "properties": {
+                        "dataCollectionEndpointId": "[resourceId('Microsoft.Insights/dataCollectionEndpoints', format('{0}-dce', parameters('vmName')))]"
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Insights/dataCollectionEndpoints', format('{0}-dce', parameters('vmName')))]",
+                        "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
+                      ]
+                    },
+                    {
                       "type": "Microsoft.Compute/virtualMachines/extensions",
                       "apiVersion": "2026-04-01",
                       "name": "[format('{0}/{1}', parameters('vmName'), variables('entraLoginExtensionName'))]",
@@ -4462,6 +4500,10 @@
                     "dataCollectionRuleId": {
                       "type": "string",
                       "value": "[resourceId('Microsoft.Insights/dataCollectionRules', variables('dataCollectionRuleName'))]"
+                    },
+                    "dataCollectionEndpointId": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.Insights/dataCollectionEndpoints', format('{0}-dce', parameters('vmName')))]"
                     }
                   }
                 }
@@ -5569,7 +5611,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "773454335778080220"
+                      "templateHash": "17084454461122563037"
                     }
                   },
                   "parameters": {
@@ -5648,11 +5690,13 @@
                         "allowSharedKeyAccess": false,
                         "defaultToOAuthAuthentication": true,
                         "minimumTlsVersion": "TLS1_2",
-                        "publicNetworkAccess": "Disabled",
+                        "publicNetworkAccess": "Enabled",
                         "supportsHttpsTrafficOnly": true,
                         "networkAcls": {
                           "defaultAction": "Deny",
-                          "bypass": "AzureServices"
+                          "bypass": "AzureServices",
+                          "ipRules": [],
+                          "virtualNetworkRules": []
                         }
                       }
                     },
@@ -6295,6 +6339,14 @@
             "privateEndpointSubnetId": {
               "type": "string",
               "value": "[reference('spokeNetwork').outputs.privateEndpointSubnetId.value]"
+            },
+            "monitorAsgId": {
+              "type": "string",
+              "value": "[reference('spokeNetwork').outputs.amplsAsgId.value]"
+            },
+            "dataCollectionEndpointId": {
+              "type": "string",
+              "value": "[if(and(parameters('enableVirtualMachine'), variables('isPrimary')), reference('virtualMachine').outputs.dataCollectionEndpointId.value, '')]"
             }
           }
         }
@@ -6381,7 +6433,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "14891135540847517529"
+              "templateHash": "2173279781782537292"
             }
           },
           "definitions": {
@@ -8448,7 +8500,10 @@
                     "value": "[parameters('addressPlan').managementSubnetPrefix]"
                   },
                   "approvedPrivateEndpointSourceCidrs": {
-                    "value": "[concat(createArray(parameters('addressPlan').appServiceIntegrationSubnetPrefix, parameters('addressPlan').managementSubnetPrefix, parameters('addressPlan').vpnClientAddressPool), variables('peerTrafficSourceCidrs'), parameters('additionalPrivateEndpointSourceCidrs'))]"
+                    "value": "[concat(createArray(parameters('addressPlan').appServiceIntegrationSubnetPrefix, parameters('addressPlan').managementSubnetPrefix, parameters('addressPlan').vpnClientAddressPool), parameters('additionalPrivateEndpointSourceCidrs'))]"
+                  },
+                  "monitorPeerSourceCidrs": {
+                    "value": "[variables('peerTrafficSourceCidrs')]"
                   },
                   "privateEndpointSubnetName": {
                     "value": "[variables('privateEndpointSubnetName')]"
@@ -8471,7 +8526,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "10208180429047590210"
+                      "templateHash": "18374893256131726039"
                     }
                   },
                   "parameters": {
@@ -8571,6 +8626,13 @@
                       "metadata": {
                         "description": "CIDR ranges allowed to reach management VMs over SSH (22) and RDP (3389), such as AzureBastionSubnet or the P2S VPN client pool. An empty list denies all administrative inbound traffic."
                       }
+                    },
+                    "monitorPeerSourceCidrs": {
+                      "type": "array",
+                      "defaultValue": [],
+                      "metadata": {
+                        "description": "CIDR ranges allowed to reach only the AMPLS private endpoint (its application security group) over HTTPS: the local AzureFirewallSubnet in the region that hosts the endpoint, which SNATs the other region's Azure Monitor traffic (Phase 6). An empty list adds no rule."
+                      }
                     }
                   },
                   "variables": {
@@ -8579,6 +8641,7 @@
                     "privateEndpointNsgName": "[format('{0}-{1}-nsg', parameters('vnetName'), parameters('privateEndpointSubnetName'))]",
                     "appServiceIntegrationNsgName": "[format('{0}-{1}-nsg', parameters('vnetName'), parameters('appServiceIntegrationSubnetName'))]",
                     "virtualMachineNsgName": "[format('{0}-{1}-nsg', parameters('vnetName'), parameters('virtualMachineSubnetName'))]",
+                    "amplsAsgName": "[format('{0}-ampls-asg', parameters('vnetName'))]",
                     "managementInboundRules": "[if(empty(parameters('managementSourceCidrs')), createArray(), createArray(createObject('name', 'allow-management-ssh-rdp', 'properties', createObject('priority', 100, 'access', 'Allow', 'direction', 'Inbound', 'protocol', 'Tcp', 'sourceAddressPrefixes', parameters('managementSourceCidrs'), 'sourcePortRange', '*', 'destinationAddressPrefix', parameters('virtualMachineSubnetAddressPrefix'), 'destinationPortRanges', createArray('22', '3389')))))]",
                     "denyLateralTraversalRule": {
                       "name": "deny-ssh-rdp-outbound",
@@ -8595,45 +8658,44 @@
                           "3389"
                         ]
                       }
-                    }
+                    },
+                    "peerMonitoringRule": {
+                      "name": "allow-peer-monitoring-https",
+                      "properties": {
+                        "priority": 110,
+                        "access": "Allow",
+                        "direction": "Inbound",
+                        "protocol": "Tcp",
+                        "sourceAddressPrefixes": "[parameters('monitorPeerSourceCidrs')]",
+                        "sourcePortRange": "*",
+                        "destinationApplicationSecurityGroups": [
+                          {
+                            "id": "[resourceId('Microsoft.Network/applicationSecurityGroups', variables('amplsAsgName'))]"
+                          }
+                        ],
+                        "destinationPortRange": "443"
+                      }
+                    },
+                    "peerMonitoringInboundRules": "[if(empty(parameters('monitorPeerSourceCidrs')), createArray(), createArray(variables('peerMonitoringRule')))]"
                   },
                   "resources": {
+                    "amplsAsg": {
+                      "type": "Microsoft.Network/applicationSecurityGroups",
+                      "apiVersion": "2024-07-01",
+                      "name": "[variables('amplsAsgName')]",
+                      "location": "[parameters('location')]"
+                    },
                     "privateEndpointNsg": {
                       "type": "Microsoft.Network/networkSecurityGroups",
                       "apiVersion": "2024-07-01",
                       "name": "[variables('privateEndpointNsgName')]",
                       "location": "[parameters('location')]",
                       "properties": {
-                        "securityRules": [
-                          {
-                            "name": "allow-approved-https",
-                            "properties": {
-                              "priority": 100,
-                              "access": "Allow",
-                              "direction": "Inbound",
-                              "protocol": "Tcp",
-                              "sourceAddressPrefixes": "[parameters('approvedPrivateEndpointSourceCidrs')]",
-                              "sourcePortRange": "*",
-                              "destinationAddressPrefix": "*",
-                              "destinationPortRange": "443"
-                            }
-                          },
-                          {
-                            "name": "deny-unsolicited-inbound",
-                            "properties": {
-                              "priority": 4096,
-                              "access": "Deny",
-                              "direction": "Inbound",
-                              "protocol": "*",
-                              "sourceAddressPrefix": "*",
-                              "sourcePortRange": "*",
-                              "destinationAddressPrefix": "*",
-                              "destinationPortRange": "*"
-                            }
-                          },
-                          "[variables('denyLateralTraversalRule')]"
-                        ]
-                      }
+                        "securityRules": "[concat(createArray(createObject('name', 'allow-approved-https', 'properties', createObject('priority', 100, 'access', 'Allow', 'direction', 'Inbound', 'protocol', 'Tcp', 'sourceAddressPrefixes', parameters('approvedPrivateEndpointSourceCidrs'), 'sourcePortRange', '*', 'destinationAddressPrefix', '*', 'destinationPortRange', '443'))), variables('peerMonitoringInboundRules'), createArray(createObject('name', 'deny-unsolicited-inbound', 'properties', createObject('priority', 4096, 'access', 'Deny', 'direction', 'Inbound', 'protocol', '*', 'sourceAddressPrefix', '*', 'sourcePortRange', '*', 'destinationAddressPrefix', '*', 'destinationPortRange', '*')), variables('denyLateralTraversalRule')))]"
+                      },
+                      "dependsOn": [
+                        "amplsAsg"
+                      ]
                     },
                     "appServiceIntegrationNsg": {
                       "type": "Microsoft.Network/networkSecurityGroups",
@@ -9036,6 +9098,10 @@
                     "virtualMachineSubnetId": {
                       "type": "string",
                       "value": "[resourceId('Microsoft.Network/virtualNetworks/subnets', reference('vnet').outputs.name.value, parameters('virtualMachineSubnetName'))]"
+                    },
+                    "amplsAsgId": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.Network/applicationSecurityGroups', variables('amplsAsgName'))]"
                     }
                   }
                 }
@@ -9503,7 +9569,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "3538835887109745648"
+                      "templateHash": "10677249454727057265"
                     }
                   },
                   "parameters": {
@@ -9806,6 +9872,30 @@
                       ]
                     },
                     {
+                      "type": "Microsoft.Insights/dataCollectionEndpoints",
+                      "apiVersion": "2023-03-11",
+                      "name": "[format('{0}-dce', parameters('vmName'))]",
+                      "location": "[parameters('location')]",
+                      "properties": {
+                        "networkAcls": {
+                          "publicNetworkAccess": "Disabled"
+                        }
+                      }
+                    },
+                    {
+                      "type": "Microsoft.Insights/dataCollectionRuleAssociations",
+                      "apiVersion": "2023-03-11",
+                      "scope": "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]",
+                      "name": "configurationAccessEndpoint",
+                      "properties": {
+                        "dataCollectionEndpointId": "[resourceId('Microsoft.Insights/dataCollectionEndpoints', format('{0}-dce', parameters('vmName')))]"
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Insights/dataCollectionEndpoints', format('{0}-dce', parameters('vmName')))]",
+                        "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
+                      ]
+                    },
+                    {
                       "type": "Microsoft.Compute/virtualMachines/extensions",
                       "apiVersion": "2026-04-01",
                       "name": "[format('{0}/{1}', parameters('vmName'), variables('entraLoginExtensionName'))]",
@@ -9901,6 +9991,10 @@
                     "dataCollectionRuleId": {
                       "type": "string",
                       "value": "[resourceId('Microsoft.Insights/dataCollectionRules', variables('dataCollectionRuleName'))]"
+                    },
+                    "dataCollectionEndpointId": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.Insights/dataCollectionEndpoints', format('{0}-dce', parameters('vmName')))]"
                     }
                   }
                 }
@@ -11008,7 +11102,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "773454335778080220"
+                      "templateHash": "17084454461122563037"
                     }
                   },
                   "parameters": {
@@ -11087,11 +11181,13 @@
                         "allowSharedKeyAccess": false,
                         "defaultToOAuthAuthentication": true,
                         "minimumTlsVersion": "TLS1_2",
-                        "publicNetworkAccess": "Disabled",
+                        "publicNetworkAccess": "Enabled",
                         "supportsHttpsTrafficOnly": true,
                         "networkAcls": {
                           "defaultAction": "Deny",
-                          "bypass": "AzureServices"
+                          "bypass": "AzureServices",
+                          "ipRules": [],
+                          "virtualNetworkRules": []
                         }
                       }
                     },
@@ -11734,6 +11830,14 @@
             "privateEndpointSubnetId": {
               "type": "string",
               "value": "[reference('spokeNetwork').outputs.privateEndpointSubnetId.value]"
+            },
+            "monitorAsgId": {
+              "type": "string",
+              "value": "[reference('spokeNetwork').outputs.amplsAsgId.value]"
+            },
+            "dataCollectionEndpointId": {
+              "type": "string",
+              "value": "[if(and(parameters('enableVirtualMachine'), variables('isPrimary')), reference('virtualMachine').outputs.dataCollectionEndpointId.value, '')]"
             }
           }
         }
@@ -12927,7 +13031,7 @@
             "value": "[format('ampls-defenstack-{0}', parameters('environmentName'))]"
           },
           "scopedResourceIds": {
-            "value": "[concat(createArray(reference('global').outputs.logAnalyticsWorkspaceId.value, reference('primaryStamp').outputs.appInsightsId.value), if(parameters('deploySecondaryRegion'), createArray(reference('secondaryStamp').outputs.appInsightsId.value), createArray()))]"
+            "value": "[concat(createArray(reference('global').outputs.logAnalyticsWorkspaceId.value, reference('primaryStamp').outputs.appInsightsId.value), if(parameters('deploySecondaryRegion'), createArray(reference('secondaryStamp').outputs.appInsightsId.value), createArray()), if(parameters('enableVirtualMachine'), createArray(reference('primaryStamp').outputs.dataCollectionEndpointId.value), createArray()))]"
           }
         },
         "template": {
@@ -13028,6 +13132,9 @@
           },
           "privateDnsZoneIds": {
             "value": "[reference('global').outputs.privateDnsZoneIds.value]"
+          },
+          "applicationSecurityGroupId": {
+            "value": "[reference('primaryStamp').outputs.monitorAsgId.value]"
           }
         },
         "template": {
@@ -13038,7 +13145,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "18058642784737473513"
+              "templateHash": "7912882350473231885"
             }
           },
           "definitions": {
@@ -13128,6 +13235,12 @@
               "metadata": {
                 "description": "Resource IDs of the shared private DNS zones created by the global layer."
               }
+            },
+            "applicationSecurityGroupId": {
+              "type": "string",
+              "metadata": {
+                "description": "Resource ID of the primary spoke's AMPLS application security group, which the endpoint joins."
+              }
             }
           },
           "resources": {
@@ -13150,7 +13263,12 @@
                 ],
                 "subnet": {
                   "id": "[parameters('privateEndpointSubnetId')]"
-                }
+                },
+                "applicationSecurityGroups": [
+                  {
+                    "id": "[parameters('applicationSecurityGroupId')]"
+                  }
+                ]
               }
             },
             "privateDnsZoneGroup": {

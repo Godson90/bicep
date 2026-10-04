@@ -217,10 +217,27 @@ Describe 'Region stamp hub peering (Phase 6)' {
         $stamp.variables.monitorPeeringRole | Should -Match "tryGet\(parameters\('hubPeering'\), 'monitorRole'\), 'None'\)"
     }
 
-    It 'lets the local firewall reach the private endpoints only in the region that hosts the AMPLS endpoint (it SNATs peer traffic)' {
+    It 'lets the local firewall reach the AMPLS endpoint only in the region that hosts it (it SNATs peer traffic)' {
         $stamp.variables.peerTrafficSourceCidrs |
             Should -Be "[if(equals(variables('monitorPeeringRole'), 'Host'), createArray(parameters('addressPlan').firewallSubnetPrefix), createArray())]"
-        (Get-StampModuleParameters 'spoke-network').approvedPrivateEndpointSourceCidrs.value | Should -Match "variables\('peerTrafficSourceCidrs'\)"
+        (Get-StampModuleParameters 'spoke-network').monitorPeerSourceCidrs.value | Should -Be "[variables('peerTrafficSourceCidrs')]"
+    }
+
+    It 'never adds the firewall subnet to the approved-https sources, which reach every private endpoint (final review I-1)' {
+        $value = (Get-StampModuleParameters 'spoke-network').approvedPrivateEndpointSourceCidrs.value
+        $value | Should -Not -Match 'peerTrafficSourceCidrs'
+        $value | Should -Not -Match 'firewallSubnetPrefix'
+    }
+
+    It 'outputs the spoke''s AMPLS application security group for the endpoint (final review I-1)' {
+        $stamp.outputs.monitorAsgId.value | Should -Be "[reference('spokeNetwork').outputs.amplsAsgId.value]"
+    }
+}
+
+Describe 'Region stamp jump host data collection endpoint (final review I-2)' {
+    It 'outputs the jump host DCE ID when the VM is deployed in this stamp, else an empty string' {
+        $stamp.outputs.dataCollectionEndpointId.value |
+            Should -Be "[if(and(parameters('enableVirtualMachine'), variables('isPrimary')), reference('virtualMachine').outputs.dataCollectionEndpointId.value, '')]"
     }
 }
 

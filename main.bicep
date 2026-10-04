@@ -395,7 +395,8 @@ module privateDnsLinks 'modules/privateDnsZoneLinks.bicep' = [for zone in items(
   }
 }]
 
-// Private-only monitoring (Phase 6): one scope holds the workspace and every regional App Insights component.
+// Private-only monitoring (Phase 6): one scope holds the workspace, every regional App Insights component and,
+// when the jump host is deployed, its data collection endpoint.
 module monitorPrivateLinkScope 'modules/monitorPrivateLinkScope.bicep' = {
   name: 'monitor-private-link-scope-${environmentName}'
   scope: resourceGroup(globalResourceGroupName)
@@ -406,6 +407,9 @@ module monitorPrivateLinkScope 'modules/monitorPrivateLinkScope.bicep' = {
       primaryStamp.outputs.appInsightsId
     ], deploySecondaryRegion ? [
       secondaryStamp!.outputs.appInsightsId
+    ] : [], enableVirtualMachine ? [
+      // The jump host agent's regional configuration endpoint (primary only).
+      primaryStamp.outputs.dataCollectionEndpointId
     ] : [])
   }
 }
@@ -420,6 +424,7 @@ module monitorPrivateEndpoint 'modules/monitorPrivateEndpoint.bicep' = {
     privateLinkScopeName: monitorPrivateLinkScope.outputs.name
     privateEndpointSubnetId: primaryStamp.outputs.privateEndpointSubnetId
     privateDnsZoneIds: global.outputs.privateDnsZoneIds
+    applicationSecurityGroupId: primaryStamp.outputs.monitorAsgId
   }
 }
 

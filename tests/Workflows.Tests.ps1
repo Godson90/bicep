@@ -133,7 +133,23 @@ Describe 'Alert email from the ALERT_EMAIL environment variable (Phase 6)' {
     It 'passes alertEmail from vars.ALERT_EMAIL to validate, what-if and create' {
         ([regex]::Matches($planJob, [regex]::Escape($alertEmailArgument))).Count | Should -Be 2
         ([regex]::Matches($applyJob, [regex]::Escape($alertEmailArgument))).Count | Should -Be 1
-        ([regex]::Matches($deploy, [regex]::Escape($alertEmailVariable))).Count | Should -Be 4
+        ([regex]::Matches($deploy, [regex]::Escape($alertEmailVariable))).Count | Should -Be 5
+    }
+
+    It 'fails the prod plan first, before checkout and sign-in, when ALERT_EMAIL is empty (final review M-7)' {
+        $planSteps = $planJob.Substring($planJob.IndexOf('  plan:'))
+        $check = $planSteps.IndexOf('- name: Require ALERT_EMAIL for prod')
+        $check | Should -BeGreaterThan -1
+        $check | Should -BeLessThan $planSteps.IndexOf('- uses: actions/checkout@v4')
+        $check | Should -BeLessThan $planSteps.IndexOf('uses: azure/login@v2')
+        $planSteps.Substring($planSteps.IndexOf('steps:')).TrimStart() | Should -Match '^steps:\s+(#[^\n]*\n\s+)*- name: Require ALERT_EMAIL for prod'
+        $step = $planSteps.Substring($check, $planSteps.IndexOf('- uses: actions/checkout@v4') - $check)
+        $step | Should -Match "if: env\.TARGET_ENV == 'prod'"
+        $step | Should -Match ([regex]::Escape($alertEmailVariable))
+        $step | Should -Match ([regex]::Escape('if [ -z "$ALERT_EMAIL" ]; then'))
+        $step | Should -Match 'exit 1'
+        # The address reaches the script through env:, never interpolated into run:.
+        $step.Substring($step.IndexOf('run:')) | Should -Not -Match '\$\{\{'
     }
 
     It 'passes alertEmail to the pull request what-if, so it shows no spurious receiver change' {

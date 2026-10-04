@@ -144,9 +144,8 @@ Describe 'Cross-region Azure Monitor traffic over the hub peering (Phase 6)' {
         $rule.sourceAddresses | Should -Be "[parameters('monitorClientPrefixes')]"
         @($rule.protocols.protocolType) -join ',' | Should -Be 'Https'
         @($rule.protocols.port) -join ',' | Should -Be '443'
-        foreach ($fqdn in '*.applicationinsights.azure.com', '*.monitor.azure.com', '*.ods.opinsights.azure.com', '*.oms.opinsights.azure.com', '*.agentsvc.azure-automation.net') {
-            @($rule.targetFqdns) | Should -Contain $fqdn
-        }
+        $expected = @('*.applicationinsights.azure.com', '*.monitor.azure.com', '*.ods.opinsights.azure.com', '*.oms.opinsights.azure.com', '*.agentsvc.azure-automation.net') | Sort-Object
+        (@($rule.targetFqdns) | Sort-Object) -join ',' | Should -BeExactly ($expected -join ',')
     }
 
     It 'Client (forwards to the peer region): allows only its spoke subnets to the AMPLS endpoint subnet on TCP 443 as a network rule' {

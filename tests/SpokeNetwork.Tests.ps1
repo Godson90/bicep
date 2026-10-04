@@ -63,3 +63,54 @@ Describe 'Lateral traversal (PSRule Azure.NSG.LateralTraversal, Phase 3)' {
         }
     }
 }
+
+Describe 'Azure Monitor endpoint isolation (Phase 6 final review I-1)' {
+    BeforeAll {
+        $asgs = @(Get-TemplateResource -Template $template -Type 'Microsoft.Network/applicationSecurityGroups')
+        $privateEndpointNsg = Get-TemplateResource -Template $template -Type 'Microsoft.Network/networkSecurityGroups' |
+            Where-Object { $_.name -eq "[variables('privateEndpointNsgName')]" }
+    }
+
+    It 'always creates one application security group for the AMPLS endpoint, named after the spoke VNet' {
+        $asgs.Count | Should -Be 1
+        $asgs[0].apiVersion | Should -Be '2024-07-01'
+        $template.variables.amplsAsgName | Should -Be "[format('{0}-ampls-asg', parameters('vnetName'))]"
+        $asgs[0].name | Should -Be "[variables('amplsAsgName')]"
+        $asgs[0].location | Should -Be "[parameters('location')]"
+        $asgs[0].PSObject.Properties.Name | Should -Not -Contain 'condition'
+    }
+
+    It 'outputs the application security group ID as amplsAsgId' {
+        $template.outputs.amplsAsgId.value | Should -Be "[resourceId('Microsoft.Network/applicationSecurityGroups', variables('amplsAsgName'))]"
+    }
+
+    It 'takes the peer monitoring sources as a parameter, empty by default (no rule)' {
+        @($template.parameters.monitorPeerSourceCidrs.defaultValue).Count | Should -Be 0
+        $template.variables.peerMonitoringInboundRules | Should -Be "[if(empty(parameters('monitorPeerSourceCidrs')), createArray(), createArray(variables('peerMonitoringRule')))]"
+    }
+
+    It 'lets the peer sources reach only the AMPLS application security group, on TCP 443' {
+        $rule = $template.variables.peerMonitoringRule
+        $rule.name | Should -Be 'allow-peer-monitoring-https'
+        $rule.properties.priority | Should -Be 110
+        $rule.properties.direction | Should -Be 'Inbound'
+        $rule.properties.access | Should -Be 'Allow'
+        $rule.properties.protocol | Should -Be 'Tcp'
+        $rule.properties.sourceAddressPrefixes | Should -Be "[parameters('monitorPeerSourceCidrs')]"
+        $rule.properties.destinationPortRange | Should -Be '443'
+        @($rule.properties.destinationApplicationSecurityGroups).Count | Should -Be 1
+        $rule.properties.destinationApplicationSecurityGroups[0].id | Should -Be "[resourceId('Microsoft.Network/applicationSecurityGroups', variables('amplsAsgName'))]"
+        $rule.properties.PSObject.Properties.Name | Should -Not -Contain 'destinationAddressPrefix'
+    }
+
+    It 'adds the peer rule to the private-endpoint NSG and keeps the approved-https rule on its own sources' {
+        $rules = [string]$privateEndpointNsg.properties.securityRules
+        $rules | Should -Match "variables\('peerMonitoringInboundRules'\)"
+        $rules | Should -Match "'allow-approved-https'"
+        $rules | Should -Match "'sourceAddressPrefixes', parameters\('approvedPrivateEndpointSourceCidrs'\)"
+    }
+
+    It 'enables NSG private endpoint network policies on the private-endpoint subnet, which application security groups on private endpoints need' {
+        $subnets[0].privateEndpointNetworkPolicies | Should -Be 'NetworkSecurityGroupEnabled'
+    }
+}

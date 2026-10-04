@@ -189,6 +189,15 @@ Describe 'Azure Monitor Private Link Scope (Phase 6)' {
         $endpoint.properties.parameters.privateDnsZoneIds.value | Should -Be "[reference('global').outputs.privateDnsZoneIds.value]"
     }
 
+    It 'scopes the primary jump host data collection endpoint only when enableVirtualMachine is true (final review I-2)' {
+        $value = $scope.properties.parameters.scopedResourceIds.value
+        $value | Should -Match "if\(parameters\('enableVirtualMachine'\), createArray\(reference\('primaryStamp'\)\.outputs\.dataCollectionEndpointId\.value\), createArray\(\)\)\)\]$"
+    }
+
+    It 'puts the endpoint in the primary spoke''s AMPLS application security group (final review I-1)' {
+        $endpoint.properties.parameters.applicationSecurityGroupId.value | Should -Be "[reference('primaryStamp').outputs.monitorAsgId.value]"
+    }
+
     It 'creates the endpoint after the scope holds its resources, so the DNS records cover them all' {
         $endpoint.properties.parameters.privateLinkScopeId.value | Should -Be "[reference('monitorPrivateLinkScope').outputs.id.value]"
         @($endpoint.dependsOn) | Should -Contain 'monitorPrivateLinkScope'

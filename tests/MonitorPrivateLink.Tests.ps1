@@ -47,6 +47,12 @@ Describe 'AMPLS private endpoint (Phase 6)' {
         $endpoint.properties.subnet.id | Should -Be "[parameters('privateEndpointSubnetId')]"
     }
 
+    It 'joins the AMPLS application security group, the only destination the peer firewall may reach (final review I-1)' {
+        $endpointTemplate.parameters.applicationSecurityGroupId.type | Should -Be 'string'
+        @($endpoint.properties.applicationSecurityGroups).Count | Should -Be 1
+        $endpoint.properties.applicationSecurityGroups[0].id | Should -Be "[parameters('applicationSecurityGroupId')]"
+    }
+
     It 'registers records in the four Azure Monitor zones and the shared blob zone' {
         $zoneGroup.name | Should -Match "'default'\)\]$"
         $zoneIds = @($zoneGroup.properties.privateDnsZoneConfigs | ForEach-Object { $_.properties.privateDnsZoneId })

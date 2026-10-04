@@ -127,7 +127,7 @@ var adminSourceCidrs = concat([
 ], managementSourceCidrs)
 var monitorPeeringRole = hubPeering.?monitorRole ?? 'None'
 // The region hosting the AMPLS endpoint SNATs the other region's monitoring traffic at its firewall, so the
-// private-endpoint NSG must admit the firewall subnet there (Phase 6).
+// private-endpoint NSG must admit the firewall subnet there, to the AMPLS endpoint's application security group only (Phase 6).
 var peerTrafficSourceCidrs = monitorPeeringRole == 'Host' ? [
   addressPlan.firewallSubnetPrefix
 ] : []
@@ -221,7 +221,8 @@ module spokeNetwork 'spokeNetwork.bicep' = {
       addressPlan.appServiceIntegrationSubnetPrefix
       addressPlan.managementSubnetPrefix
       addressPlan.vpnClientAddressPool
-    ], peerTrafficSourceCidrs, additionalPrivateEndpointSourceCidrs)
+    ], additionalPrivateEndpointSourceCidrs)
+    monitorPeerSourceCidrs: peerTrafficSourceCidrs
     privateEndpointSubnetName: privateEndpointSubnetName
     appServiceIntegrationSubnetName: appServiceIntegrationSubnetName
     enableDeleteLock: isProd
@@ -512,3 +513,5 @@ output appServicePrincipalId string = appService.outputs.appServicePrincipalId
 output appInsightsName string = appInsights.outputs.name
 output appInsightsId string = appInsights.outputs.id
 output privateEndpointSubnetId string = spokeNetwork.outputs.privateEndpointSubnetId
+output monitorAsgId string = spokeNetwork.outputs.amplsAsgId
+output dataCollectionEndpointId string = enableVirtualMachine && isPrimary ? virtualMachine!.outputs.dataCollectionEndpointId : ''

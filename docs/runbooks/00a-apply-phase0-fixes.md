@@ -50,7 +50,7 @@ Applies the Phase 0 defect fixes to the existing `defenStack` resource group (de
 | `healthCheckPath` (App Service) | `/` | Application health endpoint, e.g. `/healthz` | Unhealthy instances are removed from rotation |
 | `zoneRedundant` (App Service) | `false` | `true` in Phase 1 greenfield | Set at plan creation only |
 | `instanceCount` (App Service) | `1` | `3` with zone redundancy | Zone-redundant minimum |
-| `retentionInDays` (monitoring) | `90` | `90` (longer via archive tier in Phase 6) | Investigation window; included free once Sentinel is enabled |
+| `retentionInDays` (monitoring) | `90` | `90` (stays 90 days; longer retention is not planned) | Investigation window; included free once Sentinel is enabled |
 
 ## 4. Step-by-step deployment
 1. Run the local test suite and confirm every test passes:
