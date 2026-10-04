@@ -24,7 +24,8 @@ This runbook gives administrators a private path into each region stamp, plus a 
 - Hub VNet DNS set to the firewall's private IP, so VPN clients resolve `privatelink.*` names through the firewall DNS proxy (`ADR-005` amendment).
 - Firewall rule group `admin-access` (priority 120): VPN client pool → `management` subnet, TCP 22/3389. It also adds the collection `entra-login` in `platform-egress`: the `management` subnet → Entra ID sign-in endpoints over HTTPS.
 - An outbound SSH/RDP deny (`deny-ssh-rdp-outbound`, priority 4000) on every spoke NSG and the jump host NIC NSG. No spoke host can open SSH/RDP to another host (PSRule `Azure.NSG.LateralTraversal`).
-- Admin sources are derived: the `management` NSG and NIC NSG allow SSH/RDP from `AzureBastionSubnet` and the region VPN client pool, plus any extra `managementSourceCidrs`. The `private-endpoints` NSG allows the VPN client pool on 443.
+- Admin sources are derived: the `management` NSG allows SSH/RDP from `AzureBastionSubnet` and the region VPN client pool, plus any extra `managementSourceCidrs`. The `private-endpoints` NSG allows the VPN client pool on 443.
+- **From Phase 7, the jump host's NIC NSG denies SSH/RDP (`deny-ssh-rdp-inbound`, priority 4000) until a Defender just-in-time (JIT) request is granted** (`ADR-028`). The JIT policy allows requests from the same sources, for at most 3 hours. **Every admin session now starts with a JIT request** (runbook 07 §5.4), and every pipeline deploy ends active grants.
 
 **Jump host** (`enableVirtualMachine = true`, primary region only):
 
@@ -36,7 +37,7 @@ This runbook gives administrators a private path into each region stamp, plus a 
 
 **Not in scope:**
 
-- **Defender just-in-time VM access.** It is deferred to Phase 7, which enables the Defender for Servers Plan 2 it requires (`ADR-014`).
+- **Defender just-in-time VM access policy and its requester role.** Phase 7 adds them (runbook 07, `ADR-028`, which supersedes `ADR-014`); this runbook only adds the request step before connecting (§5.2, §5.3).
 - **PIM for the admin group.** It is tenant configuration, not Bicep, and is documented in §5.5.
 - **Hub↔hub peering for cross-region admin access.** That arrives in Phase 8.
 
@@ -217,6 +218,8 @@ Every dev example below uses `rg-defenstack-dev-wus3`, `bas-defenstack-dev-wus3`
 
 ### 5.2 Connect through Bastion
 
+**Admin access now needs a JIT request first (Phase 7).** Activate your admin group membership in PIM (§5.5), then request access to the jump host in **Defender for Cloud** → **Just-in-time VM access**, with the Bastion subnet as the source (dev `10.21.0.64/26`, prod `10.1.0.64/26`), for at most 3 hours (runbook 07 §5.4). Without a grant, the connection times out at the NIC NSG. A pipeline deploy ends the grant; request again.
+
 - **Portal:** open the VM → **Connect** → **Bastion**. Choose **Microsoft Entra ID** authentication (Linux; Windows needs the native client below).
 - **Native client, Linux jump host (Entra ID):**
 
@@ -235,7 +238,7 @@ Every dev example below uses `rg-defenstack-dev-wus3`, `bas-defenstack-dev-wus3`
 
 ### 5.3 Connect over the VPN
 
-1. Connect the Azure VPN Client (§5.1).
+1. Connect the Azure VPN Client (§5.1), then request JIT access to the jump host with the VPN client pool as the source (dev `172.16.210.0/24`, prod `172.16.200.0/24`), as in §5.2 and runbook 07 §5.4. Private endpoints (step 4) need no JIT request.
 2. Linux jump host (Entra ID; `az ssh` fetches a short-lived certificate):
 
    ```powershell
@@ -260,7 +263,8 @@ The README's `az keyvault secret set` flow needs a network path to the Key Vault
    - Prod only: require **approval** by a second admin.
 3. **Assignments** → **Add assignments** → role **Member** → type **Eligible** for each administrator. Remove any permanent (active) members except the break-glass review (§5.6).
 4. To also grant `Reader` on the region resource group (for Bastion), add an **eligible** Azure role assignment on `rg-defenstack-<env>-<region>` for the group. Resource-group RBAC outside the template is intentionally not managed by Bicep.
-5. Admins activate before connecting: **My roles** → **Groups** → **Activate**. Tokens pick up the new membership at the next sign-in, so reconnect the VPN after activating.
+5. From Phase 7 the group also holds **DefenStack JIT Requester** at the primary resource group (runbook 07), so the same activation lets the admin request JIT access.
+6. Admins activate before connecting: **My roles** → **Groups** → **Activate**. Tokens pick up the new membership at the next sign-in, so reconnect the VPN after activating.
 
 ### 5.6 Break-glass
 
@@ -277,7 +281,7 @@ Use these procedures only when the normal paths fail. Record every use in the in
 
 ## 6. Validation
 
-Run everything from the repository root in PowerShell. VPN rows need the Azure VPN Client connected.
+Run everything from the repository root in PowerShell. VPN rows need the Azure VPN Client connected. From Phase 7, rows that open SSH or RDP to the jump host also need an active JIT grant for that source (§5.2); runbook 07 §6 validates the JIT policy itself.
 
 | Check | Command | Expected result |
 |---|---|---|
@@ -362,6 +366,7 @@ The VM's zone cannot be changed without recreating the VM.
 | The firewall IP is not `.4` (§4 step 7) | The firewall was created in a non-empty `AzureFirewallSubnet`, or the subnet prefix changed | VPN traffic to the spoke would be black-holed. Set `firewallPrivateIp` in `modules/regionStamp.bicep` to the actual IP (temporary override), redeploy, and open an issue to revisit `ADR-013` |
 | `az network bastion ssh`: `Bastion Host SKU must be Standard or Premium and Native Client must be enabled` | Wrong Bastion, or the Bastion was modified outside Bicep | Check the §6 Bastion row; redeploy |
 | `az ssh vm` / Bastion Entra login: `Permission denied` or `not authorized` | The user lacks `Virtual Machine Administrator Login` (PIM not activated, or `adminGroupObjectId` empty), or the extension failed | Activate PIM; check the §6 role and extension rows. Extension failed on Linux: `packages.microsoft.com` is blocked, so check `AZFWApplicationRule` for denies from the `management` subnet |
+| SSH/RDP to the jump host times out over both Bastion and the VPN (Phase 7 on) | No active JIT grant: never requested, expired, or ended by a pipeline deploy | Request access (§5.2, runbook 07 §5.4). A grant for the wrong source (Bastion subnet versus VPN pool) only opens that path |
 | SSH over the VPN times out, but works over Bastion | The firewall is denying (`AZFWNetworkRule` shows `Deny`), or the client is outside the pool | Check the client IP is in `172.16.210.0/24`; check the `admin-access` group exists on the policy (`az network firewall policy rule-collection-group list --policy-name afwp-defenstack-dev-wus3 -g $rg -o table`) |
 | A private endpoint is unreachable over the VPN, but DNS is correct | The `private-endpoints` NSG does not list the VPN pool, or the client has stale routes | Check the NSG `allow-approved-https` sources include the pool; disconnect and reconnect the VPN client |
 | Update Manager run `Failed` with `ReadyForPatching` or `NotReady` | The VM was off or the agent was unhealthy during the window | Start the VM before the window, or trigger **One-time update** in Update Manager; check `AzureMonitorLinuxAgent` health |

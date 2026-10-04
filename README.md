@@ -6,7 +6,7 @@ This deployment is a **subscription-scope**, multi-region stack: `main.bicep` (`
 
 - Design: `docs/superpowers/specs/2026-09-25-secure-connectivity-design.md`
 - Architecture: `docs/architecture/overview.md` - topology, traffic flows, address plan, naming convention, and resource inventory
-- Runbooks: `docs/runbooks/` - start with `00-pipeline-and-identity.md`, `00b-configure-pipeline-credentials.md` (pipeline Azure login via OIDC), `00a-apply-phase0-fixes.md`, `01-deploy-stack.md` (deploy dev or prod), `01a-migrate-from-defenstack.md` (retire the Phase 0 resource group), `02-firewall.md` (Premium firewall rule changes and allowlist requests), and `03-admin-access.md` (Bastion, point-to-site VPN client setup, jump host sign-in, break-glass), `04-ingress.md` (Front Door, WAF tuning, Private Link approval, custom domain cutover), `05-app-and-data.md` (storage resilience, Application Insights, deploy-time Key Vault secrets, restore procedures), and `06-monitoring-and-sentinel.md` (private Azure Monitor, flow logs, Sentinel connectors, alert triage, `ALERT_EMAIL`)
+- Runbooks: `docs/runbooks/` - start with `00-pipeline-and-identity.md`, `00b-configure-pipeline-credentials.md` (pipeline Azure login via OIDC), `00a-apply-phase0-fixes.md`, `01-deploy-stack.md` (deploy dev or prod), `01a-migrate-from-defenstack.md` (retire the Phase 0 resource group), `02-firewall.md` (Premium firewall rule changes and allowlist requests), and `03-admin-access.md` (Bastion, point-to-site VPN client setup, jump host sign-in, break-glass), `04-ingress.md` (Front Door, WAF tuning, Private Link approval, custom domain cutover), `05-app-and-data.md` (storage resilience, Application Insights, deploy-time Key Vault secrets, restore procedures), `06-monitoring-and-sentinel.md` (private Azure Monitor, flow logs, Sentinel connectors, alert triage, `ALERT_EMAIL`), and `07-governance.md` (operator-deployed Defender for Cloud and Azure Policy, the audit-to-deny switch, exemptions, just-in-time access to the jump host)
 - Runbook structure (mandatory for every change): `docs/runbooks/_template.md`
 
 ### Module layout
@@ -18,6 +18,7 @@ This deployment is a **subscription-scope**, multi-region stack: `main.bicep` (`
 - `modules/privateDnsZoneLinks.bicep`: links every deployed region's hub and spoke VNets to a shared private DNS zone.
 - `modules/types.bicep`: shared parameter contracts (`regionAddressPlan`, `privateDnsZoneSet`, `virtualNetworkReference`, `hubPeeringPlan`, `metricAlertRule`, `alertThresholdSet`) used by `main.bicep`, `modules/global.bicep`, and `modules/regionStamp.bicep`.
 - Phase 6 monitoring, deployed from `main.bicep`: `modules/monitorPrivateLinkScope.bicep` and `modules/monitorPrivateEndpoint.bicep` (private-only Azure Monitor), `modules/hubPeering.bicep` (prod hub-to-hub peering), `modules/activityLog.bicep` (subscription Activity Log), `modules/actionGroup.bicep`, `modules/metricAlerts.bicep` and `modules/serviceHealthAlert.bicep` (alerts). Each region stamp adds `modules/flowLogStorage.bicep` and `modules/flowLogs.bicep` (VNet flow logs, deployed into `NetworkWatcherRG`) and its own metric alerts. See `docs/runbooks/06-monitoring-and-sentinel.md`.
+- Phase 7 governance, **deployed by an operator, never by the pipeline**: `governance.bicep` (a second subscription-scope entry point, with `params/governance.bicepparam` and a committed `governance.json`) and `modules/governance/` (`defenderPlans.bicep`, `securityContacts.bicep`, `policies.bicep`, `flowLogStorageExemption.bicep`, `legacyWaiver.bicep`, `jitRequesterRole.bicep`, `jitRequesterAssignment.bicep`). The jump host's just-in-time policy is deployed by the pipeline from `modules/virtualMachine.bicep`. See `docs/runbooks/07-governance.md`.
 
 Each region stamp composes these existing building blocks:
 
@@ -60,7 +61,7 @@ Without `-ResourceType`, the script returns every resource with the matching nam
 
 ### API version policy
 
-Resource API versions use the newest stable version that is both available from the target Azure provider and typed by the installed Bicep CLI. The Azure provider can expose newer versions before the local Bicep type catalog supports them; using those versions would remove compile-time property validation. Review provider metadata and the Bicep CLI catalog together before upgrading, then run lint, build, Azure deployment validation, and what-if.
+Resource API versions use the newest stable version that is both available from the target Azure provider and typed by the installed Bicep CLI. The Azure provider can expose newer versions before the local Bicep type catalog supports them; using those versions would remove compile-time property validation. Review provider metadata and the Bicep CLI catalog together before upgrading, then run lint, build, Azure deployment validation, and what-if. The only preview versions are for resource types or scopes with no GA version, each recorded with a fallback: the subscription Activity Log setting (`ADR-025`), and policy exemptions and the Defender for Cloud security contact (`ADR-029`).
 
 ### Resource-group budget
 
@@ -208,7 +209,7 @@ For Linux, replace the password parameter with `virtualMachineAdminSshPublicKey`
 
 ### Virtual machine module
 
-The VM module is disabled by default through `enableVirtualMachine=false`. When enabled, it creates a private-only VM in the dedicated `management` subnet with no public IP, a NIC-level deny-by-default NSG, a system-assigned managed identity, Premium managed OS disk, trusted launch, secure boot, vTPM, boot diagnostics, platform metrics, and the Azure Monitor Agent with a data collection rule that sends syslog (Linux) or System/Application events (Windows) plus CPU, memory, and disk counters to the Log Analytics workspace. The firewall's `AzureMonitor` service-tag rule allows the agent's egress.
+The VM module is disabled by default through `enableVirtualMachine=false`. When enabled, it creates a private-only VM in the dedicated `management` subnet with no public IP, a NIC-level deny-by-default NSG that keeps SSH/RDP closed until a Defender just-in-time request opens it (Phase 7, runbook 07 §5.4), a system-assigned managed identity, Premium managed OS disk, trusted launch, secure boot, vTPM, boot diagnostics, platform metrics, and the Azure Monitor Agent with a data collection rule that sends syslog (Linux) or System/Application events (Windows) plus CPU, memory, and disk counters to the Log Analytics workspace. The firewall's `AzureMonitor` service-tag rule allows the agent's egress.
 
 - Set `virtualMachineOsType=Linux` and provide `virtualMachineAdminSshPublicKey` for SSH-only administration.
 - Set `virtualMachineOsType=Windows` and provide `virtualMachineAdminPassword` through a secure parameter mechanism. Do not place passwords in source control or generated templates.

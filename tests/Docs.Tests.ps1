@@ -264,3 +264,104 @@ Describe 'Phase 6 documentation' {
         }
     }
 }
+
+Describe 'Phase 7 documentation' {
+    BeforeAll {
+        $script:runbook07 = Get-Content (Get-RepoPath 'docs/runbooks/07-governance.md') -Raw -ErrorAction SilentlyContinue
+        $script:runbook03 = Get-Content (Get-RepoPath 'docs/runbooks/03-admin-access.md') -Raw
+        $script:runbook06Text = Get-Content (Get-RepoPath 'docs/runbooks/06-monitoring-and-sentinel.md') -Raw
+        $script:runbook00bText = Get-Content (Get-RepoPath 'docs/runbooks/00b-configure-pipeline-credentials.md') -Raw
+    }
+
+    It '<_> exists' -ForEach 'docs/runbooks/07-governance.md', 'docs/decisions/ADR-026-operator-deployed-governance-entry-point.md', 'docs/decisions/ADR-027-audit-first-policy-enforcement.md', 'docs/decisions/ADR-028-jit-access-and-nsg-ownership.md', 'docs/decisions/ADR-029-preview-apis-for-governance.md' {
+        Get-RepoPath $_ | Should -Exist
+    }
+
+    It 'the governance runbook follows the 9-section template' {
+        foreach ($section in '## 1. Purpose and scope', '## 2. Prerequisites', '## 3. Parameters', '## 4. Step-by-step', '## 5. Manual and post-deployment steps', '## 6. Validation', '## 7. Rollback', '## 8. Operations', '## 9. Troubleshooting') {
+            $script:runbook07 | Should -Match ([regex]::Escape($section))
+        }
+    }
+
+    It 'the governance runbook covers the exemption procedure and Defender recommendation handling (spec section 5 Phase 7)' {
+        foreach ($topic in 'Exemption procedure', 'Defender recommendation handling', 'Requesting JIT access', 'Live-only risks', 'az policy exemption create') {
+            $script:runbook07 | Should -Match ([regex]::Escape($topic))
+        }
+    }
+
+    It 'the governance runbook deploys with PIM-activated operator roles, never the pipeline' {
+        foreach ($topic in 'Privileged Identity Management', 'Security Admin', 'User Access Administrator', 'Owner', 'az deployment sub what-if', 'az deployment sub create', '--template-file governance.bicep --parameters params/governance.bicepparam') {
+            $script:runbook07 | Should -Match ([regex]::Escape($topic))
+        }
+    }
+
+    It 'the governance runbook sets SECURITY_CONTACT_EMAILS before what-if and create' {
+        $setAt = $script:runbook07.IndexOf('$env:SECURITY_CONTACT_EMAILS')
+        $setAt | Should -BeGreaterThan 0
+        $setAt | Should -BeLessThan $script:runbook07.IndexOf('az deployment sub what-if')
+    }
+
+    It 'the governance runbook deploys governance before the workload (JIT needs Defender for Servers)' {
+        $script:runbook07 | Should -Match 'governance first, then the workload deploy'
+        $script:runbook07.IndexOf('az deployment sub create') | Should -BeLessThan $script:runbook07.IndexOf('**Deploy the workload**')
+    }
+
+    It 'the governance runbook documents the audit-to-deny switch with the compliance review' {
+        foreach ($topic in 'DoNotEnforce', "denyEnforcement = 'Default'", 'az policy state summarize', 'az policy state list', 'about a week') {
+            $script:runbook07 | Should -Match ([regex]::Escape($topic))
+        }
+    }
+
+    It 'the governance runbook spells out the ordering trap for a new environment or region' {
+        $trap = $script:runbook07.Substring($script:runbook07.IndexOf('**The ordering trap.**'))
+        foreach ($step in "Set ``denyEnforcement = 'DoNotEnforce'``", 'Deploy the workload', 'Add the environment', 'Redeploy governance', "Set ``denyEnforcement = 'Default'``") {
+            $trap | Should -Match ([regex]::Escape($step))
+        }
+    }
+
+    It 'the governance runbook marks the legacy waiver expiry as a placeholder and clears the group after teardown' {
+        $script:runbook07 | Should -Match ([regex]::Escape('`2027-03-31` is a **placeholder to confirm**'))
+        $script:runbook07 | Should -Match ([regex]::Escape("legacyResourceGroupName = ''"))
+    }
+
+    It 'the governance runbook lists each unverified item as a live-only risk with a fallback' {
+        $risks = $script:runbook07.Substring($script:runbook07.IndexOf('### Live-only risks'))
+        foreach ($risk in 'policyExemptions@2026-01-01-preview', 'securityContacts@2023-12-01-preview', 'skips `global`', 'resource-group locations policy', 'NSG redeploy', 'action list', 'CapGBPerMonthPerStorageAccount') {
+            $risks | Should -Match ([regex]::Escape($risk))
+        }
+        ([regex]::Matches($risks, 'Fallback')).Count | Should -BeGreaterOrEqual 6
+    }
+
+    It 'runbook 03 requires a JIT request before admin access' {
+        $script:runbook03 | Should -Match 'Admin access now needs a JIT request first'
+        $script:runbook03 | Should -Match 'ADR-028'
+        $script:runbook03 | Should -Not -Match 'It is deferred to Phase 7'
+    }
+
+    It 'runbook 06 records the stfl flow-log exemption as in place' {
+        $script:runbook06Text | Should -Match ([regex]::Escape('defenstack-flow-log-storage-public-network'))
+        $script:runbook06Text | Should -Not -Match 'will need an exemption'
+    }
+
+    It 'runbook 00b states that the pipeline does not deploy governance and deploy.yml skips governance-only paths' {
+        $script:runbook00bText | Should -Match 'The pipeline does not deploy governance'
+        $script:runbook00bText | Should -Match ([regex]::Escape('modules/governance/**'))
+        $script:runbook00bText | Should -Match ([regex]::Escape('params/governance.bicepparam'))
+    }
+
+    It 'ADR-014 points to its successor ADR-028' {
+        Get-Content (Get-RepoPath 'docs/decisions/ADR-014-jit-access-deferred-to-phase-7.md') -Raw | Should -Match 'Superseded by `ADR-028`'
+    }
+
+    It 'the architecture overview, README and cost document cover Phase 7' {
+        $overview = Get-Content (Get-RepoPath 'docs/architecture/overview.md') -Raw
+        foreach ($adr in 'ADR-026', 'ADR-027', 'ADR-028', 'ADR-029') { $overview | Should -Match $adr }
+        $overview | Should -Match '\*\*Phase 7\*\*'
+        Get-Content (Get-RepoPath 'README.md') -Raw | Should -Match ([regex]::Escape('07-governance.md'))
+        $cost = Get-Content (Get-RepoPath 'docs/cost.md') -Raw
+        $cost | Should -Match '## Phase 7 delta'
+        foreach ($driver in 'Defender for Servers Plan 2', 'Defender for Storage', 'malware scanning', 'Defender CSPM', 'confirm on the pricing page') {
+            $cost | Should -Match ([regex]::Escape($driver))
+        }
+    }
+}
