@@ -3,7 +3,9 @@ BeforeAll {
     $template = Get-BicepTemplate -RelativePath 'modules/hubNetwork.bicep'
     $lock = Get-TemplateResource -Template $template -Type 'Microsoft.Authorization/locks' | Select-Object -First 1
     $vnet = Get-TemplateResource -Template $template -Type 'Microsoft.Network/virtualNetworks' | Select-Object -First 1
-    $routeTable = Get-TemplateResource -Template $template -Type 'Microsoft.Network/routeTables' | Select-Object -First 1
+    $routeTables = Get-TemplateResource -Template $template -Type 'Microsoft.Network/routeTables'
+    $routeTable = $routeTables | Where-Object { $_.name -eq "[variables('gatewayRouteTableName')]" }
+    $firewallRouteTable = $routeTables | Where-Object { $_.name -eq "[variables('firewallRouteTableName')]" }
     $bastionNsg = Get-TemplateResource -Template $template -Type 'Microsoft.Network/networkSecurityGroups' | Select-Object -First 1
     # Subnet names compile to variable references, for example [variables('gatewaySubnetName')].
     function Get-Subnet([string]$Name) {
@@ -47,7 +49,7 @@ Describe 'Hub DNS (ADR-005, Phase 3)' {
 Describe 'GatewaySubnet routing (F2, Phase 3)' {
     It 'attaches the gateway route table to GatewaySubnet only' {
         (Get-Subnet 'GatewaySubnet').properties.routeTable.id | Should -Match 'gatewayRouteTableName'
-        (Get-Subnet 'AzureFirewallSubnet').properties.PSObject.Properties.Name | Should -Not -Contain 'routeTable'
+        (Get-Subnet 'AzureFirewallSubnet').properties.routeTable | Should -Not -Match 'gatewayRouteTableName'
         (Get-Subnet 'AzureBastionSubnet').properties.PSObject.Properties.Name | Should -Not -Contain 'routeTable'
     }
 
@@ -103,5 +105,32 @@ Describe 'Bastion NSG (Phase 3)' {
 
     It 'denies all other inbound traffic' {
         (Get-NsgRule 'deny-unsolicited-inbound').properties.priority | Should -Be 4096
+    }
+}
+
+Describe 'AzureFirewallSubnet routing for hub peering (Phase 6)' {
+    It 'creates the firewall route table only when the other region''s spoke prefixes are given (prod with DR)' {
+        $template.parameters.remoteSpokeAddressPrefixes.defaultValue.Count | Should -Be 0
+        $template.parameters.remoteFirewallPrivateIp.defaultValue | Should -BeExactly ''
+        $firewallRouteTable.condition | Should -Be "[not(empty(parameters('remoteSpokeAddressPrefixes')))]"
+    }
+
+    It 'attaches it to AzureFirewallSubnet only when it exists' {
+        (Get-Subnet 'AzureFirewallSubnet').properties.routeTable |
+            Should -Be "[if(empty(parameters('remoteSpokeAddressPrefixes')), null(), createObject('id', resourceId('Microsoft.Network/routeTables', variables('firewallRouteTableName'))))]"
+    }
+
+    It 'sends each remote spoke prefix to the remote firewall private IP' {
+        $firewallRouteTable.properties.routes | Should -Be "[variables('firewallRoutes')]"
+        $template.variables.firewallRoutes | Should -Match "map\(parameters\('remoteSpokeAddressPrefixes'\)"
+        $template.variables.firewallRoutes | Should -Match "'nextHopType', 'VirtualAppliance', 'nextHopIpAddress', parameters\('remoteFirewallPrivateIp'\)"
+    }
+
+    It 'keeps 0.0.0.0/0 to Internet on the firewall subnet, as Azure Firewall requires once a route table is attached' {
+        $template.variables.firewallRoutes | Should -Match "createObject\('name', 'default-to-internet', 'properties', createObject\('addressPrefix', '0.0.0.0/0', 'nextHopType', 'Internet'\)\)"
+    }
+
+    It 'keeps gateway route propagation on, so the firewall still returns traffic to VPN clients' {
+        $firewallRouteTable.properties.disableBgpRoutePropagation | Should -BeExactly $false
     }
 }

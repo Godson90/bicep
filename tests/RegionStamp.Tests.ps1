@@ -196,3 +196,30 @@ Describe 'Region stamp ingress output (Phase 4)' {
         $stamp.outputs.appServiceId.value | Should -Be "[reference('appService').outputs.appServiceAppId.value]"
     }
 }
+
+Describe 'Region stamp hub peering (Phase 6)' {
+    It 'takes an optional hub peering plan, absent by default (dev, or prod without DR)' {
+        $stamp.parameters.hubPeering.nullable | Should -BeExactly $true
+        $stamp.parameters.hubPeering.'$ref' | Should -Be '#/definitions/hubPeeringPlan'
+    }
+
+    It 'routes the other region''s spoke from AzureFirewallSubnet to the other firewall' {
+        $hub = Get-StampModuleParameters 'hub-network'
+        $hub.remoteSpokeAddressPrefixes.value | Should -Match "tryGet\(parameters\('hubPeering'\), 'remoteSpokeAddressPrefixes'\)"
+        $hub.remoteFirewallPrivateIp.value | Should -Match "tryGet\(parameters\('hubPeering'\), 'remoteFirewallPrivateIp'\)"
+    }
+
+    It 'passes the Azure Monitor role and prefixes to the firewall rules' {
+        $firewall = Get-StampModuleParameters 'azure-firewall'
+        $firewall.monitorPeeringRole.value | Should -Be "[variables('monitorPeeringRole')]"
+        $firewall.monitorClientPrefixes.value | Should -Match "tryGet\(parameters\('hubPeering'\), 'monitorClientPrefixes'\)"
+        $firewall.monitorPrivateEndpointPrefixes.value | Should -Match "tryGet\(parameters\('hubPeering'\), 'monitorPrivateEndpointPrefixes'\)"
+        $stamp.variables.monitorPeeringRole | Should -Match "tryGet\(parameters\('hubPeering'\), 'monitorRole'\), 'None'\)"
+    }
+
+    It 'lets the local firewall reach the private endpoints only in the region that hosts the AMPLS endpoint (it SNATs peer traffic)' {
+        $stamp.variables.peerTrafficSourceCidrs |
+            Should -Be "[if(equals(variables('monitorPeeringRole'), 'Host'), createArray(parameters('addressPlan').firewallSubnetPrefix), createArray())]"
+        (Get-StampModuleParameters 'spoke-network').approvedPrivateEndpointSourceCidrs.value | Should -Match "variables\('peerTrafficSourceCidrs'\)"
+    }
+}

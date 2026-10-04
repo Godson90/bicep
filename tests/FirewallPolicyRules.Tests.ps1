@@ -12,8 +12,8 @@ BeforeAll {
 }
 
 Describe 'Baseline firewall rules (ADR-010)' {
-    It 'defines the dns-egress, admin-access, platform-egress and approved-https-egress groups at priorities 100, 120, 150, 200' {
-        $groups.Count | Should -Be 4
+    It 'defines the dns-egress, admin-access, platform-egress and approved-https-egress groups at priorities 100, 120, 150, 200 (plus the Phase 6 cross-region group)' {
+        $groups.Count | Should -Be 5
         $dns.properties.priority | Should -Be 100
         $admin.properties.priority | Should -Be 120
         $platform.properties.priority | Should -Be 150
@@ -114,5 +114,52 @@ Describe 'Application allowlist' {
     It 'is deployed only when allowedOutboundFqdns is not empty' {
         $approved.condition | Should -Be "[not(empty(parameters('allowedOutboundFqdns')))]"
         $approved.properties.ruleCollections[0].rules[0].targetFqdns | Should -Be "[parameters('allowedOutboundFqdns')]"
+    }
+}
+
+Describe 'Cross-region Azure Monitor traffic over the hub peering (Phase 6)' {
+    BeforeAll {
+        $crossRegion = Get-Group 'cross-region-monitoring'
+        $collections = @($crossRegion.properties.ruleCollections)
+        $hostCollection = $collections | Where-Object { $_.name -eq 'peer-spoke-to-azure-monitor' }
+        $clientCollection = $collections | Where-Object { $_.name -eq 'spoke-to-peer-azure-monitor' }
+    }
+
+    It 'is deployed only when this region takes part (role Host or Client), after every other group' {
+        $template.parameters.monitorPeeringRole.defaultValue | Should -Be 'None'
+        @($template.parameters.monitorPeeringRole.allowedValues) -join ',' | Should -Be 'None,Host,Client'
+        $crossRegion.condition | Should -Be "[not(equals(parameters('monitorPeeringRole'), 'None'))]"
+        $crossRegion.properties.priority | Should -Be 250
+        @($crossRegion.dependsOn) | Should -Contain "[resourceId('Microsoft.Network/firewallPolicies/ruleCollectionGroups', parameters('firewallPolicyName'), 'platform-egress')]"
+        @($crossRegion.dependsOn) | Should -Contain "[resourceId('Microsoft.Network/firewallPolicies/ruleCollectionGroups', parameters('firewallPolicyName'), 'approved-https-egress')]"
+    }
+
+    It 'renders exactly one collection, chosen by role' {
+        $crossRegion.properties.ruleCollections | Should -Match "^\[if\(equals\(parameters\('monitorPeeringRole'\), 'Host'\)"
+    }
+
+    It 'Host (owns the AMPLS endpoint): allows the other region''s spoke subnets to Azure Monitor FQDNs as an application rule, which SNATs for a symmetric return path' {
+        $rule = $template.variables.monitorHostCollection.rules[0]
+        $rule.ruleType | Should -Be 'ApplicationRule'
+        $rule.sourceAddresses | Should -Be "[parameters('monitorClientPrefixes')]"
+        @($rule.protocols.protocolType) -join ',' | Should -Be 'Https'
+        @($rule.protocols.port) -join ',' | Should -Be '443'
+        foreach ($fqdn in '*.applicationinsights.azure.com', '*.monitor.azure.com', '*.ods.opinsights.azure.com', '*.oms.opinsights.azure.com', '*.agentsvc.azure-automation.net') {
+            @($rule.targetFqdns) | Should -Contain $fqdn
+        }
+    }
+
+    It 'Client (forwards to the peer region): allows only its spoke subnets to the AMPLS endpoint subnet on TCP 443 as a network rule' {
+        $rule = $template.variables.monitorClientCollection.rules[0]
+        $rule.ruleType | Should -Be 'NetworkRule'
+        @($rule.ipProtocols) -join ',' | Should -Be 'TCP'
+        $rule.sourceAddresses | Should -Be "[parameters('monitorClientPrefixes')]"
+        $rule.destinationAddresses | Should -Be "[parameters('monitorPrivateEndpointPrefixes')]"
+        @($rule.destinationPorts) -join ',' | Should -Be '443'
+    }
+
+    It 'allows, never denies' {
+        $template.variables.monitorHostCollection.action.type | Should -Be 'Allow'
+        $template.variables.monitorClientCollection.action.type | Should -Be 'Allow'
     }
 }

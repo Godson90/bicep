@@ -1,4 +1,4 @@
-import { regionAddressPlan, privateDnsZoneSet } from 'types.bicep'
+import { regionAddressPlan, privateDnsZoneSet, hubPeeringPlan } from 'types.bicep'
 
 @description('Deployment environment.')
 @allowed([
@@ -81,6 +81,9 @@ param primaryStorageAccountName string = ''
 @secure()
 param keyVaultSecrets object = {}
 
+@description('Prod with DR only: routing and Azure Monitor rules for the hub-to-hub peering with the other region. Absent in dev and in prod without DR.')
+param hubPeering hubPeeringPlan?
+
 var isProd = environmentName == 'prod'
 var isPrimary = regionRole == 'primary'
 var nameSuffix = uniqueString(subscription().id, environmentName, location)
@@ -114,6 +117,12 @@ var adminSourceCidrs = concat([
   addressPlan.bastionSubnetPrefix
   addressPlan.vpnClientAddressPool
 ], managementSourceCidrs)
+var monitorPeeringRole = hubPeering.?monitorRole ?? 'None'
+// The region hosting the AMPLS endpoint SNATs the other region's monitoring traffic at its firewall, so the
+// private-endpoint NSG must admit the firewall subnet there (Phase 6).
+var peerTrafficSourceCidrs = monitorPeeringRole == 'Host' ? [
+  addressPlan.firewallSubnetPrefix
+] : []
 var privateEndpointSubnetName = 'private-endpoints'
 var appServiceIntegrationSubnetName = 'appservice-integration'
 
@@ -156,6 +165,8 @@ module hubNetwork 'hubNetwork.bicep' = {
       addressPlan.managementSubnetPrefix
     ]
     enableDeleteLock: isProd
+    remoteSpokeAddressPrefixes: hubPeering.?remoteSpokeAddressPrefixes ?? []
+    remoteFirewallPrivateIp: hubPeering.?remoteFirewallPrivateIp ?? ''
   }
 }
 
@@ -181,6 +192,9 @@ module azureFirewall 'azureFirewall.bicep' = {
     firewallTier: 'Premium'
     idpsMode: isProd ? 'Deny' : 'Alert'
     enableDeleteLock: isProd
+    monitorPeeringRole: monitorPeeringRole
+    monitorClientPrefixes: hubPeering.?monitorClientPrefixes ?? []
+    monitorPrivateEndpointPrefixes: hubPeering.?monitorPrivateEndpointPrefixes ?? []
   }
 }
 
@@ -199,7 +213,7 @@ module spokeNetwork 'spokeNetwork.bicep' = {
       addressPlan.appServiceIntegrationSubnetPrefix
       addressPlan.managementSubnetPrefix
       addressPlan.vpnClientAddressPool
-    ], additionalPrivateEndpointSourceCidrs)
+    ], peerTrafficSourceCidrs, additionalPrivateEndpointSourceCidrs)
     privateEndpointSubnetName: privateEndpointSubnetName
     appServiceIntegrationSubnetName: appServiceIntegrationSubnetName
     enableDeleteLock: isProd
