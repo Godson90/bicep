@@ -96,6 +96,11 @@ var privateDnsZoneNames privateDnsZoneSet = {
   blob: 'privatelink.blob.${environment().suffixes.storage}'
   sites: 'privatelink.azurewebsites.net'
   vault: 'privatelink.vaultcore.azure.net'
+  // Azure Monitor Private Link Scope zones (Phase 6); the AMPLS endpoint also registers in the blob zone above.
+  monitor: 'privatelink.monitor.azure.com'
+  oms: 'privatelink.oms.opinsights.azure.com'
+  ods: 'privatelink.ods.opinsights.azure.com'
+  agentsvc: 'privatelink.agentsvc.azure-automation.net'
 }
 
 // Shared layer: Log Analytics and private DNS zones. Resource groups are pre-created (runbook 01).
@@ -240,6 +245,34 @@ module privateDnsLinks 'modules/privateDnsZoneLinks.bicep' = [for zone in items(
   }
 }]
 
+// Private-only monitoring (Phase 6): one scope holds the workspace and every regional App Insights component.
+module monitorPrivateLinkScope 'modules/monitorPrivateLinkScope.bicep' = {
+  name: 'monitor-private-link-scope-${environmentName}'
+  scope: resourceGroup(globalResourceGroupName)
+  params: {
+    scopeName: 'ampls-defenstack-${environmentName}'
+    scopedResourceIds: concat([
+      global.outputs.logAnalyticsWorkspaceId
+      primaryStamp.outputs.appInsightsId
+    ], deploySecondaryRegion ? [
+      secondaryStamp!.outputs.appInsightsId
+    ] : [])
+  }
+}
+
+// The single azuremonitor endpoint, in the primary spoke, created once the scope holds every resource.
+module monitorPrivateEndpoint 'modules/monitorPrivateEndpoint.bicep' = {
+  name: 'monitor-private-endpoint-${environmentName}'
+  scope: resourceGroup(primaryResourceGroupName)
+  params: {
+    location: primaryLocation
+    privateLinkScopeId: monitorPrivateLinkScope.outputs.id
+    privateLinkScopeName: monitorPrivateLinkScope.outputs.name
+    privateEndpointSubnetId: primaryStamp.outputs.privateEndpointSubnetId
+    privateDnsZoneIds: global.outputs.privateDnsZoneIds
+  }
+}
+
 output primaryAppServiceHostName string = primaryStamp.outputs.appServiceHostName
 output secondaryAppServiceHostName string = deploySecondaryRegion ? secondaryStamp!.outputs.appServiceHostName : ''
 output primaryResourceGroupName string = primaryResourceGroupName
@@ -256,3 +289,4 @@ output appServiceIds array = concat([
 ], deploySecondaryRegion ? [
   secondaryStamp!.outputs.appServiceId
 ] : [])
+output monitorPrivateLinkScopeName string = monitorPrivateLinkScope.outputs.name

@@ -10,7 +10,7 @@ param componentName string
 param logAnalyticsWorkspaceId string
 
 // Workspace-based, Entra ID-only ingestion: the App Service identity needs Monitoring Metrics Publisher (appInsightsPublisher.bicep).
-// Public ingestion and query stay enabled until Phase 6 adds the Azure Monitor Private Link Scope (AMPLS).
+// Ingestion and query go only through the Azure Monitor Private Link Scope; the entry point scopes this component into it (Phase 6).
 resource component 'Microsoft.Insights/components@2020-02-02' = {
   name: componentName
   location: location
@@ -20,8 +20,8 @@ resource component 'Microsoft.Insights/components@2020-02-02' = {
     WorkspaceResourceId: logAnalyticsWorkspaceId
     IngestionMode: 'LogAnalytics'
     DisableLocalAuth: true
-    publicNetworkAccessForIngestion: 'Enabled'
-    publicNetworkAccessForQuery: 'Enabled'
+    publicNetworkAccessForIngestion: 'Disabled'
+    publicNetworkAccessForQuery: 'Disabled'
   }
 }
 

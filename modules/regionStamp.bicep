@@ -355,3 +355,5 @@ output storageAccountId string = storage.outputs.id
 output storageContainerName string = storage.outputs.blobContainerName
 output appServicePrincipalId string = appService.outputs.appServicePrincipalId
 output appInsightsName string = appInsights.outputs.name
+output appInsightsId string = appInsights.outputs.id
+output privateEndpointSubnetId string = spokeNetwork.outputs.privateEndpointSubnetId

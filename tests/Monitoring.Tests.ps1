@@ -31,3 +31,18 @@ Describe 'Log Analytics resilience (Phase 1)' {
         $lock.properties.level | Should -Be 'CanNotDelete'
     }
 }
+
+Describe 'Private-only workspace (Phase 6)' {
+    BeforeAll {
+        $workspace = Get-TemplateResource -Template $template -Type 'Microsoft.OperationalInsights/workspaces' | Select-Object -First 1
+    }
+
+    It 'accepts ingestion and queries only through the Azure Monitor Private Link Scope (F10)' {
+        $workspace.properties.publicNetworkAccessForIngestion | Should -Be 'Disabled'
+        $workspace.properties.publicNetworkAccessForQuery | Should -Be 'Disabled'
+    }
+
+    It 'keeps 90-day retention unchanged' {
+        $workspace.properties.retentionInDays | Should -Be "[parameters('retentionInDays')]"
+    }
+}

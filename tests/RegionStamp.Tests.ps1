@@ -94,6 +94,10 @@ Describe 'Region stamp outputs' {
             $stamp.outputs.PSObject.Properties.Name | Should -Contain $output
         }
     }
+
+    It 'outputs the private-endpoint subnet that hosts the AMPLS endpoint in the primary region (Phase 6)' {
+        $stamp.outputs.privateEndpointSubnetId.value | Should -Be "[reference('spokeNetwork').outputs.privateEndpointSubnetId.value]"
+    }
 }
 
 Describe 'Region stamp firewall security (Phase 2)' {

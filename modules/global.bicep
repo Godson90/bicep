@@ -28,49 +28,24 @@ module monitoring 'monitoring.bicep' = {
   }
 }
 
-// One set of private DNS zones for all regions; each region links its hub and spoke VNets.
-resource blobZone 'Microsoft.Network/privateDnsZones@2024-06-01' = {
-  name: privateDnsZoneNames.blob
+// One set of private DNS zones for all regions; each region links its hub and spoke VNets. The set holds the
+// application zones (blob, sites, vault) and, from Phase 6, the Azure Monitor Private Link Scope zones.
+resource zones 'Microsoft.Network/privateDnsZones@2024-06-01' = [for zone in items(privateDnsZoneNames): {
+  name: zone.value
   location: 'global'
-}
+}]
 
-resource sitesZone 'Microsoft.Network/privateDnsZones@2024-06-01' = {
-  name: privateDnsZoneNames.sites
-  location: 'global'
-}
-
-resource vaultZone 'Microsoft.Network/privateDnsZones@2024-06-01' = {
-  name: privateDnsZoneNames.vault
-  location: 'global'
-}
-
-resource blobZoneLock 'Microsoft.Authorization/locks@2020-05-01' = if (enableDeleteLock) {
-  scope: blobZone
-  name: 'blob-zone-lck'
+resource zoneLocks 'Microsoft.Authorization/locks@2020-05-01' = [for (zone, i) in items(privateDnsZoneNames): if (enableDeleteLock) {
+  scope: zones[i]
+  name: '${zone.key}-zone-lck'
   properties: {
     level: 'CanNotDelete'
   }
-}
-
-resource sitesZoneLock 'Microsoft.Authorization/locks@2020-05-01' = if (enableDeleteLock) {
-  scope: sitesZone
-  name: 'sites-zone-lck'
-  properties: {
-    level: 'CanNotDelete'
-  }
-}
-
-resource vaultZoneLock 'Microsoft.Authorization/locks@2020-05-01' = if (enableDeleteLock) {
-  scope: vaultZone
-  name: 'vault-zone-lck'
-  properties: {
-    level: 'CanNotDelete'
-  }
-}
+}]
 
 output logAnalyticsWorkspaceId string = monitoring.outputs.id
-output privateDnsZoneIds privateDnsZoneSet = {
-  blob: blobZone.id
-  sites: sitesZone.id
-  vault: vaultZone.id
-}
+output privateDnsZoneIds privateDnsZoneSet = toObject(
+  items(privateDnsZoneNames),
+  zone => zone.key,
+  zone => resourceId('Microsoft.Network/privateDnsZones', zone.value)
+)
