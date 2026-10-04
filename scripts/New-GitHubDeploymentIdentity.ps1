@@ -42,6 +42,10 @@ param(
     ),
 
     [Parameter()]
+    [ValidatePattern('^[-\w._()]{1,90}$')]
+    [string]$NetworkWatcherResourceGroupName = 'NetworkWatcherRG',
+
+    [Parameter()]
     [switch]$GrantLockManagement,
 
     [Parameter()]
@@ -84,6 +88,7 @@ $credentialEnvironments = if ($ungatedPlanEnvironments -contains $EnvironmentNam
 Write-Host "Application: $DisplayName"
 Write-Host "Federated subjects: $(($credentialEnvironments | ForEach-Object { "repo:${GitHubRepository}:environment:$_" }) -join ', ')"
 Write-Host "Resource group scopes: $($resourceGroupScopes -join ', ')"
+Write-Host "Flow-log scope (Network Contributor): $subscriptionScope/resourceGroups/$NetworkWatcherResourceGroupName"
 
 # 1. Application registration (idempotent by exact display name match).
 $appMatches = @(az ad app list --display-name $DisplayName --query "[?displayName=='$DisplayName'].appId" --output tsv | Where-Object { $_ })
@@ -286,6 +291,10 @@ foreach ($resourceGroupScope in $resourceGroupScopes) {
         Set-RoleAssignment -Role $lockRoleName -Scope $resourceGroupScope -AllowReplicationRetry
     }
 }
+
+# 6. VNet flow logs (Phase 6) are child resources of the region's Network Watcher, which Azure keeps in NetworkWatcherRG.
+#    Network Contributor there lets the pipeline manage them; it grants no role-assignment rights.
+Set-RoleAssignment -Role 'Network Contributor' -Scope "$subscriptionScope/resourceGroups/$NetworkWatcherResourceGroupName"
 
 $result = [pscustomobject]@{
     AZURE_CLIENT_ID       = $appId

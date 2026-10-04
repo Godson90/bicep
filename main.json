@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "14488013884002204099"
+      "templateHash": "13084345132132630548"
     }
   },
   "definitions": {
@@ -684,7 +684,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "10421658605003321235"
+              "templateHash": "10561423984633799507"
             }
           },
           "definitions": {
@@ -1056,7 +1056,9 @@
               "bastionPublicIp": "[format('pip-bas-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
               "vpnGateway": "[format('vpng-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
               "vpnGatewayPublicIp": "[format('pip-vpng-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
-              "appInsights": "[format('appi-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]"
+              "appInsights": "[format('appi-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
+              "flowLogStorageAccount": "[format('stfl{0}{1}', parameters('regionCode'), variables('nameSuffix'))]",
+              "flowLogIdentity": "[format('id-flowlogs-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]"
             },
             "firewallPrivateIp": "[cidrHost(parameters('addressPlan').firewallSubnetPrefix, 3)]",
             "adminSourceCidrs": "[concat(createArray(parameters('addressPlan').bastionSubnetPrefix, parameters('addressPlan').vpnClientAddressPool), parameters('managementSourceCidrs'))]",
@@ -5228,6 +5230,348 @@
                 "keyVault",
                 "spokeNetwork",
                 "storage"
+              ]
+            },
+            "flowLogStorage": {
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "flow-log-storage",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "location": {
+                    "value": "[parameters('location')]"
+                  },
+                  "storageAccountName": {
+                    "value": "[variables('names').flowLogStorageAccount]"
+                  },
+                  "storageAccountSkuName": "[if(variables('isProd'), createObject('value', 'Standard_ZRS'), createObject('value', 'Standard_LRS'))]",
+                  "identityName": {
+                    "value": "[variables('names').flowLogIdentity]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.47.16.16243",
+                      "templateHash": "773454335778080220"
+                    }
+                  },
+                  "parameters": {
+                    "location": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Azure region for the account and identity (the VNets' region)."
+                      }
+                    },
+                    "storageAccountName": {
+                      "type": "string",
+                      "minLength": 3,
+                      "maxLength": 24,
+                      "metadata": {
+                        "description": "Globally unique flow-log storage account name."
+                      }
+                    },
+                    "storageAccountSkuName": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Storage redundancy SKU for the flow-log account."
+                      }
+                    },
+                    "identityName": {
+                      "type": "string",
+                      "minLength": 3,
+                      "maxLength": 128,
+                      "metadata": {
+                        "description": "User-assigned managed identity name used by the flow logs."
+                      }
+                    },
+                    "softDeleteRetentionDays": {
+                      "type": "int",
+                      "defaultValue": 7,
+                      "minValue": 1,
+                      "maxValue": 365,
+                      "metadata": {
+                        "description": "Days that deleted flow-log blobs and containers stay recoverable."
+                      }
+                    }
+                  },
+                  "variables": {
+                    "storageBlobDataContributorRoleId": "ba92f5b4-2d11-453d-a403-e96b0029c9fe"
+                  },
+                  "resources": [
+                    {
+                      "type": "Microsoft.Storage/storageAccounts/blobServices",
+                      "apiVersion": "2026-04-01",
+                      "name": "[format('{0}/{1}', parameters('storageAccountName'), 'default')]",
+                      "properties": {
+                        "deleteRetentionPolicy": {
+                          "enabled": true,
+                          "days": "[parameters('softDeleteRetentionDays')]"
+                        },
+                        "containerDeleteRetentionPolicy": {
+                          "enabled": true,
+                          "days": "[parameters('softDeleteRetentionDays')]"
+                        }
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.Storage/storageAccounts",
+                      "apiVersion": "2026-04-01",
+                      "name": "[parameters('storageAccountName')]",
+                      "location": "[parameters('location')]",
+                      "sku": {
+                        "name": "[parameters('storageAccountSkuName')]"
+                      },
+                      "kind": "StorageV2",
+                      "properties": {
+                        "accessTier": "Hot",
+                        "allowBlobPublicAccess": false,
+                        "allowSharedKeyAccess": false,
+                        "defaultToOAuthAuthentication": true,
+                        "minimumTlsVersion": "TLS1_2",
+                        "publicNetworkAccess": "Disabled",
+                        "supportsHttpsTrafficOnly": true,
+                        "networkAcls": {
+                          "defaultAction": "Deny",
+                          "bypass": "AzureServices"
+                        }
+                      }
+                    },
+                    {
+                      "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+                      "apiVersion": "2023-01-31",
+                      "name": "[parameters('identityName')]",
+                      "location": "[parameters('location')]"
+                    },
+                    {
+                      "type": "Microsoft.Authorization/roleAssignments",
+                      "apiVersion": "2022-04-01",
+                      "scope": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
+                      "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('identityName')), variables('storageBlobDataContributorRoleId'))]",
+                      "properties": {
+                        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('identityName')), '2023-01-31').principalId]",
+                        "principalType": "ServicePrincipal",
+                        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageBlobDataContributorRoleId'))]"
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('identityName'))]",
+                        "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]"
+                      ]
+                    }
+                  ],
+                  "outputs": {
+                    "id": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]"
+                    },
+                    "identityId": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('identityName'))]"
+                    }
+                  }
+                }
+              }
+            },
+            "flowLogs": {
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "[format('flow-logs-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
+              "resourceGroup": "NetworkWatcherRG",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "location": {
+                    "value": "[parameters('location')]"
+                  },
+                  "virtualNetworks": {
+                    "value": [
+                      {
+                        "name": "[variables('names').hubVnet]",
+                        "id": "[reference('hubNetwork').outputs.id.value]"
+                      },
+                      {
+                        "name": "[variables('names').spokeVnet]",
+                        "id": "[reference('spokeNetwork').outputs.id.value]"
+                      }
+                    ]
+                  },
+                  "storageAccountId": {
+                    "value": "[reference('flowLogStorage').outputs.id.value]"
+                  },
+                  "identityId": {
+                    "value": "[reference('flowLogStorage').outputs.identityId.value]"
+                  },
+                  "logAnalyticsWorkspaceId": {
+                    "value": "[parameters('logAnalyticsWorkspaceId')]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "languageVersion": "2.0",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.47.16.16243",
+                      "templateHash": "2097382862730169379"
+                    }
+                  },
+                  "definitions": {
+                    "virtualNetworkReference": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "metadata": {
+                            "description": "VNet name; used to build a unique link name."
+                          }
+                        },
+                        "id": {
+                          "type": "string",
+                          "metadata": {
+                            "description": "VNet resource ID."
+                          }
+                        }
+                      },
+                      "metadata": {
+                        "description": "A virtual network to link to a private DNS zone.",
+                        "__bicep_imported_from!": {
+                          "sourceTemplate": "types.bicep"
+                        }
+                      }
+                    }
+                  },
+                  "parameters": {
+                    "location": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Azure region of the VNets, their Network Watcher and the flow-log storage account."
+                      }
+                    },
+                    "virtualNetworks": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/definitions/virtualNetworkReference"
+                      },
+                      "metadata": {
+                        "description": "VNets to record. Each gets one flow log named <vnet>-flowlog."
+                      }
+                    },
+                    "storageAccountId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Flow-log storage account resource ID, in the same region as the VNets."
+                      }
+                    },
+                    "identityId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "User-assigned identity resource ID with Storage Blob Data Contributor on the flow-log account."
+                      }
+                    },
+                    "logAnalyticsWorkspaceId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Central Log Analytics workspace resource ID that receives Traffic Analytics."
+                      }
+                    },
+                    "retentionDays": {
+                      "type": "int",
+                      "defaultValue": 90,
+                      "minValue": 1,
+                      "maxValue": 365,
+                      "metadata": {
+                        "description": "Days of flow records kept in the storage account."
+                      }
+                    },
+                    "trafficAnalyticsIntervalMinutes": {
+                      "type": "int",
+                      "defaultValue": 10,
+                      "allowedValues": [
+                        10,
+                        60
+                      ],
+                      "metadata": {
+                        "description": "Traffic Analytics processing interval in minutes."
+                      }
+                    }
+                  },
+                  "resources": {
+                    "networkWatcher": {
+                      "existing": true,
+                      "type": "Microsoft.Network/networkWatchers",
+                      "apiVersion": "2024-07-01",
+                      "name": "[format('NetworkWatcher_{0}', parameters('location'))]"
+                    },
+                    "workspace": {
+                      "existing": true,
+                      "type": "Microsoft.OperationalInsights/workspaces",
+                      "apiVersion": "2026-03-01",
+                      "subscriptionId": "[split(parameters('logAnalyticsWorkspaceId'), '/')[2]]",
+                      "resourceGroup": "[split(parameters('logAnalyticsWorkspaceId'), '/')[4]]",
+                      "name": "[last(split(parameters('logAnalyticsWorkspaceId'), '/'))]"
+                    },
+                    "flowLogs": {
+                      "copy": {
+                        "name": "flowLogs",
+                        "count": "[length(parameters('virtualNetworks'))]"
+                      },
+                      "type": "Microsoft.Network/networkWatchers/flowLogs",
+                      "apiVersion": "2024-07-01",
+                      "name": "[format('{0}/{1}', format('NetworkWatcher_{0}', parameters('location')), format('{0}-flowlog', parameters('virtualNetworks')[copyIndex()].name))]",
+                      "location": "[parameters('location')]",
+                      "identity": {
+                        "type": "UserAssigned",
+                        "userAssignedIdentities": {
+                          "[format('{0}', parameters('identityId'))]": {}
+                        }
+                      },
+                      "properties": {
+                        "targetResourceId": "[parameters('virtualNetworks')[copyIndex()].id]",
+                        "storageId": "[parameters('storageAccountId')]",
+                        "enabled": true,
+                        "format": {
+                          "type": "JSON",
+                          "version": 2
+                        },
+                        "retentionPolicy": {
+                          "enabled": true,
+                          "days": "[parameters('retentionDays')]"
+                        },
+                        "flowAnalyticsConfiguration": {
+                          "networkWatcherFlowAnalyticsConfiguration": {
+                            "enabled": true,
+                            "workspaceResourceId": "[parameters('logAnalyticsWorkspaceId')]",
+                            "workspaceId": "[reference('workspace').customerId]",
+                            "workspaceRegion": "[reference('workspace', '2026-03-01', 'full').location]",
+                            "trafficAnalyticsInterval": "[parameters('trafficAnalyticsIntervalMinutes')]"
+                          }
+                        }
+                      },
+                      "dependsOn": [
+                        "workspace"
+                      ]
+                    }
+                  }
+                }
+              },
+              "dependsOn": [
+                "flowLogStorage",
+                "hubNetwork",
+                "spokeNetwork"
               ]
             }
           },
@@ -5386,7 +5730,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "10421658605003321235"
+              "templateHash": "10561423984633799507"
             }
           },
           "definitions": {
@@ -5758,7 +6102,9 @@
               "bastionPublicIp": "[format('pip-bas-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
               "vpnGateway": "[format('vpng-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
               "vpnGatewayPublicIp": "[format('pip-vpng-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
-              "appInsights": "[format('appi-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]"
+              "appInsights": "[format('appi-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
+              "flowLogStorageAccount": "[format('stfl{0}{1}', parameters('regionCode'), variables('nameSuffix'))]",
+              "flowLogIdentity": "[format('id-flowlogs-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]"
             },
             "firewallPrivateIp": "[cidrHost(parameters('addressPlan').firewallSubnetPrefix, 3)]",
             "adminSourceCidrs": "[concat(createArray(parameters('addressPlan').bastionSubnetPrefix, parameters('addressPlan').vpnClientAddressPool), parameters('managementSourceCidrs'))]",
@@ -9930,6 +10276,348 @@
                 "keyVault",
                 "spokeNetwork",
                 "storage"
+              ]
+            },
+            "flowLogStorage": {
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "flow-log-storage",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "location": {
+                    "value": "[parameters('location')]"
+                  },
+                  "storageAccountName": {
+                    "value": "[variables('names').flowLogStorageAccount]"
+                  },
+                  "storageAccountSkuName": "[if(variables('isProd'), createObject('value', 'Standard_ZRS'), createObject('value', 'Standard_LRS'))]",
+                  "identityName": {
+                    "value": "[variables('names').flowLogIdentity]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.47.16.16243",
+                      "templateHash": "773454335778080220"
+                    }
+                  },
+                  "parameters": {
+                    "location": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Azure region for the account and identity (the VNets' region)."
+                      }
+                    },
+                    "storageAccountName": {
+                      "type": "string",
+                      "minLength": 3,
+                      "maxLength": 24,
+                      "metadata": {
+                        "description": "Globally unique flow-log storage account name."
+                      }
+                    },
+                    "storageAccountSkuName": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Storage redundancy SKU for the flow-log account."
+                      }
+                    },
+                    "identityName": {
+                      "type": "string",
+                      "minLength": 3,
+                      "maxLength": 128,
+                      "metadata": {
+                        "description": "User-assigned managed identity name used by the flow logs."
+                      }
+                    },
+                    "softDeleteRetentionDays": {
+                      "type": "int",
+                      "defaultValue": 7,
+                      "minValue": 1,
+                      "maxValue": 365,
+                      "metadata": {
+                        "description": "Days that deleted flow-log blobs and containers stay recoverable."
+                      }
+                    }
+                  },
+                  "variables": {
+                    "storageBlobDataContributorRoleId": "ba92f5b4-2d11-453d-a403-e96b0029c9fe"
+                  },
+                  "resources": [
+                    {
+                      "type": "Microsoft.Storage/storageAccounts/blobServices",
+                      "apiVersion": "2026-04-01",
+                      "name": "[format('{0}/{1}', parameters('storageAccountName'), 'default')]",
+                      "properties": {
+                        "deleteRetentionPolicy": {
+                          "enabled": true,
+                          "days": "[parameters('softDeleteRetentionDays')]"
+                        },
+                        "containerDeleteRetentionPolicy": {
+                          "enabled": true,
+                          "days": "[parameters('softDeleteRetentionDays')]"
+                        }
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]"
+                      ]
+                    },
+                    {
+                      "type": "Microsoft.Storage/storageAccounts",
+                      "apiVersion": "2026-04-01",
+                      "name": "[parameters('storageAccountName')]",
+                      "location": "[parameters('location')]",
+                      "sku": {
+                        "name": "[parameters('storageAccountSkuName')]"
+                      },
+                      "kind": "StorageV2",
+                      "properties": {
+                        "accessTier": "Hot",
+                        "allowBlobPublicAccess": false,
+                        "allowSharedKeyAccess": false,
+                        "defaultToOAuthAuthentication": true,
+                        "minimumTlsVersion": "TLS1_2",
+                        "publicNetworkAccess": "Disabled",
+                        "supportsHttpsTrafficOnly": true,
+                        "networkAcls": {
+                          "defaultAction": "Deny",
+                          "bypass": "AzureServices"
+                        }
+                      }
+                    },
+                    {
+                      "type": "Microsoft.ManagedIdentity/userAssignedIdentities",
+                      "apiVersion": "2023-01-31",
+                      "name": "[parameters('identityName')]",
+                      "location": "[parameters('location')]"
+                    },
+                    {
+                      "type": "Microsoft.Authorization/roleAssignments",
+                      "apiVersion": "2022-04-01",
+                      "scope": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
+                      "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('identityName')), variables('storageBlobDataContributorRoleId'))]",
+                      "properties": {
+                        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('identityName')), '2023-01-31').principalId]",
+                        "principalType": "ServicePrincipal",
+                        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageBlobDataContributorRoleId'))]"
+                      },
+                      "dependsOn": [
+                        "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('identityName'))]",
+                        "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]"
+                      ]
+                    }
+                  ],
+                  "outputs": {
+                    "id": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]"
+                    },
+                    "identityId": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', parameters('identityName'))]"
+                    }
+                  }
+                }
+              }
+            },
+            "flowLogs": {
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "[format('flow-logs-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
+              "resourceGroup": "NetworkWatcherRG",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "location": {
+                    "value": "[parameters('location')]"
+                  },
+                  "virtualNetworks": {
+                    "value": [
+                      {
+                        "name": "[variables('names').hubVnet]",
+                        "id": "[reference('hubNetwork').outputs.id.value]"
+                      },
+                      {
+                        "name": "[variables('names').spokeVnet]",
+                        "id": "[reference('spokeNetwork').outputs.id.value]"
+                      }
+                    ]
+                  },
+                  "storageAccountId": {
+                    "value": "[reference('flowLogStorage').outputs.id.value]"
+                  },
+                  "identityId": {
+                    "value": "[reference('flowLogStorage').outputs.identityId.value]"
+                  },
+                  "logAnalyticsWorkspaceId": {
+                    "value": "[parameters('logAnalyticsWorkspaceId')]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "languageVersion": "2.0",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.47.16.16243",
+                      "templateHash": "2097382862730169379"
+                    }
+                  },
+                  "definitions": {
+                    "virtualNetworkReference": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "metadata": {
+                            "description": "VNet name; used to build a unique link name."
+                          }
+                        },
+                        "id": {
+                          "type": "string",
+                          "metadata": {
+                            "description": "VNet resource ID."
+                          }
+                        }
+                      },
+                      "metadata": {
+                        "description": "A virtual network to link to a private DNS zone.",
+                        "__bicep_imported_from!": {
+                          "sourceTemplate": "types.bicep"
+                        }
+                      }
+                    }
+                  },
+                  "parameters": {
+                    "location": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Azure region of the VNets, their Network Watcher and the flow-log storage account."
+                      }
+                    },
+                    "virtualNetworks": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/definitions/virtualNetworkReference"
+                      },
+                      "metadata": {
+                        "description": "VNets to record. Each gets one flow log named <vnet>-flowlog."
+                      }
+                    },
+                    "storageAccountId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Flow-log storage account resource ID, in the same region as the VNets."
+                      }
+                    },
+                    "identityId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "User-assigned identity resource ID with Storage Blob Data Contributor on the flow-log account."
+                      }
+                    },
+                    "logAnalyticsWorkspaceId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Central Log Analytics workspace resource ID that receives Traffic Analytics."
+                      }
+                    },
+                    "retentionDays": {
+                      "type": "int",
+                      "defaultValue": 90,
+                      "minValue": 1,
+                      "maxValue": 365,
+                      "metadata": {
+                        "description": "Days of flow records kept in the storage account."
+                      }
+                    },
+                    "trafficAnalyticsIntervalMinutes": {
+                      "type": "int",
+                      "defaultValue": 10,
+                      "allowedValues": [
+                        10,
+                        60
+                      ],
+                      "metadata": {
+                        "description": "Traffic Analytics processing interval in minutes."
+                      }
+                    }
+                  },
+                  "resources": {
+                    "networkWatcher": {
+                      "existing": true,
+                      "type": "Microsoft.Network/networkWatchers",
+                      "apiVersion": "2024-07-01",
+                      "name": "[format('NetworkWatcher_{0}', parameters('location'))]"
+                    },
+                    "workspace": {
+                      "existing": true,
+                      "type": "Microsoft.OperationalInsights/workspaces",
+                      "apiVersion": "2026-03-01",
+                      "subscriptionId": "[split(parameters('logAnalyticsWorkspaceId'), '/')[2]]",
+                      "resourceGroup": "[split(parameters('logAnalyticsWorkspaceId'), '/')[4]]",
+                      "name": "[last(split(parameters('logAnalyticsWorkspaceId'), '/'))]"
+                    },
+                    "flowLogs": {
+                      "copy": {
+                        "name": "flowLogs",
+                        "count": "[length(parameters('virtualNetworks'))]"
+                      },
+                      "type": "Microsoft.Network/networkWatchers/flowLogs",
+                      "apiVersion": "2024-07-01",
+                      "name": "[format('{0}/{1}', format('NetworkWatcher_{0}', parameters('location')), format('{0}-flowlog', parameters('virtualNetworks')[copyIndex()].name))]",
+                      "location": "[parameters('location')]",
+                      "identity": {
+                        "type": "UserAssigned",
+                        "userAssignedIdentities": {
+                          "[format('{0}', parameters('identityId'))]": {}
+                        }
+                      },
+                      "properties": {
+                        "targetResourceId": "[parameters('virtualNetworks')[copyIndex()].id]",
+                        "storageId": "[parameters('storageAccountId')]",
+                        "enabled": true,
+                        "format": {
+                          "type": "JSON",
+                          "version": 2
+                        },
+                        "retentionPolicy": {
+                          "enabled": true,
+                          "days": "[parameters('retentionDays')]"
+                        },
+                        "flowAnalyticsConfiguration": {
+                          "networkWatcherFlowAnalyticsConfiguration": {
+                            "enabled": true,
+                            "workspaceResourceId": "[parameters('logAnalyticsWorkspaceId')]",
+                            "workspaceId": "[reference('workspace').customerId]",
+                            "workspaceRegion": "[reference('workspace', '2026-03-01', 'full').location]",
+                            "trafficAnalyticsInterval": "[parameters('trafficAnalyticsIntervalMinutes')]"
+                          }
+                        }
+                      },
+                      "dependsOn": [
+                        "workspace"
+                      ]
+                    }
+                  }
+                }
+              },
+              "dependsOn": [
+                "flowLogStorage",
+                "hubNetwork",
+                "spokeNetwork"
               ]
             }
           },

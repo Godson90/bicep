@@ -223,3 +223,39 @@ Describe 'Region stamp hub peering (Phase 6)' {
         (Get-StampModuleParameters 'spoke-network').approvedPrivateEndpointSourceCidrs.value | Should -Match "variables\('peerTrafficSourceCidrs'\)"
     }
 }
+
+Describe 'Region stamp flow logs (Phase 6)' {
+    BeforeAll {
+        $flowLogs = Get-ModuleDeployment -Template $stamp -Name "[format('flow-logs-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]"
+    }
+
+    It 'names the flow-log account and identity per environment and region' {
+        $stamp.variables.names.flowLogStorageAccount | Should -Be "[format('stfl{0}{1}', parameters('regionCode'), variables('nameSuffix'))]"
+        $stamp.variables.names.flowLogIdentity | Should -Match "parameters\('environmentName'\), parameters\('regionCode'\)"
+    }
+
+    It 'keeps flow logs zone-redundant in prod and locally redundant in dev' {
+        (Get-StampModuleParameters 'flow-log-storage').storageAccountSkuName |
+            Should -Be "[if(variables('isProd'), createObject('value', 'Standard_ZRS'), createObject('value', 'Standard_LRS'))]"
+    }
+
+    It 'deploys the flow logs into NetworkWatcherRG, where the region''s Network Watcher lives' {
+        $flowLogs.resourceGroup | Should -Be 'NetworkWatcherRG'
+        $flowLogs.properties.parameters.location.value | Should -Be "[parameters('location')]"
+    }
+
+    It 'logs both the hub and the spoke VNet' {
+        $value = @($flowLogs.properties.parameters.virtualNetworks.value)
+        $value[0].name | Should -Be "[variables('names').hubVnet]"
+        $value[0].id | Should -Be "[reference('hubNetwork').outputs.id.value]"
+        $value[1].name | Should -Be "[variables('names').spokeVnet]"
+        $value[1].id | Should -Be "[reference('spokeNetwork').outputs.id.value]"
+    }
+
+    It 'writes with the flow-log identity to the flow-log account and analyses into the central workspace' {
+        $parameters = $flowLogs.properties.parameters
+        $parameters.storageAccountId.value | Should -Be "[reference('flowLogStorage').outputs.id.value]"
+        $parameters.identityId.value | Should -Be "[reference('flowLogStorage').outputs.identityId.value]"
+        $parameters.logAnalyticsWorkspaceId.value | Should -Be "[parameters('logAnalyticsWorkspaceId')]"
+    }
+}

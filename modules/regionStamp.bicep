@@ -108,6 +108,8 @@ var names = {
   vpnGateway: 'vpng-defenstack-${environmentName}-${regionCode}'
   vpnGatewayPublicIp: 'pip-vpng-defenstack-${environmentName}-${regionCode}'
   appInsights: 'appi-defenstack-${environmentName}-${regionCode}'
+  flowLogStorageAccount: 'stfl${regionCode}${nameSuffix}'
+  flowLogIdentity: 'id-flowlogs-defenstack-${environmentName}-${regionCode}'
 }
 // Azure Firewall always takes the first usable address (.4) of AzureFirewallSubnet. The hub needs it before
 // the firewall exists (GatewaySubnet route table); runbook 03 checks it matches the firewall's actual IP.
@@ -349,6 +351,40 @@ module privateConnectivity 'privateConnectivity.bicep' = {
     keyVaultId: keyVault.outputs.id
     keyVaultName: names.keyVault
     privateDnsZoneIds: privateDnsZoneIds
+  }
+}
+
+// VNet flow logs with Traffic Analytics (Phase 6): a regional keyless account and the identity that writes to it.
+module flowLogStorage 'flowLogStorage.bicep' = {
+  name: 'flow-log-storage'
+  params: {
+    location: location
+    storageAccountName: names.flowLogStorageAccount
+    // Zone-redundant in prod; flow logs are regional telemetry, so no geo copy. Dev: LRS (ADR-008).
+    storageAccountSkuName: isProd ? 'Standard_ZRS' : 'Standard_LRS'
+    identityName: names.flowLogIdentity
+  }
+}
+
+// Network Watcher lives in NetworkWatcherRG (one per region per subscription), so the flow logs are deployed there.
+module flowLogs 'flowLogs.bicep' = {
+  name: 'flow-logs-${environmentName}-${regionCode}'
+  scope: resourceGroup('NetworkWatcherRG')
+  params: {
+    location: location
+    virtualNetworks: [
+      {
+        name: names.hubVnet
+        id: hubNetwork.outputs.id
+      }
+      {
+        name: names.spokeVnet
+        id: spokeNetwork.outputs.id
+      }
+    ]
+    storageAccountId: flowLogStorage.outputs.id
+    identityId: flowLogStorage.outputs.identityId
+    logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
   }
 }
 
