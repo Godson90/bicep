@@ -28,7 +28,7 @@ Data protection is unchanged from Phase 0 (F7) on every account:
 **Application Insights (`modules/appInsights.bicep`):**
 - One workspace-based component per region, `appi-defenstack-<env>-<region>`, storing telemetry in `log-defenstack-<env>` (`ADR-021`).
 - Key-based ingestion is **disabled**. The App Service identity sends telemetry with Entra ID, using **Monitoring Metrics Publisher** on its own component.
-- Public ingestion stays on until Phase 6 adds the Azure Monitor Private Link Scope.
+- Ingestion and queries are private: from Phase 6 the components accept them only through the Azure Monitor Private Link Scope ([runbook 06](06-monitoring-and-sentinel.md), `ADR-022`).
 
 **App Service (`modules/appService.bicep`):**
 - App settings `APPLICATIONINSIGHTS_CONNECTION_STRING` and `APPLICATIONINSIGHTS_AUTHENTICATION_STRING=Authorization=AAD`.
@@ -41,7 +41,7 @@ Data protection is unchanged from Phase 0 (F7) on every account:
 - An empty or unset secret writes nothing.
 
 **Not in scope:**
-- AMPLS and private ingestion (Phase 6).
+- AMPLS, alerts and Sentinel ([runbook 06](06-monitoring-and-sentinel.md)).
 - Recovery Services vaults and the failover procedure (Phase 8).
 - App code and its own use of the secrets.
 
@@ -199,8 +199,8 @@ Paste every output into the Phase 5 PR (spec §6 definition of done).
 ## 8. Operations
 
 - **Secret rotation:** rotate at the source system, then §5.1 "Add or rotate". Record the rotation in the change log, never the value.
-- **Geo-replication health:** check `lastSyncTime` (§5.3) weekly. Phase 6 adds an alert on it.
-- **Telemetry:** start in the workspace (`AppRequests`, `AppExceptions`, `AppDependencies`), filtered by `AppRoleName` per region. The App Insights blade works too, because the components are workspace-based.
+- **Geo-replication health:** check `lastSyncTime` (§5.3) weekly. The Phase 6 alerts do not cover it; Phase 8 (DR) revisits it with the backup alerts.
+- **Telemetry:** start in the workspace (`AppRequests`, `AppExceptions`, `AppDependencies`), filtered by `AppRoleName` per region. The App Insights blade works too, because the components are workspace-based. From Phase 6, both work only from the VPN or the jump host (runbook 06 §5.2).
 - **Cost drivers** (`docs/cost.md` "Phase 5 delta"):
   - the RA-GZRS premium over GRS on the prod primary account, plus geo-replication data transfer;
   - one extra private endpoint (East US);

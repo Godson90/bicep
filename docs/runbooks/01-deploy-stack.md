@@ -6,7 +6,7 @@
 
 Deploys or updates one environment (`dev` or `prod`) of the Phase 1 stack: a single `az deployment sub create` against `main.bicep` that fans out, by `resourceGroup(name)`, to resource groups the operator pre-created. It creates or updates:
 
-- The global layer (`modules/global.bicep`) in `rg-defenstack-<env>-global`: the Log Analytics workspace and the three shared private DNS zones.
+- The global layer (`modules/global.bicep`) in `rg-defenstack-<env>-global`: the Log Analytics workspace and the shared private DNS zones (three application zones, plus the four Azure Monitor zones from Phase 6).
 - The primary region stamp (`modules/regionStamp.bicep`), always, in `rg-defenstack-<env>-wus3`.
 - The secondary region stamp, only when `deploySecondaryRegion = true` (prod), in `rg-defenstack-<env>-eus`.
 - The private DNS zone VNet links for every deployed stamp's hub and spoke.
@@ -27,7 +27,7 @@ It does **not** create resource groups (§4 step 2, a human operator action) or 
   }
   ```
 
-  Expect `Registered` for all six.
+  Expect `Registered` for all six. Phase 6 also needs `Microsoft.SecurityInsights` (Microsoft Sentinel); register it the same way ([runbook 06](06-monitoring-and-sentinel.md) §2).
 - **EncryptionAtHost**, only if a VM is enabled (`enableVirtualMachine = true`): register once per subscription, then wait for `Registered`.
 
   ```powershell
@@ -56,6 +56,8 @@ Every `main.bicep` parameter, with the value each committed `.bicepparam` file s
 | `adminGroupObjectId` | `''` | dev admin group | prod admin group | Entra group granted `Virtual Machine Administrator Login` on the jump host (runbook 03 §4) |
 | `customDomainHostName` | `''` | `''` | `''` until the domain exists | Front Door custom domain at the external DNS host ([runbook 04](04-ingress.md) §5.1) |
 | `keyVaultSecrets` (`@secure()`) | `{}` | from `KEYVAULT_SECRETS_JSON` | from `KEYVAULT_SECRETS_JSON` | Never set in a parameter file; the pipeline supplies it ([runbook 05](05-app-and-data.md) §5.1) |
+| `alertEmail` | `''` | from `ALERT_EMAIL` | from `ALERT_EMAIL` (required) | Receiver of every platform alert; the pipeline supplies it ([runbook 06](06-monitoring-and-sentinel.md) §4 step 3) |
+| `alertThresholds` | `{ appServiceHttp5xx: 10, keyVaultForbidden: 10, vpnP2sConnections: 20, frontDoorWafBlocks: 100 }` | *(default)* | *(default)* | Count thresholds for the Phase 6 alerts ([runbook 06](06-monitoring-and-sentinel.md) §3) |
 | `healthCheckPath` | `/` | *(default)* | *(default)* | No application code yet (`ADR-006`) |
 | `enableVirtualMachine` | `false` | *(default)* | *(default)* | Optional management VM, primary region only |
 | `virtualMachineOsType` | `Linux` | *(default)* | *(default)* | Only relevant if `enableVirtualMachine = true` |
@@ -80,7 +82,14 @@ Every `main.bicep` parameter, with the value each committed `.bicepparam` file s
    if ($env -eq 'prod') { az group create -n 'rg-defenstack-prod-eus' -l eastus -o table }
    ```
 
-3. Run [runbook 00b](00b-configure-pipeline-credentials.md) for the environment's identity, passing every resource group just created as `-ResourceGroupNames` (dev: the two `dev` groups; prod: all three `prod` groups, plus `-GrantLockManagement`). This grants the identity the subscription-scope custom role (`DefenStack Subscription Deployment Operator`), per-resource-group `Contributor`, and per-resource-group ABAC-constrained `Role Based Access Control Administrator`.
+   Then make sure Network Watcher exists in every region the environment uses (Phase 6). `NetworkWatcherRG` and `NetworkWatcher_<region>` must exist **before** the identity script (step 3) and the deployment run: the script grants Network Contributor on `NetworkWatcherRG`, and the flow logs are created under the regional watcher. Azure usually creates them with the first VNet in a region; if `az network watcher list -o table` does not show them, run:
+
+   ```powershell
+   if ((az group exists --name NetworkWatcherRG) -eq 'false') { az group create --name NetworkWatcherRG --location westus3 -o none }
+   az network watcher configure --resource-group NetworkWatcherRG --locations westus3 eastus --enabled true
+   ```
+
+3. Run [runbook 00b](00b-configure-pipeline-credentials.md) for the environment's identity, passing every resource group just created as `-ResourceGroupNames` (dev: the two `dev` groups; prod: all three `prod` groups, plus `-GrantLockManagement`). This grants the identity the subscription-scope custom role (`DefenStack Subscription Deployment Operator`), per-resource-group `Contributor`, per-resource-group ABAC-constrained `Role Based Access Control Administrator`, and `Network Contributor` on `NetworkWatcherRG` (Phase 6). Also set the `ALERT_EMAIL` environment variable ([runbook 06](06-monitoring-and-sentinel.md) §4 step 3); a prod deploy refuses to run without it.
 
 4. Validate:
 
@@ -170,6 +179,7 @@ Every `main.bicep` parameter, with the value each committed `.bicepparam` file s
 |---|---|---|
 | `ResourceGroupNotFound` | A referenced resource group was not pre-created, or the wrong subscription is selected | Run §4 step 2 first; confirm `az account show` |
 | `The template parameter 'secondaryAddressPlan' is null. Assign a value to this parameter …` (a type error on `addressPlan`) | `deploySecondaryRegion = true` without also setting `secondaryAddressPlan` | `params/prod.bicepparam` already supplies `secondaryAddressPlan`; if you copy `dev.bicepparam` and only flip `deploySecondaryRegion`, you must also add `secondaryAddressPlan` |
+| `ResourceNotFound` for `NetworkWatcher_<region>`, or the identity script fails on `NetworkWatcherRG` | Network Watcher was never created in that region (Phase 6 flow logs) | §4 step 2: `az network watcher configure --resource-group NetworkWatcherRG --locations westus3 eastus --enabled true`, then re-run |
 | Deployment fails with a duplicate-deployment or resource-conflict error, both stamps writing what looks like the same names | `primaryLocation` equals `secondaryLocation` while `deploySecondaryRegion = true` | The two regions must differ; use the shipped defaults (`westus3` / `eastus`) or another distinct pair |
 | Key Vault create fails: `A vault with the same name already exists in deleted state`, or `ConflictError` mentioning soft-deleted | Deterministic Key Vault name collides with a soft-deleted, purge-protected vault from a prior deploy of the same environment/region (§7) | `az keyvault recover --name <name>`, then redeploy; or wait out the 90-day retention; `az keyvault purge` is blocked by purge protection |
 | `az keyvault list-deleted` shows the name you need | Confirms the §7/above scenario | Recover it (`az keyvault recover`), or wait out the 90-day retention; `environmentName` cannot be changed to work around this without a code change (§7) |

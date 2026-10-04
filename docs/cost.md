@@ -141,11 +141,37 @@ RA-GZRS vs GRS, measured capacity plus geo-replication GB; Private Link: one
 endpoint; Log Analytics: the measured `App*` ingestion from a week of dev
 traffic).
 
+## Phase 6 delta
+Phase 6 adds private-only Azure Monitor, flow logs with Traffic Analytics,
+Microsoft Sentinel, alerts and, in prod with DR, hub-to-hub global peering.
+As with every phase, **fill in the actual dollar estimate from the Pricing
+Calculator; do not invent prices.**
+
+| Environment | Cost driver | What changed / why it costs more |
+|---|---|---|
+| Both | Microsoft Sentinel ingestion | Sentinel bills per GB analysed on top of Log Analytics ingestion, for every table in `log-defenstack-<env>` (`ADR-024`). Retention stays 90 days, which Sentinel includes. Measure with `Usage \| where IsBillable \| summarize sum(Quantity) by DataType` |
+| Both | Activity Log ingestion | `AzureActivity` is free to ingest into Log Analytics; it adds Sentinel analysis only |
+| Both | Traffic Analytics | Per GB of flow-log data processed, per region, every 10 minutes (`ADR-023`); `NTANetAnalytics` ingestion is billed as Log Analytics data |
+| Both | VNet flow logs and flow-log storage | Flow logs are billed per GB collected; the flow-log storage account per region holds 90 days (prod `Standard_ZRS`, dev `Standard_LRS`), plus transactions |
+| Both | AMPLS private endpoint ×1 | The AMPLS itself is free; its one private endpoint is billed hourly and per GB processed, which is all workspace and App Insights ingestion and query traffic (`ADR-022`) |
+| Both | Private DNS zones ×4 and their VNet links | Four more zones (monitor, oms, ods, agentsvc), billed per zone per month, plus their VNet links (dev 2 per zone, prod 4) and queries |
+| Prod | Global VNet peering, hub to hub | Billed per GB in **both** directions between West US 3 and East US. Only East US telemetry crosses (`ADR-022`); measure with the peering's bytes metrics |
+| Prod | Firewall data processing | East US telemetry now crosses both firewalls, so it is processed twice |
+| Both | Alert rules | Each metric alert rule is billed per monitored time series per month (seven per region, two for Front Door); the Service Health activity log alert and the action group's email notifications are free up to the monthly allowance |
+| Both | Backup job alert | Not deployed until Phase 8 |
+
+**Estimate:** fill in from the Pricing Calculator (Microsoft Sentinel and
+Log Analytics: pay-as-you-go GB per day from a week of dev `Usage`; Network
+Watcher: flow logs collected and Traffic Analytics processed; Storage: ZRS and
+LRS block blob for 90 days of flow logs; Private Link: one endpoint; Azure
+DNS: four private zones; Virtual Network: global peering GB both ways;
+Azure Monitor: metric alert rules).
+
 ## Dominant future cost drivers
 From `docs/superpowers/specs/2026-09-25-secure-connectivity-design.md` §6, the
 resources expected to dominate spend in later phases (not present in Phase 0).
 The VPN gateway and Azure Bastion arrived in Phase 3, and Azure Front Door
-Premium in Phase 4 (see their deltas):
+Premium in Phase 4, and Microsoft Sentinel in Phase 6 (see their deltas):
 - Microsoft Sentinel ingestion
 - Microsoft Defender plans
 
