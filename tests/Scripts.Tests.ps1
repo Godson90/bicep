@@ -17,6 +17,10 @@ BeforeAll {
                 $file = ($args | Where-Object { $_ -like '@*' }) -replace '^@', ''
                 $global:RoleDefinitionPayload = Get-Content $file -Raw
             }
+            if ($joined -like 'role definition update*') {
+                $file = ($args | Where-Object { $_ -like '@*' }) -replace '^@', ''
+                $global:RoleUpdatePayload = Get-Content $file -Raw
+            }
             if ($joined -like 'ad app federated-credential create*') {
                 $file = ($args | Where-Object { $_ -like '@*' }) -replace '^@', ''
                 $global:FederatedCredentialPayloads.Add((Get-Content $file -Raw))
@@ -31,6 +35,36 @@ BeforeAll {
     function Remove-AzShadow {
         Remove-Item -Path Function:\az -ErrorAction SilentlyContinue
         Remove-Variable -Name AzResponses -Scope Global -ErrorAction SilentlyContinue
+    }
+
+    # The subscription deployment role's actions from Phase 6: deployments, read-only, and the subscription
+    # Activity Log diagnostic setting.
+    $deploymentRoleActions = @(
+        'Microsoft.Resources/deployments/read',
+        'Microsoft.Resources/deployments/write',
+        'Microsoft.Resources/deployments/validate/action',
+        'Microsoft.Resources/deployments/whatIf/action',
+        'Microsoft.Resources/deployments/operations/read',
+        'Microsoft.Resources/deployments/operationstatuses/read',
+        'Microsoft.Resources/subscriptions/read',
+        'Microsoft.Resources/subscriptions/resourceGroups/read',
+        'Microsoft.Resources/subscriptions/operationresults/read',
+        'Microsoft.Insights/diagnosticSettings/read',
+        'Microsoft.Insights/diagnosticSettings/write',
+        'Microsoft.Insights/diagnosticSettings/delete'
+    )
+
+    # What 'az role definition list --output json' returns for an existing custom role with these actions.
+    function New-RoleListJson([string[]]$Actions) {
+        ConvertTo-Json -Depth 5 -InputObject @(
+            [ordered]@{
+                name             = 'ffffffff-6666-6666-6666-666666666666'
+                roleName         = 'DefenStack Subscription Deployment Operator'
+                roleType         = 'CustomRole'
+                permissions      = @([ordered]@{ actions = $Actions; notActions = @() })
+                assignableScopes = @('/subscriptions/22222222-2222-2222-2222-222222222222')
+            }
+        )
     }
 
     function New-BaseResponses {
@@ -141,7 +175,7 @@ Describe 'New-GitHubDeploymentIdentity.ps1' {
         $responses['*ad sp list*'] = 'dddddddd-4444-4444-4444-444444444444'
         $responses['*federated-credential list*github-dev-plan*'] = 'repo:Godson90/bicep:environment:dev-plan'
         $responses['*federated-credential list*'] = 'repo:Godson90/bicep:environment:dev'
-        $responses['*role definition list*'] = 'existing-custom-role'
+        $responses['*role definition list*'] = New-RoleListJson $deploymentRoleActions
         $responses['*role assignment list*condition*'] = ''
         $responses['*role assignment list*'] = 'eeeeeeee-5555-5555-5555-555555555555'
         Set-AzShadow $responses
@@ -161,7 +195,7 @@ Describe 'New-GitHubDeploymentIdentity.ps1' {
             $responses['*ad sp list*'] = 'dddddddd-4444-4444-4444-444444444444'
             $responses['*federated-credential list*github-dev-plan*'] = 'repo:Godson90/bicep:environment:dev-plan'
             $responses['*federated-credential list*'] = 'repo:Godson90/bicep:environment:dev'
-            $responses['*role definition list*'] = 'existing-custom-role'
+            $responses['*role definition list*'] = New-RoleListJson $deploymentRoleActions
             Set-AzShadow $responses
             try {
                 & $scriptPath -ResourceGroupNames $resourceGroups -GitHubRepository 'Godson90/bicep' -EnvironmentName 'dev' -Confirm:$false | Out-Null
@@ -224,24 +258,108 @@ Describe 'New-GitHubDeploymentIdentity.ps1' {
             $script:roleDefinitionPayload = $global:RoleDefinitionPayload | ConvertFrom-Json
         }
 
-        It 'grants exactly the 9 deployment-operation and read-only actions, no wildcard' {
-            $expectedActions = @(
-                'Microsoft.Resources/deployments/read',
-                'Microsoft.Resources/deployments/write',
-                'Microsoft.Resources/deployments/validate/action',
-                'Microsoft.Resources/deployments/whatIf/action',
-                'Microsoft.Resources/deployments/operations/read',
-                'Microsoft.Resources/deployments/operationstatuses/read',
-                'Microsoft.Resources/subscriptions/read',
-                'Microsoft.Resources/subscriptions/resourceGroups/read',
-                'Microsoft.Resources/subscriptions/operationresults/read'
-            )
-            @($script:roleDefinitionPayload.Actions | Sort-Object) | Should -Be @($expectedActions | Sort-Object)
-            $script:roleDefinitionPayload.Actions | Should -Not -Contain '*'
+        It 'grants exactly the 9 deployment-operation and read-only actions plus the 3 diagnostic-setting actions (Phase 6), no wildcard' {
+            @($script:roleDefinitionPayload.Actions | Sort-Object) | Should -Be @($deploymentRoleActions | Sort-Object)
+            @($script:roleDefinitionPayload.Actions).Count | Should -Be 12
+            foreach ($action in $script:roleDefinitionPayload.Actions) {
+                $action | Should -Not -Match '\*' -Because 'every action is named explicitly'
+            }
+        }
+
+        It 'does not update a role it has just created' {
+            @($global:AzCalls | Where-Object { $_ -like 'role definition update*' }).Count | Should -Be 0
         }
 
         It 'is assignable only at the subscription scope' {
             @($script:roleDefinitionPayload.AssignableScopes) | Should -Be @('/subscriptions/22222222-2222-2222-2222-222222222222')
+        }
+    }
+
+    Context 'when the subscription deployment role exists with the pre-Phase 6 actions (update path)' {
+        BeforeAll {
+            $responses = New-BaseResponses
+            $responses['*ad app list*'] = 'cccccccc-3333-3333-3333-333333333333'
+            $responses['*ad sp list*'] = 'dddddddd-4444-4444-4444-444444444444'
+            $responses['*federated-credential list*github-dev-plan*'] = 'repo:Godson90/bicep:environment:dev-plan'
+            $responses['*federated-credential list*'] = 'repo:Godson90/bicep:environment:dev'
+            $responses['*role definition list*'] = New-RoleListJson ($deploymentRoleActions | Where-Object { $_ -notlike 'Microsoft.Insights/*' })
+            Set-AzShadow $responses
+            $global:RoleUpdatePayload = $null
+            try {
+                & $scriptPath -ResourceGroupNames $resourceGroups -GitHubRepository 'Godson90/bicep' -EnvironmentName 'dev' -Confirm:$false | Out-Null
+            }
+            finally {
+                Remove-AzShadow
+            }
+            $script:updateCalls = @($global:AzCalls | Where-Object { $_ -like 'role definition update*' })
+            $script:createCalls = @($global:AzCalls | Where-Object { $_ -like 'role definition create*' })
+            $script:roleUpdatePayload = $global:RoleUpdatePayload | ConvertFrom-Json
+        }
+
+        It 'updates the existing role once and never re-creates it' {
+            $script:updateCalls.Count | Should -Be 1
+            $script:createCalls.Count | Should -Be 0
+        }
+
+        It 'gives the existing role exactly the Phase 6 action set, including the diagnostic-setting actions' {
+            @($script:roleUpdatePayload.Actions | Sort-Object) | Should -Be @($deploymentRoleActions | Sort-Object)
+            $script:roleUpdatePayload.Actions | Should -Contain 'Microsoft.Insights/diagnosticSettings/write'
+        }
+
+        It 'updates the role by its ID, keeping its name and subscription-only assignable scope' {
+            $script:roleUpdatePayload.Id | Should -Be 'ffffffff-6666-6666-6666-666666666666'
+            $script:roleUpdatePayload.Name | Should -Be 'DefenStack Subscription Deployment Operator'
+            @($script:roleUpdatePayload.AssignableScopes) | Should -Be @('/subscriptions/22222222-2222-2222-2222-222222222222')
+        }
+    }
+
+    Context 'when the subscription deployment role is already up to date, or under -WhatIf' {
+        BeforeAll {
+            function New-ExistingRoleResponses([string[]]$Actions) {
+                $responses = New-BaseResponses
+                $responses['*ad app list*'] = 'cccccccc-3333-3333-3333-333333333333'
+                $responses['*ad sp list*'] = 'dddddddd-4444-4444-4444-444444444444'
+                $responses['*federated-credential list*github-dev-plan*'] = 'repo:Godson90/bicep:environment:dev-plan'
+                $responses['*federated-credential list*'] = 'repo:Godson90/bicep:environment:dev'
+                $responses['*role definition list*'] = New-RoleListJson $Actions
+                $responses
+            }
+        }
+
+        It 'does not update a role that already has the expected actions, whatever their order or case' {
+            Set-AzShadow (New-ExistingRoleResponses @($deploymentRoleActions | Sort-Object -Descending | ForEach-Object { $_.ToLowerInvariant() }))
+            try {
+                & $scriptPath -ResourceGroupNames $resourceGroups -GitHubRepository 'Godson90/bicep' -EnvironmentName 'dev' -Confirm:$false | Out-Null
+            }
+            finally {
+                Remove-AzShadow
+            }
+            @($global:AzCalls | Where-Object { $_ -like 'role definition update*' -or $_ -like 'role definition create*' }).Count | Should -Be 0
+        }
+
+        It 'makes no role change under -WhatIf when the existing role is out of date' {
+            Set-AzShadow (New-ExistingRoleResponses @($deploymentRoleActions | Select-Object -First 9))
+            try {
+                & $scriptPath -ResourceGroupNames $resourceGroups -GitHubRepository 'Godson90/bicep' -EnvironmentName 'dev' -WhatIf | Out-Null
+            }
+            finally {
+                Remove-AzShadow
+            }
+            @($global:AzCalls | Where-Object { $_ -like 'role definition list*--output json*' }).Count | Should -BeGreaterThan 0
+            @($global:AzCalls | Where-Object { $_ -like 'role definition update*' -or $_ -like 'role definition create*' }).Count | Should -Be 0
+        }
+
+        It 'stops when the existing role cannot be read' {
+            $responses = New-ExistingRoleResponses $deploymentRoleActions
+            $responses['*role definition list*'] = 'not json'
+            Set-AzShadow $responses
+            try {
+                { & $scriptPath -ResourceGroupNames $resourceGroups -GitHubRepository 'Godson90/bicep' -EnvironmentName 'dev' -Confirm:$false } |
+                    Should -Throw -ExpectedMessage "*custom role 'DefenStack Subscription Deployment Operator'*"
+            }
+            finally {
+                Remove-AzShadow
+            }
         }
     }
 
@@ -250,7 +368,7 @@ Describe 'New-GitHubDeploymentIdentity.ps1' {
             $responses = New-BaseResponses
             $responses['*ad app list*'] = 'cccccccc-3333-3333-3333-333333333333'
             $responses['*ad sp list*'] = 'dddddddd-4444-4444-4444-444444444444'
-            $responses['*role definition list*'] = 'existing-custom-role'
+            $responses['*role definition list*'] = New-RoleListJson $deploymentRoleActions
             Set-AzShadow $responses
             try {
                 & $scriptPath -ResourceGroupNames $resourceGroups -GitHubRepository 'Godson90/bicep' -EnvironmentName 'dev' -Confirm:$false | Out-Null
@@ -272,7 +390,7 @@ Describe 'New-GitHubDeploymentIdentity.ps1' {
             $responses = New-BaseResponses
             $responses['*ad app list*'] = 'cccccccc-3333-3333-3333-333333333333'
             $responses['*ad sp list*'] = 'dddddddd-4444-4444-4444-444444444444'
-            $responses['*role definition list*'] = 'existing-custom-role'
+            $responses['*role definition list*'] = New-RoleListJson $deploymentRoleActions
             Set-AzShadow $responses
             try {
                 & $scriptPath -ResourceGroupNames $resourceGroups -GitHubRepository 'Godson90/bicep' -EnvironmentName 'staging' -Confirm:$false | Out-Null
@@ -290,7 +408,7 @@ Describe 'New-GitHubDeploymentIdentity.ps1' {
             $responses = New-BaseResponses
             $responses['*ad app list*'] = 'cccccccc-3333-3333-3333-333333333333'
             $responses['*ad sp list*'] = 'dddddddd-4444-4444-4444-444444444444'
-            $responses['*role definition list*'] = 'existing-custom-role'
+            $responses['*role definition list*'] = New-RoleListJson $deploymentRoleActions
             Set-AzShadow $responses
             try {
                 & $scriptPath -ResourceGroupNames $resourceGroups -GitHubRepository 'Godson90/bicep' -EnvironmentName 'prod' -Confirm:$false | Out-Null
@@ -351,5 +469,5 @@ Describe 'Role GUIDs are all delegatable' {
 }
 
 AfterAll {
-    Remove-Variable -Name AzCalls, FederatedCredentialPayloads, RoleDefinitionPayload -Scope Global -ErrorAction SilentlyContinue
+    Remove-Variable -Name AzCalls, FederatedCredentialPayloads, RoleDefinitionPayload, RoleUpdatePayload -Scope Global -ErrorAction SilentlyContinue
 }

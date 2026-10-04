@@ -36,6 +36,14 @@ resource logAnalyticsWorkspace 'Microsoft.OperationalInsights/workspaces@2026-03
   }
 }
 
+// Microsoft Sentinel on the central workspace, in every environment (Phase 6). onboardingStates replaces the legacy
+// SecurityInsights solution. Connectors and analytics rules come from Content Hub (runbook 06, ADR-024).
+resource sentinelOnboarding 'Microsoft.SecurityInsights/onboardingStates@2024-03-01' = {
+  scope: logAnalyticsWorkspace
+  name: 'default'
+  properties: {}
+}
+
 resource workspaceLock 'Microsoft.Authorization/locks@2020-05-01' = if (enableDeleteLock) {
   scope: logAnalyticsWorkspace
   name: '${workspaceName}-lck'

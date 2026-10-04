@@ -232,8 +232,52 @@ function Set-CustomRole {
         [string[]]$Actions
     )
 
-    $existingRole = az role definition list --name $Name --custom-role-only true --query '[0].name' --output tsv
-    if (-not [string]::IsNullOrWhiteSpace($existingRole)) { return }
+    $existingRoleJson = (az role definition list --name $Name --custom-role-only true --output json) -join "`n"
+    if ($LASTEXITCODE -ne 0) { throw "Failed to query the custom role '$Name'." }
+    $existingRole = $null
+    if (-not [string]::IsNullOrWhiteSpace($existingRoleJson)) {
+        try {
+            $parsedRoles = $existingRoleJson | ConvertFrom-Json
+        }
+        catch {
+            throw "Could not read the custom role '$Name' returned by az role definition list: $($_.Exception.Message)"
+        }
+        # Windows PowerShell returns a JSON array as one object; @(...)[0] works on both shells.
+        if ($parsedRoles) { $existingRole = @($parsedRoles)[0] }
+    }
+
+    if ($existingRole) {
+        # Idempotent update: a role created by an earlier phase gains new actions (Phase 6 adds the subscription
+        # diagnostic-setting actions). Actions are case-insensitive, so compare them lower-cased and sorted.
+        $currentActions = @($existingRole.permissions | ForEach-Object { $_.actions } | Where-Object { $_ } | ForEach-Object { $_.ToLowerInvariant() } | Sort-Object -Unique)
+        $desiredActions = @($Actions | ForEach-Object { $_.ToLowerInvariant() } | Sort-Object -Unique)
+        if (($currentActions -join "`n") -eq ($desiredActions -join "`n")) {
+            Write-Host "Custom role '$Name' already has the expected actions."
+            return
+        }
+
+        if ($PSCmdlet.ShouldProcess($Name, 'Update custom role actions')) {
+            $roleFile = New-TemporaryFile
+            try {
+                @{
+                    Id               = $existingRole.name
+                    Name             = $Name
+                    IsCustom         = $true
+                    Description      = $Description
+                    Actions          = $Actions
+                    NotActions       = @()
+                    AssignableScopes = @($subscriptionScope)
+                } | ConvertTo-Json | Set-Content -Path $roleFile -Encoding ASCII
+
+                az role definition update --role-definition "@$roleFile" --output none
+                if ($LASTEXITCODE -ne 0) { throw "Failed to update the custom role '$Name'." }
+            }
+            finally {
+                Remove-Item $roleFile -Force
+            }
+        }
+        return
+    }
 
     if ($PSCmdlet.ShouldProcess($Name, 'Create custom role')) {
         $roleFile = New-TemporaryFile
@@ -256,9 +300,10 @@ function Set-CustomRole {
 }
 
 # 4. Subscription-scope deployments only (no resource rights): the entry point targets the subscription,
-#    while every resource lands in a pre-created resource group granted below.
+#    while every resource lands in a pre-created resource group granted below. The one subscription resource is
+#    the Activity Log diagnostic setting (Phase 6). An existing role is updated in place when its actions differ.
 $deploymentRoleName = 'DefenStack Subscription Deployment Operator'
-Set-CustomRole -Name $deploymentRoleName -Description 'Run subscription-scope ARM deployments (validate, what-if, create) and read resource groups. Grants no resource permissions and cannot cancel or delete deployments.' -Actions @(
+Set-CustomRole -Name $deploymentRoleName -Description 'Run subscription-scope ARM deployments (validate, what-if, create), read resource groups, and manage the subscription Activity Log diagnostic setting. Grants no other resource permissions and cannot cancel or delete deployments.' -Actions @(
     'Microsoft.Resources/deployments/read',
     'Microsoft.Resources/deployments/write',
     'Microsoft.Resources/deployments/validate/action',
@@ -267,7 +312,10 @@ Set-CustomRole -Name $deploymentRoleName -Description 'Run subscription-scope AR
     'Microsoft.Resources/deployments/operationstatuses/read',
     'Microsoft.Resources/subscriptions/read',
     'Microsoft.Resources/subscriptions/resourceGroups/read',
-    'Microsoft.Resources/subscriptions/operationresults/read'
+    'Microsoft.Resources/subscriptions/operationresults/read',
+    'Microsoft.Insights/diagnosticSettings/read',
+    'Microsoft.Insights/diagnosticSettings/write',
+    'Microsoft.Insights/diagnosticSettings/delete'
 )
 Set-RoleAssignment -Role $deploymentRoleName -Scope $subscriptionScope -AllowReplicationRetry
 

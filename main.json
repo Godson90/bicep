@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "13084345132132630548"
+      "templateHash": "5272999906712056340"
     }
   },
   "definitions": {
@@ -352,7 +352,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "3187133291534148592"
+              "templateHash": "15724367911556548787"
             }
           },
           "definitions": {
@@ -504,7 +504,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "15867639967149762954"
+                      "templateHash": "4993604734026212542"
                     }
                   },
                   "parameters": {
@@ -566,6 +566,16 @@
                       }
                     },
                     {
+                      "type": "Microsoft.SecurityInsights/onboardingStates",
+                      "apiVersion": "2024-03-01",
+                      "scope": "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('workspaceName'))]",
+                      "name": "default",
+                      "properties": {},
+                      "dependsOn": [
+                        "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('workspaceName'))]"
+                      ]
+                    },
+                    {
                       "condition": "[parameters('enableDeleteLock')]",
                       "type": "Microsoft.Authorization/locks",
                       "apiVersion": "2020-05-01",
@@ -605,6 +615,106 @@
           }
         }
       }
+    },
+    "activityLog": {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('activity-log-{0}', parameters('environmentName'))]",
+      "location": "[deployment().location]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "settingName": {
+            "value": "[format('activity-log-defenstack-{0}', parameters('environmentName'))]"
+          },
+          "logAnalyticsWorkspaceId": {
+            "value": "[reference('global').outputs.logAnalyticsWorkspaceId.value]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "13168563051188783240"
+            }
+          },
+          "parameters": {
+            "settingName": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 260,
+              "metadata": {
+                "description": "Name of the subscription diagnostic setting. Include the environment, since dev and prod may share a subscription."
+              }
+            },
+            "logAnalyticsWorkspaceId": {
+              "type": "string",
+              "metadata": {
+                "description": "Resource ID of the Log Analytics workspace that receives the Activity Log."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Insights/diagnosticSettings",
+              "apiVersion": "2021-05-01-preview",
+              "name": "[parameters('settingName')]",
+              "properties": {
+                "workspaceId": "[parameters('logAnalyticsWorkspaceId')]",
+                "logs": [
+                  {
+                    "category": "Administrative",
+                    "enabled": true
+                  },
+                  {
+                    "category": "Security",
+                    "enabled": true
+                  },
+                  {
+                    "category": "ServiceHealth",
+                    "enabled": true
+                  },
+                  {
+                    "category": "Alert",
+                    "enabled": true
+                  },
+                  {
+                    "category": "Recommendation",
+                    "enabled": true
+                  },
+                  {
+                    "category": "Policy",
+                    "enabled": true
+                  },
+                  {
+                    "category": "Autoscale",
+                    "enabled": true
+                  },
+                  {
+                    "category": "ResourceHealth",
+                    "enabled": true
+                  }
+                ]
+              }
+            }
+          ],
+          "outputs": {
+            "name": {
+              "type": "string",
+              "value": "[parameters('settingName')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "global"
+      ]
     },
     "primaryStamp": {
       "type": "Microsoft.Resources/deployments",
