@@ -1,6 +1,6 @@
 targetScope = 'subscription'
 
-import { regionAddressPlan, privateDnsZoneSet } from 'modules/types.bicep'
+import { regionAddressPlan, privateDnsZoneSet, alertThresholdSet } from 'modules/types.bicep'
 
 @description('Deployment environment. Selects resource group names, redundancy, and deletion protection.')
 @allowed([
@@ -60,6 +60,17 @@ param keyVaultSecrets object = {}
 @description('Relative path probed by App Service health check in every region.')
 param healthCheckPath string = '/'
 
+@description('Email address that receives every platform alert. The pipeline passes the GitHub environment variable ALERT_EMAIL and refuses an empty value for prod; empty creates the action group with no receiver.')
+param alertEmail string = ''
+
+@description('Thresholds for the count-based alerts: App Service 5xx, Key Vault 403s, VPN connections and WAF blocks.')
+param alertThresholds alertThresholdSet = {
+  appServiceHttp5xx: 10
+  keyVaultForbidden: 10
+  vpnP2sConnections: 20
+  frontDoorWafBlocks: 100
+}
+
 @description('Deploy the optional management VM in the primary region.')
 param enableVirtualMachine bool = false
 
@@ -86,6 +97,11 @@ var isProd = environmentName == 'prod'
 var regionCodes = {
   westus3: 'wus3'
   eastus: 'eus'
+}
+// Region names as Azure Service Health reports them, for the Service Health alert.
+var regionDisplayNames = {
+  westus3: 'West US 3'
+  eastus: 'East US'
 }
 var primaryRegionCode = regionCodes[toLower(primaryLocation)]
 var secondaryRegionCode = regionCodes[toLower(secondaryLocation)]
@@ -135,6 +151,17 @@ module activityLog 'modules/activityLog.bicep' = {
   }
 }
 
+// One action group per environment for every platform alert (Phase 6).
+module actionGroup 'modules/actionGroup.bicep' = {
+  name: 'action-group-${environmentName}'
+  scope: resourceGroup(globalResourceGroupName)
+  params: {
+    actionGroupName: 'ag-defenstack-${environmentName}'
+    shortName: 'ds-${environmentName}-ops'
+    alertEmail: alertEmail
+  }
+}
+
 module primaryStamp 'modules/regionStamp.bicep' = {
   name: 'region-${primaryRegionCode}'
   scope: resourceGroup(primaryResourceGroupName)
@@ -158,6 +185,8 @@ module primaryStamp 'modules/regionStamp.bicep' = {
     deployAdminAccess: deployPrimaryAdminAccess
     adminGroupObjectId: adminGroupObjectId
     keyVaultSecrets: keyVaultSecrets
+    actionGroupId: actionGroup.outputs.id
+    alertThresholds: alertThresholds
     // A firewall always takes the first usable address (.4) of its AzureFirewallSubnet (see regionStamp.bicep).
     hubPeering: deploySecondaryRegion ? {
       remoteFirewallPrivateIp: cidrHost(secondaryAddressPlan!.firewallSubnetPrefix, 3)
@@ -188,6 +217,8 @@ module secondaryStamp 'modules/regionStamp.bicep' = if (deploySecondaryRegion) {
     primaryStorageAccountId: isProd ? primaryStamp.outputs.storageAccountId : ''
     primaryStorageAccountName: isProd ? primaryStamp.outputs.storageAccountName : ''
     keyVaultSecrets: keyVaultSecrets
+    actionGroupId: actionGroup.outputs.id
+    alertThresholds: alertThresholds
     hubPeering: {
       remoteFirewallPrivateIp: cidrHost(primaryAddressPlan.firewallSubnetPrefix, 3)
       remoteSpokeAddressPrefixes: primaryAddressPlan.spokeAddressSpace
@@ -291,6 +322,66 @@ module frontDoor 'modules/frontDoor.bicep' = {
     customDomainHostName: customDomainHostName
     logAnalyticsWorkspaceId: global.outputs.logAnalyticsWorkspaceId
     enableDeleteLock: isProd
+  }
+}
+
+// Global platform alerts (Phase 6): Front Door origin health and WAF blocks, and Service Health for the platform
+// regions. The backup job alert waits for Phase 8.
+module globalMetricAlerts 'modules/metricAlerts.bicep' = {
+  name: 'global-metric-alerts-${environmentName}'
+  scope: resourceGroup(globalResourceGroupName)
+  params: {
+    namePrefix: 'alert-defenstack-${environmentName}'
+    actionGroupId: actionGroup.outputs.id
+    rules: [
+      {
+        name: 'front-door-origin-health'
+        description: 'Front Door sees less than 90 percent of origin health probes succeed.'
+        severity: 1
+        resourceId: frontDoor.outputs.id
+        metricNamespace: 'Microsoft.Cdn/profiles'
+        metricName: 'OriginHealthPercentage'
+        operator: 'LessThan'
+        threshold: '90'
+        timeAggregation: 'Average'
+      }
+      {
+        name: 'front-door-waf-blocks'
+        description: 'The Front Door WAF blocked more requests than the threshold in 15 minutes.'
+        severity: 2
+        resourceId: frontDoor.outputs.id
+        metricNamespace: 'Microsoft.Cdn/profiles'
+        metricName: 'WebApplicationFirewallRequestCount'
+        operator: 'GreaterThan'
+        threshold: string(alertThresholds.frontDoorWafBlocks)
+        timeAggregation: 'Total'
+        dimensions: [
+          {
+            name: 'Action'
+            operator: 'Include'
+            values: [
+              'Block'
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}
+
+module serviceHealthAlert 'modules/serviceHealthAlert.bicep' = {
+  name: 'service-health-alert-${environmentName}'
+  scope: resourceGroup(globalResourceGroupName)
+  params: {
+    alertName: 'alert-defenstack-${environmentName}-service-health'
+    regions: concat([
+      regionDisplayNames[toLower(primaryLocation)]
+    ], deploySecondaryRegion ? [
+      regionDisplayNames[toLower(secondaryLocation)]
+    ] : [], [
+      'Global'
+    ])
+    actionGroupId: actionGroup.outputs.id
   }
 }
 

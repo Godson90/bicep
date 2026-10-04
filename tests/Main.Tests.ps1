@@ -268,3 +268,83 @@ Describe 'Subscription Activity Log (Phase 6)' {
         $activityLog.properties.parameters.logAnalyticsWorkspaceId.value | Should -Be "[reference('global').outputs.logAnalyticsWorkspaceId.value]"
     }
 }
+
+Describe 'Alerts (Phase 6)' {
+    BeforeAll {
+        $actionGroup = Get-TemplateResourceBySymbol -Template $main -Symbol 'actionGroup'
+        $globalAlerts = Get-TemplateResourceBySymbol -Template $main -Symbol 'globalMetricAlerts'
+        $serviceHealth = Get-TemplateResourceBySymbol -Template $main -Symbol 'serviceHealthAlert'
+        $globalRules = @($globalAlerts.properties.parameters.rules.value)
+    }
+
+    It 'takes the alert email from the pipeline (ALERT_EMAIL), empty by default' {
+        $main.parameters.alertEmail.type | Should -Be 'string'
+        $main.parameters.alertEmail.defaultValue | Should -BeExactly ''
+    }
+
+    It 'defaults the count thresholds' {
+        $defaults = $main.parameters.alertThresholds.defaultValue
+        $defaults.appServiceHttp5xx | Should -Be 10
+        $defaults.keyVaultForbidden | Should -Be 10
+        $defaults.vpnP2sConnections | Should -Be 20
+        $defaults.frontDoorWafBlocks | Should -Be 100
+    }
+
+    It 'creates one action group per environment in the global resource group' {
+        $actionGroup.resourceGroup | Should -Be "[variables('globalResourceGroupName')]"
+        $actionGroup.properties.parameters.actionGroupName.value | Should -Be "[format('ag-defenstack-{0}', parameters('environmentName'))]"
+        $actionGroup.properties.parameters.shortName.value | Should -Be "[format('ds-{0}-ops', parameters('environmentName'))]"
+        $actionGroup.properties.parameters.alertEmail.value | Should -Be "[parameters('alertEmail')]"
+    }
+
+    It 'gives both stamps the action group and the thresholds' {
+        foreach ($stamp in $primary, $secondary) {
+            $stamp.properties.parameters.actionGroupId.value | Should -Be "[reference('actionGroup').outputs.id.value]"
+            $stamp.properties.parameters.alertThresholds.value | Should -Be "[parameters('alertThresholds')]"
+        }
+    }
+
+    It 'puts the Front Door alerts in the global resource group' {
+        $globalAlerts.resourceGroup | Should -Be "[variables('globalResourceGroupName')]"
+        $globalAlerts.properties.parameters.namePrefix.value | Should -Be "[format('alert-defenstack-{0}', parameters('environmentName'))]"
+        $globalAlerts.properties.parameters.actionGroupId.value | Should -Be "[reference('actionGroup').outputs.id.value]"
+        @($globalRules | ForEach-Object { $_.name }) -join ',' | Should -Be 'front-door-origin-health,front-door-waf-blocks'
+    }
+
+    It 'alerts when Front Door origin health drops below 90 percent (Sev1)' {
+        $rule = $globalRules | Where-Object { $_.name -eq 'front-door-origin-health' }
+        $rule.metricName | Should -BeExactly 'OriginHealthPercentage'
+        $rule.metricNamespace | Should -BeExactly 'Microsoft.Cdn/profiles'
+        $rule.operator | Should -Be 'LessThan'
+        $rule.threshold | Should -Be '90'
+        $rule.timeAggregation | Should -Be 'Average'
+        $rule.severity | Should -Be 1
+        $rule.resourceId | Should -Be "[reference('frontDoor').outputs.id.value]"
+    }
+
+    It 'alerts when the WAF blocks more requests than the threshold (Sev2), counting only Action = Block' {
+        $rule = $globalRules | Where-Object { $_.name -eq 'front-door-waf-blocks' }
+        $rule.metricName | Should -BeExactly 'WebApplicationFirewallRequestCount'
+        $rule.metricNamespace | Should -BeExactly 'Microsoft.Cdn/profiles'
+        $rule.operator | Should -Be 'GreaterThan'
+        $rule.threshold | Should -Be "[string(parameters('alertThresholds').frontDoorWafBlocks)]"
+        $rule.timeAggregation | Should -Be 'Total'
+        $rule.severity | Should -Be 2
+        $rule.resourceId | Should -Be "[reference('frontDoor').outputs.id.value]"
+        $rule.dimensions[0].name | Should -Be 'Action'
+        $rule.dimensions[0].operator | Should -Be 'Include'
+        @($rule.dimensions[0].values) | Should -Be @('Block')
+    }
+
+    It 'watches Service Health for the primary region, the secondary only with DR, and global events' {
+        $serviceHealth.resourceGroup | Should -Be "[variables('globalResourceGroupName')]"
+        $serviceHealth.properties.parameters.alertName.value | Should -Be "[format('alert-defenstack-{0}-service-health', parameters('environmentName'))]"
+        $serviceHealth.properties.parameters.actionGroupId.value | Should -Be "[reference('actionGroup').outputs.id.value]"
+        $regions = $serviceHealth.properties.parameters.regions.value
+        $regions | Should -Match "^\[concat\(createArray\(variables\('regionDisplayNames'\)\[toLower\(parameters\('primaryLocation'\)\)\]\)"
+        $regions | Should -Match "if\(parameters\('deploySecondaryRegion'\), createArray\(variables\('regionDisplayNames'\)\[toLower\(parameters\('secondaryLocation'\)\)\]\), createArray\(\)\)"
+        $regions | Should -Match "createArray\('Global'\)\)\]$"
+        $main.variables.regionDisplayNames.westus3 | Should -BeExactly 'West US 3'
+        $main.variables.regionDisplayNames.eastus | Should -BeExactly 'East US'
+    }
+}

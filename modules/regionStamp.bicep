@@ -1,4 +1,4 @@
-import { regionAddressPlan, privateDnsZoneSet, hubPeeringPlan } from 'types.bicep'
+import { regionAddressPlan, privateDnsZoneSet, hubPeeringPlan, alertThresholdSet } from 'types.bicep'
 
 @description('Deployment environment.')
 @allowed([
@@ -83,6 +83,12 @@ param keyVaultSecrets object = {}
 
 @description('Prod with DR only: routing and Azure Monitor rules for the hub-to-hub peering with the other region. Absent in dev and in prod without DR.')
 param hubPeering hubPeeringPlan?
+
+@description('Resource ID of the environment\'s action group, which every regional alert notifies (Phase 6).')
+param actionGroupId string
+
+@description('Thresholds for the count-based regional alerts (Phase 6).')
+param alertThresholds alertThresholdSet
 
 var isProd = environmentName == 'prod'
 var isPrimary = regionRole == 'primary'
@@ -385,6 +391,105 @@ module flowLogs 'flowLogs.bicep' = {
     storageAccountId: flowLogStorage.outputs.id
     identityId: flowLogStorage.outputs.identityId
     logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
+  }
+}
+
+// Regional platform alerts (Phase 6), all to the environment's action group. Triage steps: runbook 06.
+module metricAlerts 'metricAlerts.bicep' = {
+  name: 'metric-alerts'
+  params: {
+    namePrefix: 'alert-defenstack-${environmentName}-${regionCode}'
+    actionGroupId: actionGroupId
+    rules: [
+      {
+        name: 'firewall-health'
+        description: 'Azure Firewall health is below 90 percent.'
+        severity: 1
+        resourceId: azureFirewall.outputs.id
+        metricNamespace: 'Microsoft.Network/azureFirewalls'
+        metricName: 'FirewallHealth'
+        operator: 'LessThan'
+        threshold: '90'
+        timeAggregation: 'Average'
+      }
+      {
+        name: 'firewall-snat-ports'
+        description: 'Azure Firewall SNAT port utilisation is above 80 percent.'
+        severity: 2
+        resourceId: azureFirewall.outputs.id
+        metricNamespace: 'Microsoft.Network/azureFirewalls'
+        metricName: 'SNATPortUtilization'
+        operator: 'GreaterThan'
+        threshold: '80'
+        timeAggregation: 'Maximum'
+      }
+      {
+        name: 'app-http-5xx'
+        description: 'The App Service returned more HTTP 5xx responses than the threshold in 15 minutes.'
+        severity: 2
+        resourceId: appService.outputs.appServiceAppId
+        metricNamespace: 'Microsoft.Web/sites'
+        metricName: 'Http5xx'
+        operator: 'GreaterThan'
+        threshold: string(alertThresholds.appServiceHttp5xx)
+        timeAggregation: 'Total'
+      }
+      {
+        name: 'app-health-check'
+        description: 'Some App Service instances are failing the health check.'
+        severity: 1
+        resourceId: appService.outputs.appServiceAppId
+        metricNamespace: 'Microsoft.Web/sites'
+        metricName: 'HealthCheckStatus'
+        operator: 'LessThan'
+        threshold: '100'
+        timeAggregation: 'Average'
+      }
+      {
+        name: 'key-vault-availability'
+        description: 'Key Vault availability is below 99.9 percent.'
+        severity: 2
+        resourceId: keyVault.outputs.id
+        metricNamespace: 'Microsoft.KeyVault/vaults'
+        metricName: 'Availability'
+        operator: 'LessThan'
+        threshold: '99.9'
+        timeAggregation: 'Average'
+      }
+      {
+        name: 'key-vault-forbidden'
+        description: 'Key Vault refused more requests with 403 Forbidden than the threshold in 15 minutes.'
+        severity: 3
+        resourceId: keyVault.outputs.id
+        metricNamespace: 'Microsoft.KeyVault/vaults'
+        metricName: 'ServiceApiResult'
+        operator: 'GreaterThan'
+        threshold: string(alertThresholds.keyVaultForbidden)
+        timeAggregation: 'Count'
+        dimensions: [
+          {
+            name: 'StatusCode'
+            operator: 'Include'
+            values: [
+              '403'
+            ]
+          }
+        ]
+      }
+      {
+        name: 'vpn-p2s-connections'
+        description: 'More point-to-site VPN connections than expected.'
+        severity: 3
+        resourceId: deployAdminAccess ? vpnGateway!.outputs.id : ''
+        metricNamespace: 'Microsoft.Network/virtualNetworkGateways'
+        metricName: 'P2SConnectionCount'
+        operator: 'GreaterThan'
+        threshold: string(alertThresholds.vpnP2sConnections)
+        timeAggregation: 'Maximum'
+        // Only where this region has the gateway (deployAdminAccess).
+        deploy: deployAdminAccess
+      }
+    ]
   }
 }
 

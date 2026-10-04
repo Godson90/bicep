@@ -65,6 +65,8 @@ jobs:
           subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
 
       - name: What-if against dev
+        env:
+          ALERT_EMAIL: ${{ vars.ALERT_EMAIL }}
         run: |
           set -o pipefail
           az config set bicep.use_binary_from_path=false
@@ -73,6 +75,7 @@ jobs:
             --location "$DEPLOYMENT_LOCATION" \
             --name "pr-${{ github.event.pull_request.number }}-${{ github.run_attempt }}" \
             --parameters params/dev.bicepparam \
+            --parameters alertEmail="$ALERT_EMAIL" \
             --exclude-change-types Ignore NoChange 2>&1 \
             | sed -r 's/\x1B\[[0-9;]*[mK]//g' > whatif.txt
           {

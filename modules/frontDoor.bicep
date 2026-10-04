@@ -300,6 +300,7 @@ resource wafPolicyLock 'Microsoft.Authorization/locks@2020-05-01' = if (enableDe
   }
 }
 
+output id string = profile.id
 output profileName string = profile.name
 output endpointHostName string = endpoint.properties.hostName
 output frontDoorId string = profile.properties.frontDoorId

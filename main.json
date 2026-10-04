@@ -6,10 +6,49 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "5272999906712056340"
+      "templateHash": "15520697166429246536"
     }
   },
   "definitions": {
+    "alertThresholdSet": {
+      "type": "object",
+      "properties": {
+        "appServiceHttp5xx": {
+          "type": "int",
+          "minValue": 1,
+          "metadata": {
+            "description": "App Service HTTP 5xx responses per region in a 15-minute window."
+          }
+        },
+        "keyVaultForbidden": {
+          "type": "int",
+          "minValue": 1,
+          "metadata": {
+            "description": "Key Vault requests refused with 403 per region in a 15-minute window."
+          }
+        },
+        "vpnP2sConnections": {
+          "type": "int",
+          "minValue": 1,
+          "metadata": {
+            "description": "Point-to-site VPN connections on the gateway at any time in a 15-minute window."
+          }
+        },
+        "frontDoorWafBlocks": {
+          "type": "int",
+          "minValue": 1,
+          "metadata": {
+            "description": "Front Door WAF blocked requests in a 15-minute window."
+          }
+        }
+      },
+      "metadata": {
+        "description": "Thresholds for the count-based platform alerts (Phase 6). Health and percentage alerts use fixed thresholds.",
+        "__bicep_imported_from!": {
+          "sourceTemplate": "modules/types.bicep"
+        }
+      }
+    },
     "privateDnsZoneSet": {
       "type": "object",
       "properties": {
@@ -251,6 +290,25 @@
         "description": "Relative path probed by App Service health check in every region."
       }
     },
+    "alertEmail": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Email address that receives every platform alert. The pipeline passes the GitHub environment variable ALERT_EMAIL and refuses an empty value for prod; empty creates the action group with no receiver."
+      }
+    },
+    "alertThresholds": {
+      "$ref": "#/definitions/alertThresholdSet",
+      "defaultValue": {
+        "appServiceHttp5xx": 10,
+        "keyVaultForbidden": 10,
+        "vpnP2sConnections": 20,
+        "frontDoorWafBlocks": 100
+      },
+      "metadata": {
+        "description": "Thresholds for the count-based alerts: App Service 5xx, Key Vault 403s, VPN connections and WAF blocks."
+      }
+    },
     "enableVirtualMachine": {
       "type": "bool",
       "defaultValue": false,
@@ -298,6 +356,10 @@
     "regionCodes": {
       "westus3": "wus3",
       "eastus": "eus"
+    },
+    "regionDisplayNames": {
+      "westus3": "West US 3",
+      "eastus": "East US"
     },
     "primaryRegionCode": "[variables('regionCodes')[toLower(parameters('primaryLocation'))]]",
     "secondaryRegionCode": "[variables('regionCodes')[toLower(parameters('secondaryLocation'))]]",
@@ -716,6 +778,86 @@
         "global"
       ]
     },
+    "actionGroup": {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('action-group-{0}', parameters('environmentName'))]",
+      "resourceGroup": "[variables('globalResourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "actionGroupName": {
+            "value": "[format('ag-defenstack-{0}', parameters('environmentName'))]"
+          },
+          "shortName": {
+            "value": "[format('ds-{0}-ops', parameters('environmentName'))]"
+          },
+          "alertEmail": {
+            "value": "[parameters('alertEmail')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "12320967234563412193"
+            }
+          },
+          "parameters": {
+            "actionGroupName": {
+              "type": "string",
+              "metadata": {
+                "description": "Action group name."
+              }
+            },
+            "shortName": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 12,
+              "metadata": {
+                "description": "Short name shown in alert emails and SMS. At most 12 characters."
+              }
+            },
+            "alertEmail": {
+              "type": "string",
+              "defaultValue": "",
+              "metadata": {
+                "description": "Email address that receives every platform alert, from the GitHub variable ALERT_EMAIL. Empty creates the group with no receiver (dev only; the prod apply refuses an empty value)."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Insights/actionGroups",
+              "apiVersion": "2023-01-01",
+              "name": "[parameters('actionGroupName')]",
+              "location": "Global",
+              "properties": {
+                "groupShortName": "[parameters('shortName')]",
+                "enabled": true,
+                "emailReceivers": "[if(empty(parameters('alertEmail')), createArray(), createArray(createObject('name', 'platform-operators', 'emailAddress', parameters('alertEmail'), 'useCommonAlertSchema', true())))]"
+              }
+            }
+          ],
+          "outputs": {
+            "id": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Insights/actionGroups', parameters('actionGroupName'))]"
+            },
+            "name": {
+              "type": "string",
+              "value": "[parameters('actionGroupName')]"
+            }
+          }
+        }
+      }
+    },
     "primaryStamp": {
       "type": "Microsoft.Resources/deployments",
       "apiVersion": "2025-04-01",
@@ -784,6 +926,12 @@
           "keyVaultSecrets": {
             "value": "[parameters('keyVaultSecrets')]"
           },
+          "actionGroupId": {
+            "value": "[reference('actionGroup').outputs.id.value]"
+          },
+          "alertThresholds": {
+            "value": "[parameters('alertThresholds')]"
+          },
           "hubPeering": "[if(parameters('deploySecondaryRegion'), createObject('value', createObject('remoteFirewallPrivateIp', cidrHost(parameters('secondaryAddressPlan').firewallSubnetPrefix, 3), 'remoteSpokeAddressPrefixes', parameters('secondaryAddressPlan').spokeAddressSpace, 'monitorRole', 'Host', 'monitorClientPrefixes', variables('monitorClientPrefixes'), 'monitorPrivateEndpointPrefixes', variables('monitorPrivateEndpointPrefixes'))), createObject('value', null()))]"
         },
         "template": {
@@ -794,10 +942,49 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "10561423984633799507"
+              "templateHash": "14891135540847517529"
             }
           },
           "definitions": {
+            "alertThresholdSet": {
+              "type": "object",
+              "properties": {
+                "appServiceHttp5xx": {
+                  "type": "int",
+                  "minValue": 1,
+                  "metadata": {
+                    "description": "App Service HTTP 5xx responses per region in a 15-minute window."
+                  }
+                },
+                "keyVaultForbidden": {
+                  "type": "int",
+                  "minValue": 1,
+                  "metadata": {
+                    "description": "Key Vault requests refused with 403 per region in a 15-minute window."
+                  }
+                },
+                "vpnP2sConnections": {
+                  "type": "int",
+                  "minValue": 1,
+                  "metadata": {
+                    "description": "Point-to-site VPN connections on the gateway at any time in a 15-minute window."
+                  }
+                },
+                "frontDoorWafBlocks": {
+                  "type": "int",
+                  "minValue": 1,
+                  "metadata": {
+                    "description": "Front Door WAF blocked requests in a 15-minute window."
+                  }
+                }
+              },
+              "metadata": {
+                "description": "Thresholds for the count-based platform alerts (Phase 6). Health and percentage alerts use fixed thresholds.",
+                "__bicep_imported_from!": {
+                  "sourceTemplate": "types.bicep"
+                }
+              }
+            },
             "hubPeeringPlan": {
               "type": "object",
               "properties": {
@@ -1139,6 +1326,18 @@
               "nullable": true,
               "metadata": {
                 "description": "Prod with DR only: routing and Azure Monitor rules for the hub-to-hub peering with the other region. Absent in dev and in prod without DR."
+              }
+            },
+            "actionGroupId": {
+              "type": "string",
+              "metadata": {
+                "description": "Resource ID of the environment's action group, which every regional alert notifies (Phase 6)."
+              }
+            },
+            "alertThresholds": {
+              "$ref": "#/definitions/alertThresholdSet",
+              "metadata": {
+                "description": "Thresholds for the count-based regional alerts (Phase 6)."
               }
             }
           },
@@ -5683,6 +5882,341 @@
                 "hubNetwork",
                 "spokeNetwork"
               ]
+            },
+            "metricAlerts": {
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "metric-alerts",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "namePrefix": {
+                    "value": "[format('alert-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]"
+                  },
+                  "actionGroupId": {
+                    "value": "[parameters('actionGroupId')]"
+                  },
+                  "rules": {
+                    "value": [
+                      {
+                        "name": "firewall-health",
+                        "description": "Azure Firewall health is below 90 percent.",
+                        "severity": 1,
+                        "resourceId": "[reference('azureFirewall').outputs.id.value]",
+                        "metricNamespace": "Microsoft.Network/azureFirewalls",
+                        "metricName": "FirewallHealth",
+                        "operator": "LessThan",
+                        "threshold": "90",
+                        "timeAggregation": "Average"
+                      },
+                      {
+                        "name": "firewall-snat-ports",
+                        "description": "Azure Firewall SNAT port utilisation is above 80 percent.",
+                        "severity": 2,
+                        "resourceId": "[reference('azureFirewall').outputs.id.value]",
+                        "metricNamespace": "Microsoft.Network/azureFirewalls",
+                        "metricName": "SNATPortUtilization",
+                        "operator": "GreaterThan",
+                        "threshold": "80",
+                        "timeAggregation": "Maximum"
+                      },
+                      {
+                        "name": "app-http-5xx",
+                        "description": "The App Service returned more HTTP 5xx responses than the threshold in 15 minutes.",
+                        "severity": 2,
+                        "resourceId": "[reference('appService').outputs.appServiceAppId.value]",
+                        "metricNamespace": "Microsoft.Web/sites",
+                        "metricName": "Http5xx",
+                        "operator": "GreaterThan",
+                        "threshold": "[string(parameters('alertThresholds').appServiceHttp5xx)]",
+                        "timeAggregation": "Total"
+                      },
+                      {
+                        "name": "app-health-check",
+                        "description": "Some App Service instances are failing the health check.",
+                        "severity": 1,
+                        "resourceId": "[reference('appService').outputs.appServiceAppId.value]",
+                        "metricNamespace": "Microsoft.Web/sites",
+                        "metricName": "HealthCheckStatus",
+                        "operator": "LessThan",
+                        "threshold": "100",
+                        "timeAggregation": "Average"
+                      },
+                      {
+                        "name": "key-vault-availability",
+                        "description": "Key Vault availability is below 99.9 percent.",
+                        "severity": 2,
+                        "resourceId": "[reference('keyVault').outputs.id.value]",
+                        "metricNamespace": "Microsoft.KeyVault/vaults",
+                        "metricName": "Availability",
+                        "operator": "LessThan",
+                        "threshold": "99.9",
+                        "timeAggregation": "Average"
+                      },
+                      {
+                        "name": "key-vault-forbidden",
+                        "description": "Key Vault refused more requests with 403 Forbidden than the threshold in 15 minutes.",
+                        "severity": 3,
+                        "resourceId": "[reference('keyVault').outputs.id.value]",
+                        "metricNamespace": "Microsoft.KeyVault/vaults",
+                        "metricName": "ServiceApiResult",
+                        "operator": "GreaterThan",
+                        "threshold": "[string(parameters('alertThresholds').keyVaultForbidden)]",
+                        "timeAggregation": "Count",
+                        "dimensions": [
+                          {
+                            "name": "StatusCode",
+                            "operator": "Include",
+                            "values": [
+                              "403"
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "name": "vpn-p2s-connections",
+                        "description": "More point-to-site VPN connections than expected.",
+                        "severity": 3,
+                        "resourceId": "[if(parameters('deployAdminAccess'), reference('vpnGateway').outputs.id.value, '')]",
+                        "metricNamespace": "Microsoft.Network/virtualNetworkGateways",
+                        "metricName": "P2SConnectionCount",
+                        "operator": "GreaterThan",
+                        "threshold": "[string(parameters('alertThresholds').vpnP2sConnections)]",
+                        "timeAggregation": "Maximum",
+                        "deploy": "[parameters('deployAdminAccess')]"
+                      }
+                    ]
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "languageVersion": "2.0",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.47.16.16243",
+                      "templateHash": "14677969537259490203"
+                    }
+                  },
+                  "definitions": {
+                    "_1.metricAlertDimension": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "metadata": {
+                            "description": "Dimension name, for example StatusCode or Action."
+                          }
+                        },
+                        "operator": {
+                          "type": "string",
+                          "allowedValues": [
+                            "Exclude",
+                            "Include"
+                          ],
+                          "metadata": {
+                            "description": "Include matches only the values; Exclude matches everything else."
+                          }
+                        },
+                        "values": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "metadata": {
+                            "description": "Dimension values."
+                          }
+                        }
+                      },
+                      "metadata": {
+                        "description": "A dimension filter on a metric alert, for example StatusCode = 403.",
+                        "__bicep_imported_from!": {
+                          "sourceTemplate": "types.bicep"
+                        }
+                      }
+                    },
+                    "metricAlertRule": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "metadata": {
+                            "description": "Short rule name, appended to the alert name prefix, for example firewall-health."
+                          }
+                        },
+                        "description": {
+                          "type": "string",
+                          "metadata": {
+                            "description": "What the alert means. Shown in the alert email; runbook 06 has the triage steps."
+                          }
+                        },
+                        "severity": {
+                          "type": "int",
+                          "allowedValues": [
+                            0,
+                            1,
+                            2,
+                            3,
+                            4
+                          ],
+                          "metadata": {
+                            "description": "Alert severity: 0 Critical, 1 Error, 2 Warning, 3 Informational, 4 Verbose."
+                          }
+                        },
+                        "resourceId": {
+                          "type": "string",
+                          "metadata": {
+                            "description": "Resource ID the metric is read from."
+                          }
+                        },
+                        "metricNamespace": {
+                          "type": "string",
+                          "metadata": {
+                            "description": "Metric namespace, the resource type, for example Microsoft.Network/azureFirewalls."
+                          }
+                        },
+                        "metricName": {
+                          "type": "string",
+                          "metadata": {
+                            "description": "Exact metric name, for example FirewallHealth."
+                          }
+                        },
+                        "operator": {
+                          "type": "string",
+                          "allowedValues": [
+                            "GreaterThan",
+                            "GreaterThanOrEqual",
+                            "LessThan",
+                            "LessThanOrEqual"
+                          ],
+                          "metadata": {
+                            "description": "Comparison against the threshold."
+                          }
+                        },
+                        "threshold": {
+                          "type": "string",
+                          "metadata": {
+                            "description": "Threshold as text, for example '90' or '99.9'. Bicep has no decimal literals; the module converts it with json()."
+                          }
+                        },
+                        "timeAggregation": {
+                          "type": "string",
+                          "allowedValues": [
+                            "Average",
+                            "Count",
+                            "Maximum",
+                            "Minimum",
+                            "Total"
+                          ],
+                          "metadata": {
+                            "description": "How the metric is aggregated over the window."
+                          }
+                        },
+                        "dimensions": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/definitions/_1.metricAlertDimension"
+                          },
+                          "nullable": true,
+                          "metadata": {
+                            "description": "Dimension filters. Omit for none."
+                          }
+                        },
+                        "deploy": {
+                          "type": "bool",
+                          "nullable": true,
+                          "metadata": {
+                            "description": "False skips the rule, for example the VPN alert in a region without a gateway. Defaults to true."
+                          }
+                        }
+                      },
+                      "metadata": {
+                        "description": "One static-threshold metric alert on a single resource (Phase 6).",
+                        "__bicep_imported_from!": {
+                          "sourceTemplate": "types.bicep"
+                        }
+                      }
+                    }
+                  },
+                  "parameters": {
+                    "namePrefix": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Prefix of every alert name, for example alert-defenstack-prod-wus3."
+                      }
+                    },
+                    "rules": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/definitions/metricAlertRule"
+                      },
+                      "metadata": {
+                        "description": "Static-threshold metric alerts to create, each on one resource."
+                      }
+                    },
+                    "actionGroupId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Resource ID of the action group notified when an alert fires or resolves."
+                      }
+                    }
+                  },
+                  "resources": {
+                    "metricAlerts": {
+                      "copy": {
+                        "name": "metricAlerts",
+                        "count": "[length(parameters('rules'))]"
+                      },
+                      "condition": "[coalesce(tryGet(parameters('rules')[copyIndex()], 'deploy'), true())]",
+                      "type": "Microsoft.Insights/metricAlerts",
+                      "apiVersion": "2018-03-01",
+                      "name": "[format('{0}-{1}', parameters('namePrefix'), parameters('rules')[copyIndex()].name)]",
+                      "location": "global",
+                      "properties": {
+                        "description": "[parameters('rules')[copyIndex()].description]",
+                        "severity": "[parameters('rules')[copyIndex()].severity]",
+                        "enabled": true,
+                        "scopes": [
+                          "[parameters('rules')[copyIndex()].resourceId]"
+                        ],
+                        "evaluationFrequency": "PT5M",
+                        "windowSize": "PT15M",
+                        "autoMitigate": true,
+                        "criteria": {
+                          "odata.type": "Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria",
+                          "allOf": [
+                            {
+                              "criterionType": "StaticThresholdCriterion",
+                              "name": "[parameters('rules')[copyIndex()].name]",
+                              "metricNamespace": "[parameters('rules')[copyIndex()].metricNamespace]",
+                              "metricName": "[parameters('rules')[copyIndex()].metricName]",
+                              "operator": "[parameters('rules')[copyIndex()].operator]",
+                              "threshold": "[json(parameters('rules')[copyIndex()].threshold)]",
+                              "timeAggregation": "[parameters('rules')[copyIndex()].timeAggregation]",
+                              "dimensions": "[coalesce(tryGet(parameters('rules')[copyIndex()], 'dimensions'), createArray())]"
+                            }
+                          ]
+                        },
+                        "actions": [
+                          {
+                            "actionGroupId": "[parameters('actionGroupId')]"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              },
+              "dependsOn": [
+                "appService",
+                "azureFirewall",
+                "keyVault",
+                "vpnGateway"
+              ]
             }
           },
           "outputs": {
@@ -5766,6 +6300,7 @@
         }
       },
       "dependsOn": [
+        "actionGroup",
         "global"
       ]
     },
@@ -5822,6 +6357,12 @@
           "keyVaultSecrets": {
             "value": "[parameters('keyVaultSecrets')]"
           },
+          "actionGroupId": {
+            "value": "[reference('actionGroup').outputs.id.value]"
+          },
+          "alertThresholds": {
+            "value": "[parameters('alertThresholds')]"
+          },
           "hubPeering": {
             "value": {
               "remoteFirewallPrivateIp": "[cidrHost(parameters('primaryAddressPlan').firewallSubnetPrefix, 3)]",
@@ -5840,10 +6381,49 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "10561423984633799507"
+              "templateHash": "14891135540847517529"
             }
           },
           "definitions": {
+            "alertThresholdSet": {
+              "type": "object",
+              "properties": {
+                "appServiceHttp5xx": {
+                  "type": "int",
+                  "minValue": 1,
+                  "metadata": {
+                    "description": "App Service HTTP 5xx responses per region in a 15-minute window."
+                  }
+                },
+                "keyVaultForbidden": {
+                  "type": "int",
+                  "minValue": 1,
+                  "metadata": {
+                    "description": "Key Vault requests refused with 403 per region in a 15-minute window."
+                  }
+                },
+                "vpnP2sConnections": {
+                  "type": "int",
+                  "minValue": 1,
+                  "metadata": {
+                    "description": "Point-to-site VPN connections on the gateway at any time in a 15-minute window."
+                  }
+                },
+                "frontDoorWafBlocks": {
+                  "type": "int",
+                  "minValue": 1,
+                  "metadata": {
+                    "description": "Front Door WAF blocked requests in a 15-minute window."
+                  }
+                }
+              },
+              "metadata": {
+                "description": "Thresholds for the count-based platform alerts (Phase 6). Health and percentage alerts use fixed thresholds.",
+                "__bicep_imported_from!": {
+                  "sourceTemplate": "types.bicep"
+                }
+              }
+            },
             "hubPeeringPlan": {
               "type": "object",
               "properties": {
@@ -6185,6 +6765,18 @@
               "nullable": true,
               "metadata": {
                 "description": "Prod with DR only: routing and Azure Monitor rules for the hub-to-hub peering with the other region. Absent in dev and in prod without DR."
+              }
+            },
+            "actionGroupId": {
+              "type": "string",
+              "metadata": {
+                "description": "Resource ID of the environment's action group, which every regional alert notifies (Phase 6)."
+              }
+            },
+            "alertThresholds": {
+              "$ref": "#/definitions/alertThresholdSet",
+              "metadata": {
+                "description": "Thresholds for the count-based regional alerts (Phase 6)."
               }
             }
           },
@@ -10729,6 +11321,341 @@
                 "hubNetwork",
                 "spokeNetwork"
               ]
+            },
+            "metricAlerts": {
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "metric-alerts",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "namePrefix": {
+                    "value": "[format('alert-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]"
+                  },
+                  "actionGroupId": {
+                    "value": "[parameters('actionGroupId')]"
+                  },
+                  "rules": {
+                    "value": [
+                      {
+                        "name": "firewall-health",
+                        "description": "Azure Firewall health is below 90 percent.",
+                        "severity": 1,
+                        "resourceId": "[reference('azureFirewall').outputs.id.value]",
+                        "metricNamespace": "Microsoft.Network/azureFirewalls",
+                        "metricName": "FirewallHealth",
+                        "operator": "LessThan",
+                        "threshold": "90",
+                        "timeAggregation": "Average"
+                      },
+                      {
+                        "name": "firewall-snat-ports",
+                        "description": "Azure Firewall SNAT port utilisation is above 80 percent.",
+                        "severity": 2,
+                        "resourceId": "[reference('azureFirewall').outputs.id.value]",
+                        "metricNamespace": "Microsoft.Network/azureFirewalls",
+                        "metricName": "SNATPortUtilization",
+                        "operator": "GreaterThan",
+                        "threshold": "80",
+                        "timeAggregation": "Maximum"
+                      },
+                      {
+                        "name": "app-http-5xx",
+                        "description": "The App Service returned more HTTP 5xx responses than the threshold in 15 minutes.",
+                        "severity": 2,
+                        "resourceId": "[reference('appService').outputs.appServiceAppId.value]",
+                        "metricNamespace": "Microsoft.Web/sites",
+                        "metricName": "Http5xx",
+                        "operator": "GreaterThan",
+                        "threshold": "[string(parameters('alertThresholds').appServiceHttp5xx)]",
+                        "timeAggregation": "Total"
+                      },
+                      {
+                        "name": "app-health-check",
+                        "description": "Some App Service instances are failing the health check.",
+                        "severity": 1,
+                        "resourceId": "[reference('appService').outputs.appServiceAppId.value]",
+                        "metricNamespace": "Microsoft.Web/sites",
+                        "metricName": "HealthCheckStatus",
+                        "operator": "LessThan",
+                        "threshold": "100",
+                        "timeAggregation": "Average"
+                      },
+                      {
+                        "name": "key-vault-availability",
+                        "description": "Key Vault availability is below 99.9 percent.",
+                        "severity": 2,
+                        "resourceId": "[reference('keyVault').outputs.id.value]",
+                        "metricNamespace": "Microsoft.KeyVault/vaults",
+                        "metricName": "Availability",
+                        "operator": "LessThan",
+                        "threshold": "99.9",
+                        "timeAggregation": "Average"
+                      },
+                      {
+                        "name": "key-vault-forbidden",
+                        "description": "Key Vault refused more requests with 403 Forbidden than the threshold in 15 minutes.",
+                        "severity": 3,
+                        "resourceId": "[reference('keyVault').outputs.id.value]",
+                        "metricNamespace": "Microsoft.KeyVault/vaults",
+                        "metricName": "ServiceApiResult",
+                        "operator": "GreaterThan",
+                        "threshold": "[string(parameters('alertThresholds').keyVaultForbidden)]",
+                        "timeAggregation": "Count",
+                        "dimensions": [
+                          {
+                            "name": "StatusCode",
+                            "operator": "Include",
+                            "values": [
+                              "403"
+                            ]
+                          }
+                        ]
+                      },
+                      {
+                        "name": "vpn-p2s-connections",
+                        "description": "More point-to-site VPN connections than expected.",
+                        "severity": 3,
+                        "resourceId": "[if(parameters('deployAdminAccess'), reference('vpnGateway').outputs.id.value, '')]",
+                        "metricNamespace": "Microsoft.Network/virtualNetworkGateways",
+                        "metricName": "P2SConnectionCount",
+                        "operator": "GreaterThan",
+                        "threshold": "[string(parameters('alertThresholds').vpnP2sConnections)]",
+                        "timeAggregation": "Maximum",
+                        "deploy": "[parameters('deployAdminAccess')]"
+                      }
+                    ]
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "languageVersion": "2.0",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.47.16.16243",
+                      "templateHash": "14677969537259490203"
+                    }
+                  },
+                  "definitions": {
+                    "_1.metricAlertDimension": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "metadata": {
+                            "description": "Dimension name, for example StatusCode or Action."
+                          }
+                        },
+                        "operator": {
+                          "type": "string",
+                          "allowedValues": [
+                            "Exclude",
+                            "Include"
+                          ],
+                          "metadata": {
+                            "description": "Include matches only the values; Exclude matches everything else."
+                          }
+                        },
+                        "values": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          },
+                          "metadata": {
+                            "description": "Dimension values."
+                          }
+                        }
+                      },
+                      "metadata": {
+                        "description": "A dimension filter on a metric alert, for example StatusCode = 403.",
+                        "__bicep_imported_from!": {
+                          "sourceTemplate": "types.bicep"
+                        }
+                      }
+                    },
+                    "metricAlertRule": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "type": "string",
+                          "metadata": {
+                            "description": "Short rule name, appended to the alert name prefix, for example firewall-health."
+                          }
+                        },
+                        "description": {
+                          "type": "string",
+                          "metadata": {
+                            "description": "What the alert means. Shown in the alert email; runbook 06 has the triage steps."
+                          }
+                        },
+                        "severity": {
+                          "type": "int",
+                          "allowedValues": [
+                            0,
+                            1,
+                            2,
+                            3,
+                            4
+                          ],
+                          "metadata": {
+                            "description": "Alert severity: 0 Critical, 1 Error, 2 Warning, 3 Informational, 4 Verbose."
+                          }
+                        },
+                        "resourceId": {
+                          "type": "string",
+                          "metadata": {
+                            "description": "Resource ID the metric is read from."
+                          }
+                        },
+                        "metricNamespace": {
+                          "type": "string",
+                          "metadata": {
+                            "description": "Metric namespace, the resource type, for example Microsoft.Network/azureFirewalls."
+                          }
+                        },
+                        "metricName": {
+                          "type": "string",
+                          "metadata": {
+                            "description": "Exact metric name, for example FirewallHealth."
+                          }
+                        },
+                        "operator": {
+                          "type": "string",
+                          "allowedValues": [
+                            "GreaterThan",
+                            "GreaterThanOrEqual",
+                            "LessThan",
+                            "LessThanOrEqual"
+                          ],
+                          "metadata": {
+                            "description": "Comparison against the threshold."
+                          }
+                        },
+                        "threshold": {
+                          "type": "string",
+                          "metadata": {
+                            "description": "Threshold as text, for example '90' or '99.9'. Bicep has no decimal literals; the module converts it with json()."
+                          }
+                        },
+                        "timeAggregation": {
+                          "type": "string",
+                          "allowedValues": [
+                            "Average",
+                            "Count",
+                            "Maximum",
+                            "Minimum",
+                            "Total"
+                          ],
+                          "metadata": {
+                            "description": "How the metric is aggregated over the window."
+                          }
+                        },
+                        "dimensions": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/definitions/_1.metricAlertDimension"
+                          },
+                          "nullable": true,
+                          "metadata": {
+                            "description": "Dimension filters. Omit for none."
+                          }
+                        },
+                        "deploy": {
+                          "type": "bool",
+                          "nullable": true,
+                          "metadata": {
+                            "description": "False skips the rule, for example the VPN alert in a region without a gateway. Defaults to true."
+                          }
+                        }
+                      },
+                      "metadata": {
+                        "description": "One static-threshold metric alert on a single resource (Phase 6).",
+                        "__bicep_imported_from!": {
+                          "sourceTemplate": "types.bicep"
+                        }
+                      }
+                    }
+                  },
+                  "parameters": {
+                    "namePrefix": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Prefix of every alert name, for example alert-defenstack-prod-wus3."
+                      }
+                    },
+                    "rules": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/definitions/metricAlertRule"
+                      },
+                      "metadata": {
+                        "description": "Static-threshold metric alerts to create, each on one resource."
+                      }
+                    },
+                    "actionGroupId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Resource ID of the action group notified when an alert fires or resolves."
+                      }
+                    }
+                  },
+                  "resources": {
+                    "metricAlerts": {
+                      "copy": {
+                        "name": "metricAlerts",
+                        "count": "[length(parameters('rules'))]"
+                      },
+                      "condition": "[coalesce(tryGet(parameters('rules')[copyIndex()], 'deploy'), true())]",
+                      "type": "Microsoft.Insights/metricAlerts",
+                      "apiVersion": "2018-03-01",
+                      "name": "[format('{0}-{1}', parameters('namePrefix'), parameters('rules')[copyIndex()].name)]",
+                      "location": "global",
+                      "properties": {
+                        "description": "[parameters('rules')[copyIndex()].description]",
+                        "severity": "[parameters('rules')[copyIndex()].severity]",
+                        "enabled": true,
+                        "scopes": [
+                          "[parameters('rules')[copyIndex()].resourceId]"
+                        ],
+                        "evaluationFrequency": "PT5M",
+                        "windowSize": "PT15M",
+                        "autoMitigate": true,
+                        "criteria": {
+                          "odata.type": "Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria",
+                          "allOf": [
+                            {
+                              "criterionType": "StaticThresholdCriterion",
+                              "name": "[parameters('rules')[copyIndex()].name]",
+                              "metricNamespace": "[parameters('rules')[copyIndex()].metricNamespace]",
+                              "metricName": "[parameters('rules')[copyIndex()].metricName]",
+                              "operator": "[parameters('rules')[copyIndex()].operator]",
+                              "threshold": "[json(parameters('rules')[copyIndex()].threshold)]",
+                              "timeAggregation": "[parameters('rules')[copyIndex()].timeAggregation]",
+                              "dimensions": "[coalesce(tryGet(parameters('rules')[copyIndex()], 'dimensions'), createArray())]"
+                            }
+                          ]
+                        },
+                        "actions": [
+                          {
+                            "actionGroupId": "[parameters('actionGroupId')]"
+                          }
+                        ]
+                      }
+                    }
+                  }
+                }
+              },
+              "dependsOn": [
+                "appService",
+                "azureFirewall",
+                "keyVault",
+                "vpnGateway"
+              ]
             }
           },
           "outputs": {
@@ -10812,6 +11739,7 @@
         }
       },
       "dependsOn": [
+        "actionGroup",
         "global",
         "primaryStamp"
       ]
@@ -11120,7 +12048,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "9700455370740627386"
+              "templateHash": "2642223155181450866"
             }
           },
           "parameters": {
@@ -11462,6 +12390,10 @@
             }
           ],
           "outputs": {
+            "id": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Cdn/profiles', parameters('profileName'))]"
+            },
             "profileName": {
               "type": "string",
               "value": "[parameters('profileName')]"
@@ -11489,6 +12421,389 @@
         "global",
         "primaryStamp",
         "secondaryStamp"
+      ]
+    },
+    "globalMetricAlerts": {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('global-metric-alerts-{0}', parameters('environmentName'))]",
+      "resourceGroup": "[variables('globalResourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "namePrefix": {
+            "value": "[format('alert-defenstack-{0}', parameters('environmentName'))]"
+          },
+          "actionGroupId": {
+            "value": "[reference('actionGroup').outputs.id.value]"
+          },
+          "rules": {
+            "value": [
+              {
+                "name": "front-door-origin-health",
+                "description": "Front Door sees less than 90 percent of origin health probes succeed.",
+                "severity": 1,
+                "resourceId": "[reference('frontDoor').outputs.id.value]",
+                "metricNamespace": "Microsoft.Cdn/profiles",
+                "metricName": "OriginHealthPercentage",
+                "operator": "LessThan",
+                "threshold": "90",
+                "timeAggregation": "Average"
+              },
+              {
+                "name": "front-door-waf-blocks",
+                "description": "The Front Door WAF blocked more requests than the threshold in 15 minutes.",
+                "severity": 2,
+                "resourceId": "[reference('frontDoor').outputs.id.value]",
+                "metricNamespace": "Microsoft.Cdn/profiles",
+                "metricName": "WebApplicationFirewallRequestCount",
+                "operator": "GreaterThan",
+                "threshold": "[string(parameters('alertThresholds').frontDoorWafBlocks)]",
+                "timeAggregation": "Total",
+                "dimensions": [
+                  {
+                    "name": "Action",
+                    "operator": "Include",
+                    "values": [
+                      "Block"
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "languageVersion": "2.0",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "14677969537259490203"
+            }
+          },
+          "definitions": {
+            "_1.metricAlertDimension": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "Dimension name, for example StatusCode or Action."
+                  }
+                },
+                "operator": {
+                  "type": "string",
+                  "allowedValues": [
+                    "Exclude",
+                    "Include"
+                  ],
+                  "metadata": {
+                    "description": "Include matches only the values; Exclude matches everything else."
+                  }
+                },
+                "values": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "metadata": {
+                    "description": "Dimension values."
+                  }
+                }
+              },
+              "metadata": {
+                "description": "A dimension filter on a metric alert, for example StatusCode = 403.",
+                "__bicep_imported_from!": {
+                  "sourceTemplate": "types.bicep"
+                }
+              }
+            },
+            "metricAlertRule": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "Short rule name, appended to the alert name prefix, for example firewall-health."
+                  }
+                },
+                "description": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "What the alert means. Shown in the alert email; runbook 06 has the triage steps."
+                  }
+                },
+                "severity": {
+                  "type": "int",
+                  "allowedValues": [
+                    0,
+                    1,
+                    2,
+                    3,
+                    4
+                  ],
+                  "metadata": {
+                    "description": "Alert severity: 0 Critical, 1 Error, 2 Warning, 3 Informational, 4 Verbose."
+                  }
+                },
+                "resourceId": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "Resource ID the metric is read from."
+                  }
+                },
+                "metricNamespace": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "Metric namespace, the resource type, for example Microsoft.Network/azureFirewalls."
+                  }
+                },
+                "metricName": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "Exact metric name, for example FirewallHealth."
+                  }
+                },
+                "operator": {
+                  "type": "string",
+                  "allowedValues": [
+                    "GreaterThan",
+                    "GreaterThanOrEqual",
+                    "LessThan",
+                    "LessThanOrEqual"
+                  ],
+                  "metadata": {
+                    "description": "Comparison against the threshold."
+                  }
+                },
+                "threshold": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "Threshold as text, for example '90' or '99.9'. Bicep has no decimal literals; the module converts it with json()."
+                  }
+                },
+                "timeAggregation": {
+                  "type": "string",
+                  "allowedValues": [
+                    "Average",
+                    "Count",
+                    "Maximum",
+                    "Minimum",
+                    "Total"
+                  ],
+                  "metadata": {
+                    "description": "How the metric is aggregated over the window."
+                  }
+                },
+                "dimensions": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/definitions/_1.metricAlertDimension"
+                  },
+                  "nullable": true,
+                  "metadata": {
+                    "description": "Dimension filters. Omit for none."
+                  }
+                },
+                "deploy": {
+                  "type": "bool",
+                  "nullable": true,
+                  "metadata": {
+                    "description": "False skips the rule, for example the VPN alert in a region without a gateway. Defaults to true."
+                  }
+                }
+              },
+              "metadata": {
+                "description": "One static-threshold metric alert on a single resource (Phase 6).",
+                "__bicep_imported_from!": {
+                  "sourceTemplate": "types.bicep"
+                }
+              }
+            }
+          },
+          "parameters": {
+            "namePrefix": {
+              "type": "string",
+              "metadata": {
+                "description": "Prefix of every alert name, for example alert-defenstack-prod-wus3."
+              }
+            },
+            "rules": {
+              "type": "array",
+              "items": {
+                "$ref": "#/definitions/metricAlertRule"
+              },
+              "metadata": {
+                "description": "Static-threshold metric alerts to create, each on one resource."
+              }
+            },
+            "actionGroupId": {
+              "type": "string",
+              "metadata": {
+                "description": "Resource ID of the action group notified when an alert fires or resolves."
+              }
+            }
+          },
+          "resources": {
+            "metricAlerts": {
+              "copy": {
+                "name": "metricAlerts",
+                "count": "[length(parameters('rules'))]"
+              },
+              "condition": "[coalesce(tryGet(parameters('rules')[copyIndex()], 'deploy'), true())]",
+              "type": "Microsoft.Insights/metricAlerts",
+              "apiVersion": "2018-03-01",
+              "name": "[format('{0}-{1}', parameters('namePrefix'), parameters('rules')[copyIndex()].name)]",
+              "location": "global",
+              "properties": {
+                "description": "[parameters('rules')[copyIndex()].description]",
+                "severity": "[parameters('rules')[copyIndex()].severity]",
+                "enabled": true,
+                "scopes": [
+                  "[parameters('rules')[copyIndex()].resourceId]"
+                ],
+                "evaluationFrequency": "PT5M",
+                "windowSize": "PT15M",
+                "autoMitigate": true,
+                "criteria": {
+                  "odata.type": "Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria",
+                  "allOf": [
+                    {
+                      "criterionType": "StaticThresholdCriterion",
+                      "name": "[parameters('rules')[copyIndex()].name]",
+                      "metricNamespace": "[parameters('rules')[copyIndex()].metricNamespace]",
+                      "metricName": "[parameters('rules')[copyIndex()].metricName]",
+                      "operator": "[parameters('rules')[copyIndex()].operator]",
+                      "threshold": "[json(parameters('rules')[copyIndex()].threshold)]",
+                      "timeAggregation": "[parameters('rules')[copyIndex()].timeAggregation]",
+                      "dimensions": "[coalesce(tryGet(parameters('rules')[copyIndex()], 'dimensions'), createArray())]"
+                    }
+                  ]
+                },
+                "actions": [
+                  {
+                    "actionGroupId": "[parameters('actionGroupId')]"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "actionGroup",
+        "frontDoor"
+      ]
+    },
+    "serviceHealthAlert": {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('service-health-alert-{0}', parameters('environmentName'))]",
+      "resourceGroup": "[variables('globalResourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "alertName": {
+            "value": "[format('alert-defenstack-{0}-service-health', parameters('environmentName'))]"
+          },
+          "regions": {
+            "value": "[concat(createArray(variables('regionDisplayNames')[toLower(parameters('primaryLocation'))]), if(parameters('deploySecondaryRegion'), createArray(variables('regionDisplayNames')[toLower(parameters('secondaryLocation'))]), createArray()), createArray('Global'))]"
+          },
+          "actionGroupId": {
+            "value": "[reference('actionGroup').outputs.id.value]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "languageVersion": "2.0",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "18151844738377665537"
+            }
+          },
+          "parameters": {
+            "alertName": {
+              "type": "string",
+              "metadata": {
+                "description": "Alert rule name."
+              }
+            },
+            "regions": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "metadata": {
+                "description": "Regions to watch, as Service Health names them (for example West US 3), plus Global for non-regional events."
+              }
+            },
+            "actionGroupId": {
+              "type": "string",
+              "metadata": {
+                "description": "Resource ID of the action group notified when Service Health reports an event."
+              }
+            }
+          },
+          "resources": {
+            "serviceHealthAlert": {
+              "type": "Microsoft.Insights/activityLogAlerts",
+              "apiVersion": "2020-10-01",
+              "name": "[parameters('alertName')]",
+              "location": "Global",
+              "properties": {
+                "description": "Azure Service Health event affecting a DefenStack region. Triage: runbook 06.",
+                "enabled": true,
+                "scopes": [
+                  "[subscription().id]"
+                ],
+                "condition": {
+                  "allOf": [
+                    {
+                      "field": "category",
+                      "equals": "ServiceHealth"
+                    },
+                    {
+                      "anyOf": [
+                        {
+                          "field": "properties.impactedServices[*].ImpactedRegions[*].RegionName",
+                          "containsAny": "[parameters('regions')]"
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "actions": {
+                  "actionGroups": [
+                    {
+                      "actionGroupId": "[parameters('actionGroupId')]"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "outputs": {
+            "name": {
+              "type": "string",
+              "value": "[parameters('alertName')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "actionGroup"
       ]
     },
     "privateDnsLinks": {
