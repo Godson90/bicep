@@ -156,4 +156,33 @@ Describe 'Governance parameters (Phase 7)' {
         $parameters = Get-BuiltParameters 'params/governance.bicepparam'
         $parameters.malwareScanCapGbPerMonth.value | Should -Be 5000
     }
+
+    It 'starts audit-first for dev and prod (ADR-027)' {
+        $parameters = Get-BuiltParameters 'params/governance.bicepparam'
+        $parameters.denyEnforcement.value | Should -Be 'DoNotEnforce'
+        @($parameters.environments.value) -join ',' | Should -Be 'dev,prod'
+    }
+
+    It 'gives the legacy waiver a real yyyy-MM-dd expiry' {
+        $parameters = Get-BuiltParameters 'params/governance.bicepparam'
+        $parameters.legacyResourceGroupName.value | Should -Be 'defenStack'
+        $expires = $parameters.legacyWaiverExpiresOn.value
+        $expires | Should -Match '^\d{4}-\d{2}-\d{2}$'
+        { [datetime]::ParseExact($expires, 'yyyy-MM-dd', [Globalization.CultureInfo]::InvariantCulture) } | Should -Not -Throw
+    }
+
+    It 'mirrors the environment parameter files in the governance region layout' {
+        $governance = Get-BicepTemplate -RelativePath 'governance.bicep'
+        $main = Get-BicepTemplate -RelativePath 'main.bicep'
+        $layout = $governance.parameters.environmentRegions.defaultValue
+        # Dev runs the primary only; prod adds the secondary. Neither file overrides the region defaults.
+        $dev.deploySecondaryRegion.value | Should -BeExactly $false
+        $prod.deploySecondaryRegion.value | Should -BeExactly $true
+        foreach ($parameters in $dev, $prod) {
+            $parameters.PSObject.Properties.Name | Should -Not -Contain 'primaryLocation'
+            $parameters.PSObject.Properties.Name | Should -Not -Contain 'secondaryLocation'
+        }
+        @($layout.dev) -join ',' | Should -Be $main.parameters.primaryLocation.defaultValue
+        @($layout.prod) -join ',' | Should -Be "$($main.parameters.primaryLocation.defaultValue),$($main.parameters.secondaryLocation.defaultValue)"
+    }
 }

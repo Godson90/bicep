@@ -154,3 +154,13 @@ type alertThresholdSet = {
   @minValue(1)
   frontDoorWafBlocks: int
 }
+
+@export()
+@description('Regions each environment runs in, as main.bicep lays out its stamps: the primary first, then the warm standby (Phase 7 governance).')
+type environmentRegionLayout = {
+  @description('Dev regions. Dev runs primary-only (ADR-008).')
+  dev: ('westus3' | 'eastus')[]
+
+  @description('Prod regions: the primary, then the warm standby.')
+  prod: ('westus3' | 'eastus')[]
+}
