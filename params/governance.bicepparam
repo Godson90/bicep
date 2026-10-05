@@ -9,3 +9,12 @@ param securityContactEmails = filter(
   email => !empty(email)
 )
 param malwareScanCapGbPerMonth = 5000
+// Audit-first: switch to 'Default' only after the compliance review in runbook 07 is clean (ADR-027).
+param denyEnforcement = 'DoNotEnforce'
+param environments = [
+  'dev'
+  'prod'
+]
+// The legacy waiver ends here; extend it only with a dated reason in runbook 01a.
+param legacyResourceGroupName = 'defenStack'
+param legacyWaiverExpiresOn = '2027-03-31'

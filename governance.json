@@ -6,9 +6,73 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "6399012703544655637"
+      "templateHash": "7816187800415472646"
     }
   },
+  "definitions": {
+    "environmentRegionLayout": {
+      "type": "object",
+      "properties": {
+        "dev": {
+          "type": "array",
+          "allowedValues": [
+            "eastus",
+            "westus3"
+          ],
+          "metadata": {
+            "description": "Dev regions. Dev runs primary-only (ADR-008)."
+          }
+        },
+        "prod": {
+          "type": "array",
+          "allowedValues": [
+            "eastus",
+            "westus3"
+          ],
+          "metadata": {
+            "description": "Prod regions: the primary, then the warm standby."
+          }
+        }
+      },
+      "metadata": {
+        "description": "Regions each environment runs in, as main.bicep lays out its stamps: the primary first, then the warm standby (Phase 7 governance).",
+        "__bicep_imported_from!": {
+          "sourceTemplate": "modules/types.bicep"
+        }
+      }
+    }
+  },
+  "functions": [
+    {
+      "namespace": "__bicep",
+      "members": {
+        "publicIpNames": {
+          "parameters": [
+            {
+              "type": "string",
+              "name": "environmentName"
+            },
+            {
+              "type": "string",
+              "name": "regionCode"
+            }
+          ],
+          "output": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "value": [
+              "[format('pip-afw-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
+              "[format('pip-bas-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
+              "[format('pip-vpng-defenstack-{0}-{1}-1', parameters('environmentName'), parameters('regionCode'))]",
+              "[format('pip-vpng-defenstack-{0}-{1}-2', parameters('environmentName'), parameters('regionCode'))]"
+            ]
+          }
+        }
+      }
+    }
+  ],
   "parameters": {
     "securityContactEmails": {
       "type": "array",
@@ -27,7 +91,84 @@
       "metadata": {
         "description": "Monthly cap, in GB per storage account, on Defender for Storage on-upload malware scanning. -1 removes the cap."
       }
+    },
+    "denyEnforcement": {
+      "type": "string",
+      "defaultValue": "DoNotEnforce",
+      "allowedValues": [
+        "DoNotEnforce",
+        "Default"
+      ],
+      "metadata": {
+        "description": "Enforcement of every deny assignment. DoNotEnforce (audit-first) reports compliance without blocking; switch to Default once compliance is clean (ADR-027, runbook 07)."
+      }
+    },
+    "environments": {
+      "type": "array",
+      "allowedValues": [
+        "dev",
+        "prod"
+      ],
+      "defaultValue": [
+        "dev",
+        "prod"
+      ],
+      "minLength": 1,
+      "metadata": {
+        "description": "Environments deployed in this subscription. Their public IPs are allowed and their flow-log accounts exempted; every listed stamp must already exist (runbook 07)."
+      }
+    },
+    "environmentRegions": {
+      "$ref": "#/definitions/environmentRegionLayout",
+      "defaultValue": {
+        "dev": [
+          "westus3"
+        ],
+        "prod": [
+          "westus3",
+          "eastus"
+        ]
+      },
+      "metadata": {
+        "description": "Regions each environment runs in, mirroring the dev and prod parameter files: dev primary-only, prod with the East US warm standby."
+      }
+    },
+    "legacyResourceGroupName": {
+      "type": "string",
+      "defaultValue": "defenStack",
+      "metadata": {
+        "description": "Legacy resource group that gets a dated waiver from the deny assignments until runbook 01a tears it down. Empty skips the waiver."
+      }
+    },
+    "legacyWaiverExpiresOn": {
+      "type": "string",
+      "minLength": 10,
+      "maxLength": 10,
+      "metadata": {
+        "description": "Date the legacy waiver expires, as yyyy-MM-dd (end of that day, UTC)."
+      }
     }
+  },
+  "variables": {
+    "regionCodes": {
+      "westus3": "wus3",
+      "eastus": "eus"
+    },
+    "platformLocations": [
+      "westus3",
+      "eastus"
+    ],
+    "stamps": "[flatten(map(parameters('environments'), lambda('environmentName', map(parameters('environmentRegions')[lambdaVariables('environmentName')], lambda('location', createObject('environmentName', lambdaVariables('environmentName'), 'location', lambdaVariables('location'), 'regionCode', variables('regionCodes')[lambdaVariables('location')], 'resourceGroupName', format('rg-defenstack-{0}-{1}', lambdaVariables('environmentName'), variables('regionCodes')[lambdaVariables('location')])))))))]",
+    "allowedPublicIpNames": "[flatten(map(variables('stamps'), lambda('stamp', __bicep.publicIpNames(lambdaVariables('stamp').environmentName, lambdaVariables('stamp').regionCode))))]",
+    "diagnosticResourceTypes": [
+      "Microsoft.Network/azureFirewalls",
+      "Microsoft.Network/bastionHosts",
+      "Microsoft.Network/virtualNetworkGateways",
+      "Microsoft.Cdn/profiles",
+      "Microsoft.KeyVault/vaults",
+      "Microsoft.Web/sites",
+      "Microsoft.Storage/storageAccounts/blobServices"
+    ]
   },
   "resources": {
     "defenderPlans": {
@@ -225,6 +366,489 @@
           }
         }
       }
+    },
+    "policies": {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "governance-policies",
+      "location": "[deployment().location]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "denyEnforcement": {
+            "value": "[parameters('denyEnforcement')]"
+          },
+          "allowedLocations": {
+            "value": "[concat(variables('platformLocations'), createArray('global'))]"
+          },
+          "allowedResourceGroupLocations": {
+            "value": "[variables('platformLocations')]"
+          },
+          "allowedPublicIpNames": {
+            "value": "[variables('allowedPublicIpNames')]"
+          },
+          "diagnosticResourceTypes": {
+            "value": "[variables('diagnosticResourceTypes')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+          "languageVersion": "2.0",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "18013160437109417949"
+            }
+          },
+          "parameters": {
+            "denyEnforcement": {
+              "type": "string",
+              "allowedValues": [
+                "DoNotEnforce",
+                "Default"
+              ],
+              "metadata": {
+                "description": "Enforcement of every deny assignment: DoNotEnforce reports compliance without blocking; Default blocks (ADR-027)."
+              }
+            },
+            "allowedLocations": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minLength": 1,
+              "metadata": {
+                "description": "Locations where resources may be created, including global."
+              }
+            },
+            "allowedResourceGroupLocations": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minLength": 1,
+              "metadata": {
+                "description": "Locations where resource groups may be created."
+              }
+            },
+            "allowedPublicIpNames": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minLength": 1,
+              "metadata": {
+                "description": "Every public IP name the platform may create: the firewall, Bastion and VPN gateway IPs of each stamp."
+              }
+            },
+            "diagnosticResourceTypes": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minLength": 1,
+              "metadata": {
+                "description": "Resource types audited for a diagnostic setting."
+              }
+            }
+          },
+          "variables": {
+            "publicNetworkAccessPolicies": [
+              {
+                "name": "defenstack-deny-storage-public-network",
+                "displayName": "Storage accounts should disable public network access",
+                "definitionId": "b2982f36-99f2-4db5-8eff-283140c09693"
+              },
+              {
+                "name": "defenstack-deny-key-vault-public-network",
+                "displayName": "Azure Key Vault should disable public network access",
+                "definitionId": "405c5871-3e91-4644-8a63-58e19d68ff5b"
+              },
+              {
+                "name": "defenstack-deny-app-public-network",
+                "displayName": "App Service apps should disable public network access",
+                "definitionId": "1b5ef780-c53c-4a64-87f3-bb9c8c8094ba"
+              },
+              {
+                "name": "defenstack-deny-app-slot-public-network",
+                "displayName": "App Service app slots should disable public network access",
+                "definitionId": "701a595d-38fb-4a66-ae6d-fb3735217622"
+              },
+              {
+                "name": "defenstack-deny-function-public-network",
+                "displayName": "Function apps should disable public network access",
+                "definitionId": "969ac98b-88a8-449f-883c-2e9adb123127"
+              },
+              {
+                "name": "defenstack-deny-function-slot-public-network",
+                "displayName": "Function app slots should disable public network access",
+                "definitionId": "11c82d0c-db9f-4d7b-97c5-f3f9aa957da2"
+              }
+            ],
+            "assignmentMetadata": {
+              "assignedBy": "DefenStack governance.bicep (runbook 07)"
+            }
+          },
+          "resources": {
+            "cloudSecurityBenchmark": {
+              "type": "Microsoft.Authorization/policyAssignments",
+              "apiVersion": "2025-11-01",
+              "name": "defenstack-mcsb",
+              "properties": {
+                "metadata": "[variables('assignmentMetadata')]",
+                "displayName": "Microsoft cloud security benchmark",
+                "description": "Security posture baseline, audit only (Phase 7, runbook 07).",
+                "policyDefinitionId": "[tenantResourceId('Microsoft.Authorization/policySetDefinitions', '1f3afdf9-d0c9-4c3d-847f-89da613e70a8')]",
+                "enforcementMode": "Default"
+              }
+            },
+            "publicNetworkAccess": {
+              "copy": {
+                "name": "publicNetworkAccess",
+                "count": "[length(variables('publicNetworkAccessPolicies'))]"
+              },
+              "type": "Microsoft.Authorization/policyAssignments",
+              "apiVersion": "2025-11-01",
+              "name": "[variables('publicNetworkAccessPolicies')[copyIndex()].name]",
+              "properties": {
+                "metadata": "[variables('assignmentMetadata')]",
+                "displayName": "[variables('publicNetworkAccessPolicies')[copyIndex()].displayName]",
+                "description": "Data services are reached through private endpoints only (Phase 7, ADR-027).",
+                "policyDefinitionId": "[tenantResourceId('Microsoft.Authorization/policyDefinitions', variables('publicNetworkAccessPolicies')[copyIndex()].definitionId)]",
+                "enforcementMode": "[parameters('denyEnforcement')]",
+                "parameters": {
+                  "effect": {
+                    "value": "Deny"
+                  }
+                },
+                "nonComplianceMessages": [
+                  {
+                    "message": "Public network access must be disabled; use the private endpoint. Exemptions: runbook 07."
+                  }
+                ]
+              }
+            },
+            "allowedLocationsAssignment": {
+              "type": "Microsoft.Authorization/policyAssignments",
+              "apiVersion": "2025-11-01",
+              "name": "defenstack-allowed-locations",
+              "properties": {
+                "metadata": "[variables('assignmentMetadata')]",
+                "displayName": "Allowed locations",
+                "description": "Resources only in the platform regions, or global (Phase 7, ADR-027).",
+                "policyDefinitionId": "[tenantResourceId('Microsoft.Authorization/policyDefinitions', 'e56962a6-4747-49cd-b67b-bf8b01975c4c')]",
+                "enforcementMode": "[parameters('denyEnforcement')]",
+                "parameters": {
+                  "listOfAllowedLocations": {
+                    "value": "[parameters('allowedLocations')]"
+                  }
+                },
+                "nonComplianceMessages": [
+                  {
+                    "message": "Only the platform regions (and global) are allowed. Exemptions: runbook 07."
+                  }
+                ]
+              }
+            },
+            "allowedResourceGroupLocationsAssignment": {
+              "type": "Microsoft.Authorization/policyAssignments",
+              "apiVersion": "2025-11-01",
+              "name": "defenstack-allowed-resource-group-locations",
+              "properties": {
+                "metadata": "[variables('assignmentMetadata')]",
+                "displayName": "Allowed locations for resource groups",
+                "description": "Resource groups only in the platform regions (Phase 7, ADR-027).",
+                "policyDefinitionId": "[tenantResourceId('Microsoft.Authorization/policyDefinitions', 'e765b5de-1225-4ba3-bd56-1ac6695af988')]",
+                "enforcementMode": "[parameters('denyEnforcement')]",
+                "parameters": {
+                  "listOfAllowedLocations": {
+                    "value": "[parameters('allowedResourceGroupLocations')]"
+                  }
+                },
+                "nonComplianceMessages": [
+                  {
+                    "message": "Resource groups are allowed only in the platform regions. Exemptions: runbook 07."
+                  }
+                ]
+              }
+            },
+            "publicIpDefinition": {
+              "type": "Microsoft.Authorization/policyDefinitions",
+              "apiVersion": "2025-11-01",
+              "name": "defenstack-deny-public-ip-except-allowlist",
+              "properties": {
+                "policyType": "Custom",
+                "mode": "Indexed",
+                "displayName": "Deny public IP addresses except the platform allowlist",
+                "description": "Only the firewall, Bastion and VPN gateway public IPs named by the platform may exist (Phase 7, ADR-027).",
+                "metadata": {
+                  "category": "Network"
+                },
+                "parameters": {
+                  "allowedNames": {
+                    "type": "Array",
+                    "metadata": {
+                      "displayName": "Allowed public IP names",
+                      "description": "Names of the public IPs the platform deploys."
+                    }
+                  }
+                },
+                "policyRule": {
+                  "if": {
+                    "allOf": [
+                      {
+                        "field": "type",
+                        "equals": "Microsoft.Network/publicIPAddresses"
+                      },
+                      {
+                        "field": "name",
+                        "notIn": "[[parameters('allowedNames')]"
+                      }
+                    ]
+                  },
+                  "then": {
+                    "effect": "deny"
+                  }
+                }
+              }
+            },
+            "publicIpAssignment": {
+              "type": "Microsoft.Authorization/policyAssignments",
+              "apiVersion": "2025-11-01",
+              "name": "defenstack-deny-public-ip",
+              "properties": {
+                "metadata": "[variables('assignmentMetadata')]",
+                "displayName": "Deny public IP addresses except the platform allowlist",
+                "description": "Public IPs only for the firewall, Bastion and VPN gateways (Phase 7, ADR-027).",
+                "policyDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/policyDefinitions', 'defenstack-deny-public-ip-except-allowlist')]",
+                "enforcementMode": "[parameters('denyEnforcement')]",
+                "parameters": {
+                  "allowedNames": {
+                    "value": "[parameters('allowedPublicIpNames')]"
+                  }
+                },
+                "nonComplianceMessages": [
+                  {
+                    "message": "This public IP name is not on the platform allowlist (governance.bicep). Exemptions: runbook 07."
+                  }
+                ]
+              },
+              "dependsOn": [
+                "publicIpDefinition"
+              ]
+            },
+            "diagnosticSettingsAudit": {
+              "type": "Microsoft.Authorization/policyAssignments",
+              "apiVersion": "2025-11-01",
+              "name": "defenstack-audit-diagnostic-settings",
+              "properties": {
+                "metadata": "[variables('assignmentMetadata')]",
+                "displayName": "Audit diagnostic setting for selected resource types",
+                "description": "Platform resource types that send logs and metrics to the workspace keep doing so (Phase 7).",
+                "policyDefinitionId": "[tenantResourceId('Microsoft.Authorization/policyDefinitions', '7f89b1eb-583c-429a-8828-af049802c1d9')]",
+                "enforcementMode": "Default",
+                "parameters": {
+                  "listOfResourceTypes": {
+                    "value": "[parameters('diagnosticResourceTypes')]"
+                  }
+                }
+              }
+            }
+          },
+          "outputs": {
+            "storagePublicNetworkAssignmentId": {
+              "type": "string",
+              "value": "[subscriptionResourceId('Microsoft.Authorization/policyAssignments', variables('publicNetworkAccessPolicies')[0].name)]"
+            },
+            "denyAssignmentIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "value": "[concat(map(variables('publicNetworkAccessPolicies'), lambda('policy', subscriptionResourceId('Microsoft.Authorization/policyAssignments', lambdaVariables('policy').name))), createArray(subscriptionResourceId('Microsoft.Authorization/policyAssignments', 'defenstack-allowed-locations'), subscriptionResourceId('Microsoft.Authorization/policyAssignments', 'defenstack-allowed-resource-group-locations'), subscriptionResourceId('Microsoft.Authorization/policyAssignments', 'defenstack-deny-public-ip')))]"
+            }
+          }
+        }
+      }
+    },
+    "flowLogExemptions": {
+      "copy": {
+        "name": "flowLogExemptions",
+        "count": "[length(variables('stamps'))]"
+      },
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('governance-flow-log-exemption-{0}-{1}', variables('stamps')[copyIndex()].environmentName, variables('stamps')[copyIndex()].regionCode)]",
+      "resourceGroup": "[variables('stamps')[copyIndex()].resourceGroupName]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "environmentName": {
+            "value": "[variables('stamps')[copyIndex()].environmentName]"
+          },
+          "location": {
+            "value": "[variables('stamps')[copyIndex()].location]"
+          },
+          "regionCode": {
+            "value": "[variables('stamps')[copyIndex()].regionCode]"
+          },
+          "policyAssignmentId": {
+            "value": "[reference('policies').outputs.storagePublicNetworkAssignmentId.value]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "11342842666558404347"
+            }
+          },
+          "parameters": {
+            "environmentName": {
+              "type": "string",
+              "allowedValues": [
+                "dev",
+                "prod"
+              ],
+              "metadata": {
+                "description": "Environment of the stamp that owns the account."
+              }
+            },
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Full region name of the stamp, for example westus3. It is part of the account name hash."
+              }
+            },
+            "regionCode": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 4,
+              "metadata": {
+                "description": "Short region code of the stamp, for example wus3."
+              }
+            },
+            "policyAssignmentId": {
+              "type": "string",
+              "metadata": {
+                "description": "Resource ID of the storage public network access assignment."
+              }
+            }
+          },
+          "variables": {
+            "nameSuffix": "[uniqueString(subscription().id, parameters('environmentName'), parameters('location'))]",
+            "flowLogStorageAccountName": "[format('stfl{0}{1}', parameters('regionCode'), variables('nameSuffix'))]"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Authorization/policyExemptions",
+              "apiVersion": "2026-01-01-preview",
+              "scope": "[resourceId('Microsoft.Storage/storageAccounts', variables('flowLogStorageAccountName'))]",
+              "name": "defenstack-flow-log-storage-public-network",
+              "properties": {
+                "policyAssignmentId": "[parameters('policyAssignmentId')]",
+                "exemptionCategory": "Mitigated",
+                "displayName": "Flow-log storage: deny-all firewall instead of disabled public access",
+                "description": "Network Watcher writes VNet flow logs as a trusted Azure service. Public network access stays Enabled so the deny-all firewall and its trusted-services bypass apply; shared key is disabled (ADR-023)."
+              }
+            }
+          ],
+          "outputs": {
+            "storageAccountName": {
+              "type": "string",
+              "value": "[variables('flowLogStorageAccountName')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "policies"
+      ]
+    },
+    "legacyWaiver": {
+      "condition": "[not(empty(parameters('legacyResourceGroupName')))]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "governance-legacy-waiver",
+      "resourceGroup": "[parameters('legacyResourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "policyAssignmentIds": {
+            "value": "[reference('policies').outputs.denyAssignmentIds.value]"
+          },
+          "expiresOn": {
+            "value": "[parameters('legacyWaiverExpiresOn')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "languageVersion": "2.0",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "6328788458969109355"
+            }
+          },
+          "parameters": {
+            "policyAssignmentIds": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "minLength": 1,
+              "metadata": {
+                "description": "Resource IDs of the deny assignments to waive."
+              }
+            },
+            "expiresOn": {
+              "type": "string",
+              "minLength": 10,
+              "maxLength": 10,
+              "metadata": {
+                "description": "Date the waivers expire, as yyyy-MM-dd (end of that day, UTC)."
+              }
+            }
+          },
+          "resources": {
+            "waivers": {
+              "copy": {
+                "name": "waivers",
+                "count": "[length(parameters('policyAssignmentIds'))]"
+              },
+              "type": "Microsoft.Authorization/policyExemptions",
+              "apiVersion": "2026-01-01-preview",
+              "name": "[format('defenstack-legacy-waiver-{0}', last(split(parameters('policyAssignmentIds')[copyIndex()], '/')))]",
+              "properties": {
+                "policyAssignmentId": "[parameters('policyAssignmentIds')[copyIndex()]]",
+                "exemptionCategory": "Waiver",
+                "expiresOn": "[format('{0}T23:59:59Z', parameters('expiresOn'))]",
+                "displayName": "Legacy defenStack resource group, pending teardown",
+                "description": "The pre-platform resource group is migrated and torn down by runbook 01a; until then the deny assignments do not apply to it."
+              }
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "policies"
+      ]
     }
   },
   "outputs": {
@@ -234,6 +858,13 @@
         "type": "string"
       },
       "value": "[reference('defenderPlans').outputs.planNames.value]"
+    },
+    "allowedPublicIpNames": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "value": "[variables('allowedPublicIpNames')]"
     }
   }
 }
