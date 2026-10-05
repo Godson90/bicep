@@ -1,0 +1,176 @@
+name: deploy
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'main.bicep'
+      - 'modules/**'
+      - 'params/**'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        type: choice
+        options: [dev, prod]
+        default: dev
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: deploy-${{ inputs.environment || 'dev' }}
+  cancel-in-progress: false
+
+env:
+  BICEP_VERSION: v0.47.16
+  DEPLOYMENT_LOCATION: westus3
+  TARGET_ENV: ${{ inputs.environment || 'dev' }}
+
+jobs:
+  # Prod: runs in the reviewer-gated prod environment (approve plan, read the what-if, then approve apply) so every prod token needs approval.
+  # Dev: runs in dev-plan (no reviewers).
+  plan:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment == 'prod' && 'prod' || 'dev-plan' }}
+    steps:
+      # Same check as apply: a prod plan without ALERT_EMAIL would show a what-if that apply then refuses (runbook 06).
+      - name: Require ALERT_EMAIL for prod
+        if: env.TARGET_ENV == 'prod'
+        env:
+          ALERT_EMAIL: ${{ vars.ALERT_EMAIL }}
+        run: |
+          if [ -z "$ALERT_EMAIL" ]; then
+            echo "::error::Set the ALERT_EMAIL variable on the prod GitHub environment before deploying prod (runbook 06)."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Bicep CLI
+        run: |
+          az config set bicep.use_binary_from_path=false
+          az bicep install --version "$BICEP_VERSION"
+
+      - name: Validate
+        env:
+          ALERT_EMAIL: ${{ vars.ALERT_EMAIL }}
+        run: |
+          az deployment sub validate \
+            --location "$DEPLOYMENT_LOCATION" \
+            --name "gh-${{ github.run_id }}-${{ github.run_attempt }}" \
+            --parameters "params/${TARGET_ENV}.bicepparam" \
+            --parameters alertEmail="$ALERT_EMAIL" \
+            --output none
+
+      - name: What-if
+        env:
+          ALERT_EMAIL: ${{ vars.ALERT_EMAIL }}
+        run: |
+          set -o pipefail
+          az deployment sub what-if \
+            --location "$DEPLOYMENT_LOCATION" \
+            --name "gh-${{ github.run_id }}-${{ github.run_attempt }}" \
+            --parameters "params/${TARGET_ENV}.bicepparam" \
+            --parameters alertEmail="$ALERT_EMAIL" \
+            --exclude-change-types Ignore NoChange 2>&1 \
+            | sed -r 's/\x1B\[[0-9;]*[mK]//g' > whatif.txt
+          {
+            echo "### What-if: ${TARGET_ENV} (subscription scope, rg-defenstack-${TARGET_ENV}-*)"
+            echo '```'
+            head -c 60000 whatif.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Keep the what-if for reviewers
+        uses: actions/upload-artifact@v4
+        with:
+          name: whatif-${{ inputs.environment || 'dev' }}
+          path: whatif.txt
+          retention-days: 14
+          if-no-files-found: error
+          overwrite: true
+
+  # Gated by the target environment's required reviewers (prod); reviewers read the plan job summary first.
+  apply:
+    needs: plan
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment || 'dev' }}
+    steps:
+      # Prod alerts must reach someone: stop before any Azure call when the prod environment has no ALERT_EMAIL (runbook 06).
+      - name: Require ALERT_EMAIL for prod
+        if: env.TARGET_ENV == 'prod'
+        env:
+          ALERT_EMAIL: ${{ vars.ALERT_EMAIL }}
+        run: |
+          if [ -z "$ALERT_EMAIL" ]; then
+            echo "::error::Set the ALERT_EMAIL variable on the prod GitHub environment before deploying prod (runbook 06)."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Install Bicep CLI
+        run: |
+          az config set bicep.use_binary_from_path=false
+          az bicep install --version "$BICEP_VERSION"
+
+      # Application secrets come from the environment secret KEYVAULT_SECRETS_JSON and are written to every regional vault (ADR-019).
+      - name: Prepare Key Vault secrets
+        shell: pwsh
+        env:
+          KEYVAULT_SECRETS_JSON: ${{ secrets.KEYVAULT_SECRETS_JSON }}
+        run: ./scripts/ConvertTo-KeyVaultSecretsParameter.ps1 -Json $env:KEYVAULT_SECRETS_JSON -OutFile "$env:RUNNER_TEMP/keyvault-secrets.json"
+
+      - name: Deploy
+        env:
+          ALERT_EMAIL: ${{ vars.ALERT_EMAIL }}
+        run: |
+          az deployment sub create \
+            --location "$DEPLOYMENT_LOCATION" \
+            --name "gh-${{ github.run_id }}-${{ github.run_attempt }}" \
+            --parameters "params/${TARGET_ENV}.bicepparam" \
+            --parameters keyVaultSecrets=@"$RUNNER_TEMP/keyvault-secrets.json" \
+            --parameters alertEmail="$ALERT_EMAIL" \
+            --output table
+
+      - name: Remove the secrets file
+        if: always()
+        run: rm -f "$RUNNER_TEMP/keyvault-secrets.json"
+
+      # The approval wait can outlast the first login's token (up to 15 minutes per app), so refresh it immediately
+      # before the step that needs it.
+      - name: Refresh Azure login before approval
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      # Front Door reaches each App Service over Private Link; its connections stay Pending until approved (runbook 04).
+      - name: Approve Front Door private endpoint connections
+        shell: pwsh
+        run: |
+          $outputs = az deployment sub show --name "gh-${{ github.run_id }}-${{ github.run_attempt }}" --query properties.outputs --output json | ConvertFrom-Json
+          $ids = $outputs.appServiceIds.value
+          $profileName = $outputs.frontDoorProfileName.value
+          $resourceGroupName = $outputs.globalResourceGroupName.value
+          if ($LASTEXITCODE -ne 0 -or -not $ids) { throw 'Could not read appServiceIds from the deployment outputs.' }
+          if (-not $profileName) { throw 'Could not read frontDoorProfileName from the deployment outputs.' }
+          if (-not $resourceGroupName) { throw 'Could not read globalResourceGroupName from the deployment outputs.' }
+          ./scripts/Approve-FrontDoorPrivateEndpoints.ps1 -AppServiceId $ids -FrontDoorProfileName $profileName -FrontDoorResourceGroupName $resourceGroupName

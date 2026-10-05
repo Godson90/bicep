@@ -22,6 +22,11 @@ param storageAccountName string
 @description('Storage account resource ID. Creates an explicit deployment dependency.')
 param storageAccountId string
 
+@description('Blob container that receives the application identity role assignment.')
+@minLength(3)
+@maxLength(63)
+param storageContainerName string
+
 @description('App Service managed identity principal ID.')
 param appServicePrincipalId string
 
@@ -33,6 +38,9 @@ param appServiceName string
 @description('Allow forwarded traffic across the hub/spoke peering for firewall service chaining.')
 param allowForwardedTraffic bool = true
 
+@description('Share the hub VPN gateway with the spoke (gateway transit). Only set when the gateway exists; the spoke peering fails otherwise.')
+param useHubGateway bool = false
+
 resource hubVnet 'Microsoft.Network/virtualNetworks@2025-09-01' existing = {
   name: hubVnetName
 }
@@ -43,16 +51,24 @@ resource spokeVnet 'Microsoft.Network/virtualNetworks@2025-09-01' existing = {
 
 resource storageAccount 'Microsoft.Storage/storageAccounts@2026-04-01' existing = {
   name: storageAccountName
+
+  resource blobService 'blobServices' existing = {
+    name: 'default'
+
+    resource container 'containers' existing = {
+      name: storageContainerName
+    }
+  }
 }
 
-// Hub-side peering for centralized firewall service chaining.
+// Hub-side peering for centralized firewall service chaining; offers the VPN gateway when it exists.
 resource hubToSpokePeering 'Microsoft.Network/virtualNetworks/virtualNetworkPeerings@2024-07-01' = {
   parent: hubVnet
   name: 'hub-to-spoke'
   properties: {
     allowVirtualNetworkAccess: true
     allowForwardedTraffic: allowForwardedTraffic
-    allowGatewayTransit: false
+    allowGatewayTransit: useHubGateway
     useRemoteGateways: false
     remoteVirtualNetwork: {
       id: spokeVnetId
@@ -60,25 +76,29 @@ resource hubToSpokePeering 'Microsoft.Network/virtualNetworks/virtualNetworkPeer
   }
 }
 
-// Spoke-side reciprocal peering.
+// Spoke-side reciprocal peering; learns the VPN client pool through the hub gateway.
 resource spokeToHubPeering 'Microsoft.Network/virtualNetworks/virtualNetworkPeerings@2024-07-01' = {
   parent: spokeVnet
   name: 'spoke-to-hub'
+  // The spoke's useRemoteGateways needs the hub side's allowGatewayTransit in place first.
+  dependsOn: [
+    hubToSpokePeering
+  ]
   properties: {
     allowVirtualNetworkAccess: true
     allowForwardedTraffic: allowForwardedTraffic
     allowGatewayTransit: false
-    useRemoteGateways: false
+    useRemoteGateways: useHubGateway
     remoteVirtualNetwork: {
       id: hubVnetId
     }
   }
 }
 
-// Least-privilege data-plane access for the App Service managed identity.
+// Least-privilege data-plane access for the App Service managed identity, limited to the application container.
 resource storageBlobDataContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(storageAccountId, appServiceName, 'Storage Blob Data Contributor')
-  scope: storageAccount
+  name: guid(storageAccountId, storageContainerName, appServiceName, 'Storage Blob Data Contributor')
+  scope: storageAccount::blobService::container
   properties: {
     principalId: appServicePrincipalId
     principalType: 'ServicePrincipal'

@@ -1,0 +1,12 @@
+# Local parameter overlays that reference or contain secrets. Never commit these.
+*.local.bicepparam
+*.secrets.bicepparam
+
+# Test and tool output
+test-results.xml
+whatif.txt
+whatif.md
+reports/
+
+# Bicep build output for modules; only root main.json is a committed build artifact.
+modules/*.json
