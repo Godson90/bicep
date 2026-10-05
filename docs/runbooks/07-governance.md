@@ -53,7 +53,7 @@ The public IP allowlist is computed from the naming convention: `pip-afw-…`, `
 | Its assignment to the environment's admin group (`adminGroupObjectIds.<env>`) | The environment's **primary** resource group (`rg-defenstack-<env>-wus3`), where the jump host runs | `governance.bicep` |
 | JIT policy `default` (`Microsoft.Security/locations/jitNetworkAccessPolicies`, kind Basic) for the jump host: TCP 22 and 3389, sources the Bastion subnet, the VPN pool and any ADR-approved management sources (`managementSourceCidrs`), at most 3 hours (`PT3H`) | The jump host's resource group and region | The pipeline (`deploy.yml`), with the jump host |
 | NIC NSG `<vm>-nsg`: `deny-ssh-rdp-inbound` (priority 4000, any source) replaces the static allow | The jump host's NIC | The pipeline |
-| `management` NSG: `allow-management-ssh-rdp` (priority 100) from the Bastion subnet and the VPN pool, **unchanged** | The `management` subnet | The pipeline |
+| `management` NSG: `allow-management-ssh-rdp` (priority 100) from the Bastion subnet, the VPN pool and any ADR-approved management sources (`managementSourceCidrs`), **unchanged** | The `management` subnet | The pipeline |
 
 SSH and RDP to the jump host are **closed unless JIT-granted, and reachable when granted**. The subnet NSG keeps the outer bound (only Bastion and VPN clients can ever connect). The NIC NSG denies both ports. A granted request makes Defender for Cloud add a time-bound allow above that deny, on the NSG closest to the VM, so the session passes both NSGs.
 
@@ -211,7 +211,7 @@ Security alerts of severity High email `SECURITY_CONTACT_EMAILS` and the subscri
    - `defenstack-audit-diagnostic-settings` on the `stfl…` accounts' blob services: Phase 6 gives the flow-log accounts no diagnostic setting, so they report non-compliant. Expected; that assignment never blocks.
    - `defenstack-mcsb`: benchmark findings are handled in §5.1, not here.
    - Anything in `defenStack`: it reports **Exempt** while the waiver lasts.
-   - Azure-created groups such as `NetworkWatcherRG` or `DefaultResourceGroup-*` outside West US 3 / East US: they report non-compliant for the resource-group locations assignment, but the switch blocks nothing that already exists. Move nothing; accept them, or exempt them (§5.3).
+   - Azure-created groups such as `NetworkWatcherRG` or `DefaultResourceGroup-*` outside West US 3 / East US: they report non-compliant for the resource-group locations assignment, but the switch does not remove or move them. Under `Default`, an update to one of them (a tag edit, for example), or Azure creating a new one outside the two regions, is denied. Accept them and exempt them (§5.3) before the switch if Azure manages them there.
 4. **Switch.** Change `param denyEnforcement = 'Default'` in `params/governance.bicepparam` and update the Params test "starts audit-first for dev and prod" to expect `Default`, in one PR. Then repeat §4 steps 1, 5, 6 and 7. The what-if shows only `enforcementMode` changing to `Default` on the 9 deny assignments.
 5. **Check:** `az policy assignment list --query "[?starts_with(name,'defenstack-')].{name:name, mode:enforcementMode}" -o table` shows `Default` on all 11.
 
@@ -290,7 +290,7 @@ Every SSH or RDP session to the jump host now starts with a JIT request. The jum
 | Closed without a grant | `az network nsg rule list -g rg-defenstack-<env>-wus3 --nsg-name <vm>-nsg --query "[?direction=='Inbound'].{name:name, priority:priority, access:access}" -o table`; then over the VPN `Test-NetConnection <vm private IP> -Port 22` | `deny-ssh-rdp-inbound` 4000 `Deny`, `deny-unsolicited-inbound` 4096 (plus any JIT-created `SecurityCenter-JITRule…` deny rules); `TcpTestSucceeded : False` |
 | Reachable with a grant | §5.4, then the same two commands | A `SecurityCenter-JITRule…` `Allow` rule above priority 4000 on `<vm>-nsg`; `TcpTestSucceeded : True`; `az ssh vm --ip <vm private IP>` gives a prompt |
 | Defender for Endpoint (when `enableVirtualMachine = true`) | `az vm extension list -g rg-defenstack-<env>-wus3 --vm-name <vm> --query "[?starts_with(name,'MDE.')].{name:name, state:provisioningState}" -o table` | `MDE.Linux` or `MDE.Windows`, `Succeeded` (Defender deploys it within a few hours of §4 step 7). If it is missing or failed, see §9, live-only risks |
-| Subnet NSG unchanged | `az network nsg rule show -g rg-defenstack-<env>-wus3 --nsg-name vnet-defenstack-<env>-wus3-spoke-management-nsg -n allow-management-ssh-rdp --query "{priority:priority, sources:sourceAddressPrefixes}" -o json` | `100`, the Bastion subnet and VPN pool. Also note whether JIT added rules here (§9, live-only risks) |
+| Subnet NSG unchanged | `az network nsg rule show -g rg-defenstack-<env>-wus3 --nsg-name vnet-defenstack-<env>-wus3-spoke-management-nsg -n allow-management-ssh-rdp --query "{priority:priority, sources:sourceAddressPrefixes}" -o json` | `100`, the Bastion subnet, the VPN pool and any ADR-approved management sources. Also note whether JIT added rules here (§9, live-only risks) |
 
 Paste every output into the Phase 7 PR (spec §6 definition of done).
 

@@ -14,7 +14,7 @@ The spec (§3) asks for the Microsoft cloud security benchmark in audit, deny ru
 
 ## Consequences
 - **The ordering trap.** An exemption needs its target to exist, and under `Default` a new flow-log account is denied before its exemption can exist. Adding an environment or region is therefore: set `DoNotEnforce`, deploy the workload, add it to governance, redeploy governance, set `Default` (runbook 07 §5.3).
-- Azure-created groups outside the two regions (for example `NetworkWatcherRG`, `DefaultResourceGroup-*`) report non-compliant, but nothing that already exists is blocked. They are accepted or exempted.
+- Azure-created groups outside the two regions (for example `NetworkWatcherRG`, `DefaultResourceGroup-*`) report non-compliant. Nothing existing is removed, but under `Default` updates to them and new Azure-created groups elsewhere are denied, so they are exempted before the switch where Azure manages them.
 - Every deny assignment carries a non-compliance message pointing to runbook 07, and `metadata.assignedBy` names `governance.bicep`.
 - The legacy waiver's date, `2027-03-31`, is a placeholder to confirm.
 
