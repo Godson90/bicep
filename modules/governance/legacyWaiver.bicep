@@ -11,8 +11,9 @@ param policyAssignmentIds string[]
 param expiresOn string
 
 // Microsoft.Authorization/policyExemptions has no GA API version; 2026-01-01-preview is the latest (ADR-029).
+// The assignment name drops its defenstack- prefix, so the longest waiver name is 58 characters (the limit is 64).
 resource waivers 'Microsoft.Authorization/policyExemptions@2026-01-01-preview' = [for assignmentId in policyAssignmentIds: {
-  name: 'defenstack-legacy-waiver-${last(split(assignmentId, '/'))}'
+  name: 'defenstack-legacy-waiver-${replace(last(split(assignmentId, '/')), 'defenstack-', '')}'
   properties: {
     policyAssignmentId: assignmentId
     exemptionCategory: 'Waiver'

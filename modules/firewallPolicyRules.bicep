@@ -287,6 +287,31 @@ resource platformEgress 'Microsoft.Network/firewallPolicies/ruleCollectionGroups
           }
         ]
       }
+      {
+        // Defender for Servers Plan 2 deploys Defender for Endpoint, which reports through its streamlined endpoint (Phase 7).
+        name: 'defender-for-endpoint'
+        priority: 170
+        ruleCollectionType: 'FirewallPolicyFilterRuleCollection'
+        action: {
+          type: 'Allow'
+        }
+        rules: [
+          {
+            ruleType: 'ApplicationRule'
+            name: 'defender-for-endpoint'
+            sourceAddresses: managementAddressPrefixes
+            protocols: [
+              {
+                protocolType: 'Https'
+                port: 443
+              }
+            ]
+            targetFqdns: [
+              '*.endpoint.security.microsoft.com'
+            ]
+          }
+        ]
+      }
     ]
   }
   dependsOn: [

@@ -332,6 +332,17 @@ Describe 'Phase 7 documentation' {
         ([regex]::Matches($risks, 'Fallback')).Count | Should -BeGreaterOrEqual 6
     }
 
+    It 'the governance runbook requests JIT access with the 2020-01-01 initiate body: one source and an end time per port' {
+        $start = $script:runbook07.IndexOf('### 5.4 Requesting JIT access')
+        $start | Should -BeGreaterThan 0
+        $section = $script:runbook07.Substring($start, $script:runbook07.IndexOf('## 6. Validation') - $start)
+        $section | Should -Match 'endTimeUtc\s*='
+        $section | Should -Match 'allowedSourceAddressPrefix\s*='
+        $section | Should -Match ([regex]::Escape(".ToUniversalTime().AddHours(3).ToString('yyyy-MM-ddTHH:mm:ssZ')"))
+        $section | Should -Not -Match 'duration\s*='
+        $section | Should -Not -Match 'allowedSourceAddressPrefixes'
+    }
+
     It 'runbook 03 requires a JIT request before admin access' {
         $script:runbook03 | Should -Match 'Admin access now needs a JIT request first'
         $script:runbook03 | Should -Match 'ADR-028'

@@ -152,8 +152,8 @@ var osLogSource = osType == 'Linux' ? {
   ]
 }
 
-// NIC-level NSG: the subnet NSG admits only Bastion and VPN clients; this NSG keeps SSH and RDP closed until a JIT
-// grant opens them.
+// NIC-level NSG: the subnet NSG admits only the Bastion subnet, the VPN pool and any ADR-approved management sources
+// (managementSourceCidrs); this NSG keeps SSH and RDP closed until a JIT grant opens them.
 resource networkSecurityGroup 'Microsoft.Network/networkSecurityGroups@2024-07-01' = {
   name: networkSecurityGroupName
   location: location

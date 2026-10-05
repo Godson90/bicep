@@ -191,6 +191,15 @@ Describe 'Name parity with the workload templates (Phase 7)' {
         $governance.variables.stamps | Should -Match ([regex]::Escape("'location', lambdaVariables('location')"))
     }
 
+    It 'hands the secondary stamp its full region name and region code, in a resource group named as governance names it' {
+        $secondary = Get-TemplateResourceBySymbol -Template $main -Symbol 'secondaryStamp'
+        $secondary.properties.parameters.location.value | Should -Be "[parameters('secondaryLocation')]"
+        $secondary.properties.parameters.regionCode.value | Should -Be "[variables('secondaryRegionCode')]"
+        $secondary.resourceGroup | Should -Be "[variables('secondaryResourceGroupName')]"
+        $main.variables.secondaryResourceGroupName | Should -Be "[format('rg-defenstack-{0}-{1}', parameters('environmentName'), variables('secondaryRegionCode'))]"
+        $governance.variables.stamps | Should -Match ([regex]::Escape("format('rg-defenstack-{0}-{1}', lambdaVariables('environmentName'), variables('regionCodes')[lambdaVariables('location')])"))
+    }
+
     It 'allows the <Key> public IP name exactly as regionStamp.bicep builds it' -ForEach @(
         @{ Key = 'firewallPublicIp' }
         @{ Key = 'bastionPublicIp' }
@@ -213,10 +222,17 @@ Describe 'Name parity with the workload templates (Phase 7)' {
     }
 
     It 'only the firewall, Bastion and VPN gateway modules create public IPs, so the allowlist is complete' {
-        $owners = Get-ChildItem (Get-RepoPath 'modules') -Filter '*.bicep' -Recurse |
-            Where-Object { (Get-Content $_.FullName -Raw) -match "'Microsoft\.Network/publicIPAddresses@" } |
-            ForEach-Object { $_.Name } | Sort-Object
-        @($owners) -join ',' | Should -Be 'azureFirewall.bicep,bastion.bicep,vpnGateway.bicep'
+        $files = @(Get-ChildItem (Get-RepoPath 'modules') -Filter '*.bicep' -Recurse) + @(Get-ChildItem (Get-RepoPath '.') -Filter '*.bicep')
+        $declarations = @{}
+        foreach ($file in $files) {
+            $count = [regex]::Matches((Get-Content $file.FullName -Raw), "'Microsoft\.Network/publicIPAddresses@").Count
+            if ($count -gt 0) { $declarations[$file.Name] = $count }
+        }
+        @($declarations.Keys | Sort-Object) -join ',' | Should -Be 'azureFirewall.bicep,bastion.bicep,vpnGateway.bicep'
+        foreach ($owner in 'azureFirewall.bicep', 'bastion.bicep', 'vpnGateway.bicep') {
+            # One declaration each; vpnGateway.bicep's copy loop over -1 and -2 is pinned above.
+            $declarations[$owner] | Should -Be 1 -Because $owner
+        }
     }
 
     It 'computes the flow-log account name with the same formula as regionStamp.bicep' {
@@ -438,7 +454,51 @@ Describe 'Policy exemptions (Phase 7)' {
         $waiver.properties.policyAssignmentId | Should -Be "[parameters('policyAssignmentIds')[copyIndex()]]"
         $waiver.properties.expiresOn | Should -Be "[format('{0}T23:59:59Z', parameters('expiresOn'))]"
         $waiver.properties.description | Should -Match 'runbook 01a'
-        $waiver.name | Should -Be "[format('defenstack-legacy-waiver-{0}', last(split(parameters('policyAssignmentIds')[copyIndex()], '/')))]"
+        $waiver.name | Should -Be "[format('defenstack-legacy-waiver-{0}', replace(last(split(parameters('policyAssignmentIds')[copyIndex()], '/')), 'defenstack-', ''))]"
+    }
+
+    It 'keeps every legacy waiver name, built from the nine deny assignment names, within the 64-character limit' {
+        $policyTemplate = Get-BicepTemplate -RelativePath 'modules/governance/policies.bicep'
+        $denyNames = @($policyTemplate.variables.publicNetworkAccessPolicies | ForEach-Object { $_.name }) +
+            @('allowedLocationsAssignment', 'allowedResourceGroupLocationsAssignment', 'publicIpAssignment' | ForEach-Object { (Get-TemplateResourceBySymbol -Template $policyTemplate -Symbol $_).name })
+        $denyNames.Count | Should -Be 9
+        # The same formula as legacyWaiver.bicep: the assignment name without its defenstack- prefix.
+        $waiverNames = @($denyNames | ForEach-Object { 'defenstack-legacy-waiver-' + $_.Replace('defenstack-', '') })
+        foreach ($name in $waiverNames) {
+            $name | Should -Match '^defenstack-legacy-waiver-[a-z0-9-]+$'
+            $name.Length | Should -BeLessOrEqual 64 -Because $name
+        }
+        @($waiverNames | Select-Object -Unique).Count | Should -Be 9
+        ($waiverNames | Measure-Object -Property Length -Maximum).Maximum | Should -Be 58
+    }
+
+    It 'keeps the flow-log exemption name within the 64-character limit' {
+        $flowLogExemption.name | Should -BeExactly 'defenstack-flow-log-storage-public-network'
+        $flowLogExemption.name.Length | Should -BeLessOrEqual 64
+    }
+}
+
+Describe 'Defender for Storage on the flow-log accounts (Phase 7, ADR-026)' {
+    BeforeAll {
+        $exemptionTemplate = Get-BicepTemplate -RelativePath 'modules/governance/flowLogStorageExemption.bicep'
+        $storageSettings = @(Get-TemplateResource -Template $exemptionTemplate -Type 'Microsoft.Security/defenderForStorageSettings')
+        $flowLogModule = Get-TemplateResourceBySymbol -Template $governance -Symbol 'flowLogExemptions'
+    }
+
+    It 'overrides the subscription settings once on each flow-log account, with the GA API' {
+        $storageSettings.Count | Should -Be 1
+        $storageSettings[0].apiVersion | Should -Be '2025-01-01'
+        $storageSettings[0].name | Should -Be 'current'
+        $storageSettings[0].scope | Should -Be "[resourceId('Microsoft.Storage/storageAccounts', variables('flowLogStorageAccountName'))]"
+        $flowLogModule.copy.count | Should -Be "[length(variables('stamps'))]"
+    }
+
+    It 'keeps Defender for Storage on but turns off on-upload malware scanning and sensitive data discovery' {
+        $properties = $storageSettings[0].properties
+        $properties.isEnabled | Should -BeExactly $true
+        $properties.overrideSubscriptionLevelSettings | Should -BeExactly $true
+        $properties.malwareScanning.onUpload.isEnabled | Should -BeExactly $false
+        $properties.sensitiveDataDiscovery.isEnabled | Should -BeExactly $false
     }
 }
 

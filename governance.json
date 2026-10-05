@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "13557392049006583760"
+      "templateHash": "1400410967795387454"
     }
   },
   "definitions": {
@@ -745,7 +745,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "11342842666558404347"
+              "templateHash": "6645876740968056689"
             }
           },
           "parameters": {
@@ -796,6 +796,24 @@
                 "displayName": "Flow-log storage: deny-all firewall instead of disabled public access",
                 "description": "Network Watcher writes VNet flow logs as a trusted Azure service. Public network access stays Enabled so the deny-all firewall and its trusted-services bypass apply; shared key is disabled (ADR-023)."
               }
+            },
+            {
+              "type": "Microsoft.Security/defenderForStorageSettings",
+              "apiVersion": "2025-01-01",
+              "scope": "[resourceId('Microsoft.Storage/storageAccounts', variables('flowLogStorageAccountName'))]",
+              "name": "current",
+              "properties": {
+                "isEnabled": true,
+                "overrideSubscriptionLevelSettings": true,
+                "malwareScanning": {
+                  "onUpload": {
+                    "isEnabled": false
+                  }
+                },
+                "sensitiveDataDiscovery": {
+                  "isEnabled": false
+                }
+              }
             }
           ],
           "outputs": {
@@ -837,7 +855,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "6328788458969109355"
+              "templateHash": "11502827419177155602"
             }
           },
           "parameters": {
@@ -868,7 +886,7 @@
               },
               "type": "Microsoft.Authorization/policyExemptions",
               "apiVersion": "2026-01-01-preview",
-              "name": "[format('defenstack-legacy-waiver-{0}', last(split(parameters('policyAssignmentIds')[copyIndex()], '/')))]",
+              "name": "[format('defenstack-legacy-waiver-{0}', replace(last(split(parameters('policyAssignmentIds')[copyIndex()], '/')), 'defenstack-', ''))]",
               "properties": {
                 "policyAssignmentId": "[parameters('policyAssignmentIds')[copyIndex()]]",
                 "exemptionCategory": "Waiver",

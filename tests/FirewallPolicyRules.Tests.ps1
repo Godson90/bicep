@@ -85,6 +85,41 @@ Describe 'Entra ID sign-in egress for the jump host (Phase 3)' {
     }
 }
 
+Describe 'Defender for Endpoint egress for the jump host (Phase 7)' {
+    BeforeAll {
+        $collection = $platform.properties.ruleCollections | Where-Object { $_.name -eq 'defender-for-endpoint' }
+        $rule = @($collection.rules | Where-Object { $_.name -eq 'defender-for-endpoint' })
+    }
+
+    It 'allows the Defender for Endpoint streamlined endpoint from the management subnet only, over HTTPS 443' {
+        $collection.action.type | Should -Be 'Allow'
+        $rule.Count | Should -Be 1
+        $rule[0].ruleType | Should -Be 'ApplicationRule'
+        $rule[0].sourceAddresses | Should -Be "[parameters('managementAddressPrefixes')]"
+        @($rule[0].protocols.protocolType) -join ',' | Should -Be 'Https'
+        @($rule[0].protocols.port) -join ',' | Should -Be '443'
+        @($rule[0].targetFqdns) -join ',' | Should -BeExactly '*.endpoint.security.microsoft.com'
+    }
+
+    It 'leaves TLS unterminated, since the policy does no TLS inspection (ADR-011)' {
+        $rule[0].PSObject.Properties.Name | Should -Not -Contain 'terminateTLS'
+    }
+
+    It 'is present in every stamp, since every stamp has a management subnet' {
+        $platform.PSObject.Properties.Name | Should -Not -Contain 'condition'
+        $firewallTemplate = Get-BicepTemplate -RelativePath 'modules/azureFirewall.bicep'
+        $rulesModule = Get-ModuleDeployment -Template $firewallTemplate -Name 'firewall-policy-rules'
+        $rulesModule.PSObject.Properties.Name | Should -Not -Contain 'condition'
+        $rulesModule.properties.parameters.managementAddressPrefixes.value | Should -Be "[parameters('managementAddressPrefixes')]"
+        $stampTemplate = Get-BicepTemplate -RelativePath 'modules/regionStamp.bicep'
+        $firewallModule = Get-TemplateResourceBySymbol -Template $stampTemplate -Symbol 'azureFirewall'
+        $firewallModule.PSObject.Properties.Name | Should -Not -Contain 'condition'
+        @($firewallModule.properties.parameters.managementAddressPrefixes.value) | Should -Be @("[parameters('addressPlan').managementSubnetPrefix]")
+        (Get-TemplateResourceBySymbol -Template $stampTemplate -Symbol 'spokeNetwork').properties.parameters.virtualMachineSubnetAddressPrefix.value |
+            Should -Be "[parameters('addressPlan').managementSubnetPrefix]"
+    }
+}
+
 Describe 'OS update egress for management VMs only' {
     BeforeAll {
         $rules = @($platform.properties.ruleCollections[0].rules)

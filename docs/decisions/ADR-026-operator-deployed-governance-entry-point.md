@@ -15,6 +15,8 @@ The spec (§3 "Governance and posture", §4) puts Defender for Cloud plans, the 
 - Governance changes need an operator with elevated, time-bound roles, and they are not gated by the GitHub environment approvals. Review happens in the pull request, and the operator runs `what-if` first (runbook 07 §4).
 - Nothing redeploys governance automatically. The operator redeploys it after every change to the governance files, and whenever an environment or region is added (runbook 07 §5.3).
 - The workload depends on governance for JIT (Defender for Servers), so governance deploys first.
+- `deploy.yml`'s path filter excludes only the governance-only paths. Shared files that governance also imports, such as `modules/types.bicep`, still trigger a workload deploy.
+- **The flow-log accounts override the subscription's Storage settings** (`defenderForStorageSettings/current`, in `flowLogStorageExemption.bicep`): Defender for Storage and activity monitoring stay on, while on-upload malware scanning and sensitive data discovery are off. Only Network Watcher's identity writes these Microsoft-generated logs, and on-upload scanning would rescan each hourly flow-log blob on every block commit, adding cost without protection. Scanning still applies to the app accounts and the legacy group's.
 - Live-only items (default sub-plans, CloudPosture's default extensions, the malware cap property) are listed in runbook 07 §9.
 
 ## Revisit when

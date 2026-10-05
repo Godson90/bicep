@@ -40,4 +40,23 @@ resource exemption 'Microsoft.Authorization/policyExemptions@2026-01-01-preview'
   }
 }
 
+// Only Network Watcher's identity writes here, and on-upload scanning would rescan each hourly flow-log blob on every
+// block commit: malware scanning and sensitive data discovery are off, activity monitoring stays on (ADR-026).
+resource flowLogDefenderSettings 'Microsoft.Security/defenderForStorageSettings@2025-01-01' = {
+  name: 'current'
+  scope: flowLogStorage
+  properties: {
+    isEnabled: true
+    overrideSubscriptionLevelSettings: true
+    malwareScanning: {
+      onUpload: {
+        isEnabled: false
+      }
+    }
+    sensitiveDataDiscovery: {
+      isEnabled: false
+    }
+  }
+}
+
 output storageAccountName string = flowLogStorage.name

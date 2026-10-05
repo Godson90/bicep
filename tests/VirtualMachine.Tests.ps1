@@ -32,7 +32,12 @@ Describe 'Jump host just-in-time access (Phase 7, ADR-028)' {
         $denyRule.properties.access | Should -Be 'Deny'
         $denyRule.properties.direction | Should -Be 'Inbound'
         $denyRule.properties.sourceAddressPrefix | Should -Be '*'
+        $denyRule.properties.protocol | Should -Be '*'
         @($denyRule.properties.destinationPortRanges) -join ',' | Should -Be '22,3389'
+    }
+
+    It 'denies exactly the ports the JIT policy opens' {
+        @($denyRule.properties.destinationPortRanges) -join ',' | Should -Be (@($template.variables.jitPorts | ForEach-Object { [string]$_ }) -join ',')
     }
 
     It 'keeps the catch-all inbound deny below the SSH/RDP deny' {

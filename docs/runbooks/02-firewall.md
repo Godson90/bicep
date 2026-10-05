@@ -15,7 +15,8 @@ enforces:
     for the spoke, and HTTPS to the `AzureMonitor`/`AzureResourceManager`
     service tags for the Azure Monitor Agent.
   - `platform-egress` (priority 150): OS update endpoints
-    (`WindowsUpdate` FQDN tag, and the Ubuntu archive FQDNs) — **management
+    (`WindowsUpdate` FQDN tag, and the Ubuntu archive FQDNs), and from Phase 7
+    Defender for Endpoint (`*.endpoint.security.microsoft.com` on 443) — **management
     subnet only**, never the App Service subnet.
   - `approved-https-egress` (priority 200, optional): the application
     allowlist from `allowedOutboundFqdns`. Not deployed at all when that list

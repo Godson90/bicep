@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "14875587064846769639"
+      "templateHash": "12836882907704328273"
     }
   },
   "definitions": {
@@ -942,7 +942,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "11840373502800684373"
+              "templateHash": "15544100912923456977"
             }
           },
           "definitions": {
@@ -2262,7 +2262,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "12657588790443054316"
+                      "templateHash": "8035891992476191610"
                     }
                   },
                   "parameters": {
@@ -2590,7 +2590,7 @@
                             "_generator": {
                               "name": "bicep",
                               "version": "0.47.16.16243",
-                              "templateHash": "15645242146748151595"
+                              "templateHash": "2554334836867112057"
                             }
                           },
                           "parameters": {
@@ -2882,6 +2882,30 @@
                                           "enterpriseregistration.windows.net",
                                           "pas.windows.net",
                                           "packages.microsoft.com"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "name": "defender-for-endpoint",
+                                    "priority": 170,
+                                    "ruleCollectionType": "FirewallPolicyFilterRuleCollection",
+                                    "action": {
+                                      "type": "Allow"
+                                    },
+                                    "rules": [
+                                      {
+                                        "ruleType": "ApplicationRule",
+                                        "name": "defender-for-endpoint",
+                                        "sourceAddresses": "[parameters('managementAddressPrefixes')]",
+                                        "protocols": [
+                                          {
+                                            "protocolType": "Https",
+                                            "port": 443
+                                          }
+                                        ],
+                                        "targetFqdns": [
+                                          "*.endpoint.security.microsoft.com"
                                         ]
                                       }
                                     ]
@@ -6512,7 +6536,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "11840373502800684373"
+              "templateHash": "15544100912923456977"
             }
           },
           "definitions": {
@@ -7832,7 +7856,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "12657588790443054316"
+                      "templateHash": "8035891992476191610"
                     }
                   },
                   "parameters": {
@@ -8160,7 +8184,7 @@
                             "_generator": {
                               "name": "bicep",
                               "version": "0.47.16.16243",
-                              "templateHash": "15645242146748151595"
+                              "templateHash": "2554334836867112057"
                             }
                           },
                           "parameters": {
@@ -8452,6 +8476,30 @@
                                           "enterpriseregistration.windows.net",
                                           "pas.windows.net",
                                           "packages.microsoft.com"
+                                        ]
+                                      }
+                                    ]
+                                  },
+                                  {
+                                    "name": "defender-for-endpoint",
+                                    "priority": 170,
+                                    "ruleCollectionType": "FirewallPolicyFilterRuleCollection",
+                                    "action": {
+                                      "type": "Allow"
+                                    },
+                                    "rules": [
+                                      {
+                                        "ruleType": "ApplicationRule",
+                                        "name": "defender-for-endpoint",
+                                        "sourceAddresses": "[parameters('managementAddressPrefixes')]",
+                                        "protocols": [
+                                          {
+                                            "protocolType": "Https",
+                                            "port": 443
+                                          }
+                                        ],
+                                        "targetFqdns": [
+                                          "*.endpoint.security.microsoft.com"
                                         ]
                                       }
                                     ]

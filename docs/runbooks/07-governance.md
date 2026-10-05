@@ -4,7 +4,7 @@
 
 ## 1. Purpose and scope
 
-This runbook turns on Microsoft Defender for Cloud and Azure Policy for the subscription, and puts the jump host behind just-in-time (JIT) access. **An operator deploys `governance.bicep` by hand. `main.bicep` and the pipeline never do**, so the pipeline identity gets no rights over Defender for Cloud, Azure Policy or role definitions (`ADR-026`). One `governance.bicepparam` covers one subscription: when dev and prod share a subscription, it covers both.
+This runbook turns on Microsoft Defender for Cloud and Azure Policy for the subscription, and puts the jump host behind just-in-time (JIT) access. **An operator deploys `governance.bicep` by hand. `main.bicep` and the pipeline never do**, so the pipeline identity cannot change policy assignments, definitions or exemptions, the subscription's Defender plans, the security contact or the JIT Requester role (`ADR-026`). Its resource-group `Contributor` can still set per-resource Defender overrides (for example a storage account's `defenderForStorageSettings`) and initiate JIT requests in its own groups. One `governance.bicepparam` covers one subscription: when dev and prod share a subscription, it covers both.
 
 **Defender for Cloud (`ADR-026`), at subscription scope:**
 
@@ -17,6 +17,12 @@ This runbook turns on Microsoft Defender for Cloud and Azure Policy for the subs
 
 The plans are updated one at a time (`@batchSize(1)`), because parallel pricing updates conflict. The security contact `default` emails the `SECURITY_CONTACT_EMAILS` addresses and the subscription Owners for alerts of severity High. The retired agent auto-provisioning setting is not managed: agentless scanning and the default Defender for Endpoint integration replace it.
 
+Each flow-log account `stfl…` overrides the subscription's Storage settings (`defenderForStorageSettings/current`): Defender for Storage and its activity monitoring stay on, but on-upload malware scanning and sensitive data discovery are off. Only Network Watcher's identity writes there, and scanning would rescan each hourly flow-log blob on every block commit (`ADR-026`).
+
+**Day-one effects:**
+- Servers P2 bills, scans and deploys Defender for Endpoint (`MDE.Linux` / `MDE.Windows`) onto **every existing VM** in the subscription, including the legacy `defenStack` group's.
+- The security contact PUT replaces any existing `default` contact. §4 step 5 reads it first and merges its addresses.
+
 **Azure Policy (`ADR-027`), at subscription scope. Every assignment name starts with `defenstack-`:**
 
 | Assignment | Policy | Effect | Enforcement |
@@ -24,7 +30,7 @@ The plans are updated one at a time (`@batchSize(1)`), because parallel pricing 
 | `defenstack-mcsb` | Microsoft cloud security benchmark initiative | Its members' defaults (mostly audit) | `Default` |
 | `defenstack-deny-storage-public-network`, `-key-vault-`, `-app-`, `-app-slot-`, `-function-`, `-function-slot-public-network` | "… should disable public network access" (6 built-ins) | `Deny` | `denyEnforcement` |
 | `defenstack-allowed-locations` | Allowed locations: `westus3`, `eastus`, `global` | Deny (fixed) | `denyEnforcement` |
-| `defenstack-allowed-resource-group-locations` | Allowed locations for resource groups: `westus3`, `eastus` | Deny (its default) | `denyEnforcement` |
+| `defenstack-allowed-resource-group-locations` | Allowed locations for resource groups: `westus3`, `eastus` | Deny; assigned without an `effect` parameter (unverified, §9) | `denyEnforcement` |
 | `defenstack-deny-public-ip` | Custom `defenstack-deny-public-ip-except-allowlist`: public IPs whose name is not in the allowlist | `deny` | `denyEnforcement` |
 | `defenstack-audit-diagnostic-settings` | Audit diagnostic setting for selected resource types (firewalls, Bastion, VPN gateways, Front Door, Key Vault, App Service, blob services) | `AuditIfNotExists` | `Default` |
 
@@ -37,7 +43,7 @@ The public IP allowlist is computed from the naming convention: `pip-afw-…`, `
 | Exemption | Scope | Assignment | Category |
 |---|---|---|---|
 | `defenstack-flow-log-storage-public-network` | Each flow-log account `stfl<region><suffix>` | Storage public network access | `Mitigated`, no expiry: a deny-all firewall with the trusted-services bypass replaces disabled public access (`ADR-023`) |
-| `defenstack-legacy-waiver-<assignment>` (9) | The legacy resource group `legacyResourceGroupName` (`defenStack`) | Every deny assignment | `Waiver`, expiring at the end of `legacyWaiverExpiresOn` (UTC), until runbook 01a tears the group down |
+| `defenstack-legacy-waiver-<assignment without its defenstack- prefix>` (9, for example `defenstack-legacy-waiver-deny-public-ip`) | The legacy resource group `legacyResourceGroupName` (`defenStack`) | Every deny assignment | `Waiver`, expiring at the end of `legacyWaiverExpiresOn` (UTC), until runbook 01a tears the group down |
 
 **JIT access (`ADR-028`):**
 
@@ -45,7 +51,7 @@ The public IP allowlist is computed from the naming convention: `pip-afw-…`, `
 |---|---|---|
 | Custom role **DefenStack JIT Requester** (read and initiate JIT, read the VM and its NIC) | Subscription, assignable there only | `governance.bicep` |
 | Its assignment to the environment's admin group (`adminGroupObjectIds.<env>`) | The environment's **primary** resource group (`rg-defenstack-<env>-wus3`), where the jump host runs | `governance.bicep` |
-| JIT policy `default` (`Microsoft.Security/locations/jitNetworkAccessPolicies`, kind Basic) for the jump host: TCP 22 and 3389, sources the Bastion subnet and the region VPN client pool, at most 3 hours (`PT3H`) | The jump host's resource group and region | The pipeline (`deploy.yml`), with the jump host |
+| JIT policy `default` (`Microsoft.Security/locations/jitNetworkAccessPolicies`, kind Basic) for the jump host: TCP 22 and 3389, sources the Bastion subnet, the VPN pool and any ADR-approved management sources (`managementSourceCidrs`), at most 3 hours (`PT3H`) | The jump host's resource group and region | The pipeline (`deploy.yml`), with the jump host |
 | NIC NSG `<vm>-nsg`: `deny-ssh-rdp-inbound` (priority 4000, any source) replaces the static allow | The jump host's NIC | The pipeline |
 | `management` NSG: `allow-management-ssh-rdp` (priority 100) from the Bastion subnet and the VPN pool, **unchanged** | The `management` subnet | The pipeline |
 
@@ -127,7 +133,13 @@ Run from the repository root. **Order matters: governance first, then the worklo
    }
    ```
 
-5. **Set `SECURITY_CONTACT_EMAILS`** in the same PowerShell session, before `what-if` or `create`. Use monitored team mailboxes:
+5. **Set `SECURITY_CONTACT_EMAILS`** in the same PowerShell session, before `what-if` or `create`. Use monitored team mailboxes. The deploy replaces the subscription's `default` contact, so read it first:
+
+   ```powershell
+   az rest --method get --url "https://management.azure.com/subscriptions/<sub>/providers/Microsoft.Security/securityContacts/default?api-version=2023-12-01-preview"
+   ```
+
+   Merge any addresses in its `properties.emails` into the variable (`NotFound` means there is no contact yet):
 
    ```powershell
    $env:SECURITY_CONTACT_EMAILS = 'secops@example.org;cloud-admins@example.org'
@@ -179,7 +191,7 @@ Triage each unhealthy recommendation:
 2. **Accept it with a reason** when the design already mitigates it (for example "Storage accounts should restrict network access" on the `stfl…` accounts, `ADR-023`): add an exemption in Bicep (§5.3) with category `Mitigated` and a description citing the ADR.
 3. **Expected findings, no action:** the jump host's "Management ports should be closed" stays healthy because nothing allows 22/3389 at the NIC; "Management ports should be protected with just-in-time network access control" is healthy once §4 step 8 has run.
 
-Defender's **Exempt** button writes an exemption on its own assignment of the benchmark, **ASC Default**, not on `defenstack-mcsb`. The benchmark is assigned twice on purpose (`ADR-027`): codify any lasting exemption in Bicep against `defenstack-mcsb` as well, or accept its audit row.
+Defender's **Exempt** button writes an exemption on its own assignment of the benchmark, `SecurityCenterBuiltIn` (display name "ASC Default"), not on `defenstack-mcsb`. The benchmark is assigned twice on purpose (`ADR-027`): codify any lasting exemption in Bicep against `defenstack-mcsb` as well, or accept its audit row.
 
 Security alerts of severity High email `SECURITY_CONTACT_EMAILS` and the subscription Owners. Investigate them in Microsoft Sentinel (the tenant-based Defender for Cloud connector, runbook 06 §5.1).
 
@@ -199,7 +211,7 @@ Security alerts of severity High email `SECURITY_CONTACT_EMAILS` and the subscri
    - `defenstack-audit-diagnostic-settings` on the `stfl…` accounts' blob services: Phase 6 gives the flow-log accounts no diagnostic setting, so they report non-compliant. Expected; that assignment never blocks.
    - `defenstack-mcsb`: benchmark findings are handled in §5.1, not here.
    - Anything in `defenStack`: it reports **Exempt** while the waiver lasts.
-   - Azure-created groups such as `NetworkWatcherRG` or `DefaultResourceGroup-*` outside West US 3 / East US: they **are** blockers for the resource-group locations assignment. Move nothing; exempt the group (§5.3) or delete it if empty.
+   - Azure-created groups such as `NetworkWatcherRG` or `DefaultResourceGroup-*` outside West US 3 / East US: they report non-compliant for the resource-group locations assignment, but the switch blocks nothing that already exists. Move nothing; accept them, or exempt them (§5.3).
 4. **Switch.** Change `param denyEnforcement = 'Default'` in `params/governance.bicepparam` and update the Params test "starts audit-first for dev and prod" to expect `Default`, in one PR. Then repeat §4 steps 1, 5, 6 and 7. The what-if shows only `enforcementMode` changing to `Default` on the 9 deny assignments.
 5. **Check:** `az policy assignment list --query "[?starts_with(name,'defenstack-')].{name:name, mode:enforcementMode}" -o table` shows `Default` on all 11.
 
@@ -239,20 +251,22 @@ Every SSH or RDP session to the jump host now starts with a JIT request. The jum
 1. **Activate the admin group membership** in PIM (runbook 03 §5.5). It carries both `Virtual Machine Administrator Login` and **DefenStack JIT Requester**.
 2. **Request access.**
    - **Portal:** **Microsoft Defender for Cloud** → **Workload protections** → **Just-in-time VM access** → **Configured** → tick the jump host → **Request access**. For each port you need (22 Linux, 3389 Windows): **On**, **Allowed source IP**: **IP range** = the Bastion subnet (dev `10.21.0.64/26`, prod `10.1.0.64/26`) to connect through Bastion, or the VPN pool (dev `172.16.210.0/24`, prod `172.16.200.0/24`) to connect over the VPN; **Time range** at most 3 hours; a justification → **Open ports**. The VM's own **Connect** blade no longer offers the request in many regions; use Defender for Cloud, or the VM's **Configuration** → **Just-in-time VM access**.
-   - **Azure CLI.** `az security jit-policy` lists and shows policies; request access through the REST API:
+   - **Azure CLI.** `az security jit-policy` lists and shows policies; request access through the REST API. The `initiate` body (API `2020-01-01`) takes one object per port, each with a single source and a required end time, so send **one request per access path**: the Bastion subnet (dev `10.21.0.64/26`, prod `10.1.0.64/26`) or the VPN pool (dev `172.16.210.0/24`, prod `172.16.200.0/24`). Use port `3389` for a Windows jump host:
 
      ```powershell
      az security jit-policy list --query "[].{name:name, rg:resourceGroup, location:location}" -o table
      $vmId = az vm list --resource-group rg-defenstack-dev-wus3 --query '[0].id' -o tsv
+     $source = '10.21.0.64/26'   # the Bastion subnet; or '172.16.210.0/24', the VPN pool
+     $endTimeUtc = (Get-Date).ToUniversalTime().AddHours(3).ToString('yyyy-MM-ddTHH:mm:ssZ')
      $body = @{
-       virtualMachines = @(@{ id = $vmId; ports = @(@{ number = 22; duration = 'PT3H'; allowedSourceAddressPrefixes = @('10.21.0.64/26', '172.16.210.0/24') }) })
+       virtualMachines = @(@{ id = $vmId; ports = @(@{ number = 22; allowedSourceAddressPrefix = $source; endTimeUtc = $endTimeUtc }) })
        justification   = 'Runbook 07 §5.4: <ticket>'
      } | ConvertTo-Json -Depth 6 -Compress
      Set-Content -Path jit-request.json -Value $body -Encoding ascii
      az rest --method post --url "https://management.azure.com/subscriptions/<sub>/resourceGroups/rg-defenstack-dev-wus3/providers/Microsoft.Security/locations/westus3/jitNetworkAccessPolicies/default/initiate?api-version=2020-01-01" --body '@jit-request.json'
      ```
 
-   Expected: the response lists the port with `status: Initiated` and an `endTimeUtc` about 3 hours ahead.
+   Expected: the response lists the port with `status: Initiated` and the `endTimeUtc` you sent. If the request is refused for its shape, use the portal path above (§9, live-only risks).
 3. **Connect** through Bastion or the VPN (runbook 03 §5.2 and §5.3).
 4. The grant ends on its own at `endTimeUtc`. **Any pipeline deploy of that environment also ends it**, because the deploy rewrites the NIC NSG (`ADR-028`). Request again after a deploy.
 
@@ -267,6 +281,7 @@ Every SSH or RDP session to the jump host now starts with a JIT request. The jum
 | Assignments | `az policy assignment list --query "[?starts_with(name,'defenstack-')].{name:name, mode:enforcementMode}" -o table` | 11 rows; `DoNotEnforce` on the 9 deny assignments during the audit week, `Default` after §5.2; `defenstack-mcsb` and `defenstack-audit-diagnostic-settings` always `Default` |
 | Public IP allowlist | `az policy assignment show -n defenstack-deny-public-ip --query "parameters.allowedNames.value" -o tsv` | The 12 names (`pip-afw-`, `pip-bas-`, `pip-vpng-…-1`, `-2` for dev-wus3, prod-wus3, prod-eus) |
 | Flow-log exemption | `az policy exemption list --scope <stfl… account ID> --query "[].{name:name, category:exemptionCategory}" -o table` | `defenstack-flow-log-storage-public-network`, `Mitigated` |
+| Flow-log Defender for Storage override | `az rest --method get --url "https://management.azure.com/subscriptions/<sub>/resourceGroups/rg-defenstack-<env>-<region>/providers/Microsoft.Storage/storageAccounts/<stfl… account>/providers/Microsoft.Security/defenderForStorageSettings/current?api-version=2025-01-01" --query "properties.{on:isEnabled, override:overrideSubscriptionLevelSettings, malware:malwareScanning.onUpload.isEnabled, sdd:sensitiveDataDiscovery.isEnabled}" -o json` | `on` `true`, `override` `true`, `malware` `false`, `sdd` `false` |
 | Legacy waiver | `az policy exemption list --resource-group defenStack --query "[].{name:name, expires:expiresOn}" -o table` | 9 rows, expiry `2027-03-31T23:59:59Z` |
 | Deny works (after §5.2 only) | `az network public-ip create -g rg-defenstack-dev-wus3 -n pip-test-deny --sku Standard` | `RequestDisallowedByPolicy` naming `defenstack-deny-public-ip`, with "Exemptions: runbook 07." If the IP is created instead, delete it (`az network public-ip delete -g rg-defenstack-dev-wus3 -n pip-test-deny`) and check that `denyEnforcement` is `Default` |
 | JIT role | `az role definition list --name "DefenStack JIT Requester" --custom-role-only true --query "[0].permissions[0].actions" -o tsv` | The 7 actions of `modules/governance/jitRequesterRole.bicep` |
@@ -274,6 +289,7 @@ Every SSH or RDP session to the jump host now starts with a JIT request. The jum
 | JIT policy | `az security jit-policy show -l westus3 -g rg-defenstack-<env>-wus3 -n default --query "virtualMachines[0].ports[].{port:number, sources:allowedSourceAddressPrefixes, max:maxRequestAccessDuration}" -o json` | `22` and `3389`, the Bastion subnet and VPN pool, `PT3H` |
 | Closed without a grant | `az network nsg rule list -g rg-defenstack-<env>-wus3 --nsg-name <vm>-nsg --query "[?direction=='Inbound'].{name:name, priority:priority, access:access}" -o table`; then over the VPN `Test-NetConnection <vm private IP> -Port 22` | `deny-ssh-rdp-inbound` 4000 `Deny`, `deny-unsolicited-inbound` 4096 (plus any JIT-created `SecurityCenter-JITRule…` deny rules); `TcpTestSucceeded : False` |
 | Reachable with a grant | §5.4, then the same two commands | A `SecurityCenter-JITRule…` `Allow` rule above priority 4000 on `<vm>-nsg`; `TcpTestSucceeded : True`; `az ssh vm --ip <vm private IP>` gives a prompt |
+| Defender for Endpoint (when `enableVirtualMachine = true`) | `az vm extension list -g rg-defenstack-<env>-wus3 --vm-name <vm> --query "[?starts_with(name,'MDE.')].{name:name, state:provisioningState}" -o table` | `MDE.Linux` or `MDE.Windows`, `Succeeded` (Defender deploys it within a few hours of §4 step 7). If it is missing or failed, see §9, live-only risks |
 | Subnet NSG unchanged | `az network nsg rule show -g rg-defenstack-<env>-wus3 --nsg-name vnet-defenstack-<env>-wus3-spoke-management-nsg -n allow-management-ssh-rdp --query "{priority:priority, sources:sourceAddressPrefixes}" -o json` | `100`, the Bastion subnet and VPN pool. Also note whether JIT added rules here (§9, live-only risks) |
 
 Paste every output into the Phase 7 PR (spec §6 definition of done).
@@ -297,6 +313,8 @@ Paste every output into the Phase 7 PR (spec §6 definition of done).
 - **Malware scanning cap:** raise `malwareScanCapGbPerMonth` only after Defender reports an account hitting the cap; each GB scanned is billed.
 - **Contact changes:** set `SECURITY_CONTACT_EMAILS` and redeploy governance.
 - **JIT grants and deploys:** schedule workload deploys outside admin sessions; a deploy ends every active grant (§5.4 step 4).
+- **The JIT `default` policy belongs to Bicep:** each pipeline deploy replaces the resource group's whole `default` JIT policy, including its `virtualMachines` list, so a VM added to JIT in the portal is dropped at the next deploy (`ADR-028`). JIT for any other VM belongs in Bicep, next to the jump host's in `modules/virtualMachine.bicep`.
+- **Changing an `adminGroupObjectIds` value:** deploys are incremental, so the old group keeps its JIT Requester assignment. Delete it by hand after the redeploy: `az role assignment delete --assignee <old group object ID> --role "DefenStack JIT Requester" --scope /subscriptions/<sub>/resourceGroups/rg-defenstack-<env>-wus3`.
 - **Cost drivers** (`docs/cost.md` "Phase 7 delta"): Defender for Servers P2 per server, Defender for Storage per account plus malware scanning per GB, App Service, Key Vault, Resource Manager and CSPM per billable resource. Azure Policy and JIT add no charge.
 
 ## 9. Troubleshooting
@@ -332,3 +350,9 @@ These cannot be proved offline. Each is first exercised by the first deployment 
 | **Tenant-wide role name.** `DefenStack JIT Requester` must be unique in the tenant | `RoleDefinitionWithSameNameExists` on a second subscription's governance deploy | **Fallback:** add the subscription's display name to `roleName` in `jitRequesterRole.bicep` for that subscription's copy, and update the test |
 | **Exemption expiry in the past.** ARM may refuse to create or update an exemption whose `expiresOn` has passed | Governance redeploy fails on `governance-legacy-waiver` after `legacyWaiverExpiresOn` | **Fallback:** extend the date (§5.3) or set `legacyResourceGroupName = ''` |
 | **Benchmark members that need an identity.** `defenstack-mcsb` has no managed identity; no member is expected to need one | Assignment creation fails with a message about a missing identity for `DeployIfNotExists`/`Modify` | **Fallback:** add a system-assigned identity and a location to that one assignment in `policies.bicep`, with no remediation tasks, and record it in `ADR-027` |
+| **The JIT request body.** §5.4 sends the `initiate` shape of API `2020-01-01` (per port: `number`, one `allowedSourceAddressPrefix`, `endTimeUtc`) from the REST reference, not a live call; check it on the first request | `az rest` returns `BadRequest` or a schema error naming a port property | **Fallback:** request through the portal (§5.4), then correct the example from the error and its Docs test |
+| **Defender for Endpoint egress.** The firewall allows only MDE's streamlined endpoint, `*.endpoint.security.microsoft.com` on 443, from the management subnet (rule `defender-for-endpoint` in `platform-egress`); that the sensor needs nothing more is assumed | §6 "Defender for Endpoint" shows no `MDE.*` extension or a failed one, the device does not report in the Defender portal, or `AZFWApplicationRule` shows denies from the jump host | **Fallback:** run the MDE client analyser's connectivity check on the jump host, and add the region-specific URLs Microsoft lists for the tenant's data location to that rule in `modules/firewallPolicyRules.bicep`, with a test |
+| **The flow-log Defender for Storage override needs its account.** `defenderForStorageSettings/current` is written on each `stfl…` account | `ResourceNotFound` or `ParentResourceNotFound` on `governance-flow-log-exemption-…` | **Fallback:** the same as the exemption beside it: §5.3, "The ordering trap" |
+| **The JIT `default` policy is replaced on every deploy.** The pipeline PUTs the whole policy, so its `virtualMachines` list is exactly the jump host | A VM added to JIT in the portal is gone after a workload deploy | **Fallback:** add that VM's JIT entry in Bicep (§8) |
+| **Role replication on the first governance deploy.** The JIT Requester role is created and assigned in the same deploy | `RoleDefinitionDoesNotExist` on `governance-jit-requester-…` | **Fallback:** re-run §4 step 7 after about 2 minutes |
+| **Diagnostic audit of child types.** If `7f89b1eb-583c-429a-8828-af049802c1d9` has mode `Indexed`, child types such as `Microsoft.Storage/storageAccounts/blobServices` may not be evaluated | During the audit week, no blob service appears in `defenstack-audit-diagnostic-settings` compliance, not even the `stfl…` ones that have no setting | **Fallback:** check `az policy definition show -n 7f89b1eb-583c-429a-8828-af049802c1d9 --query mode`; if it is `Indexed`, drop `blobServices` from `diagnosticResourceTypes` in `governance.bicep` (and its test) and audit blob diagnostic settings with a Resource Graph query instead |
