@@ -6,7 +6,10 @@ on:
     paths:
       - 'main.bicep'
       - 'modules/**'
+      # Governance is deployed by an operator (runbook 07); a workload redeploy would only reset the JIT NSG rules.
+      - '!modules/governance/**'
       - 'params/**'
+      - '!params/governance.bicepparam'
   workflow_dispatch:
     inputs:
       environment:
