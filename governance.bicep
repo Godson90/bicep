@@ -134,6 +134,10 @@ module flowLogExemptions 'modules/governance/flowLogStorageExemption.bicep' = [f
     regionCode: stamp.regionCode
     policyAssignmentId: policies.outputs.storagePublicNetworkAssignmentId
   }
+  // The per-account Defender for Storage override is written after the subscription plan, so the plan cannot reset it.
+  dependsOn: [
+    defenderPlans
+  ]
 }]
 
 module legacyWaiver 'modules/governance/legacyWaiver.bicep' = if (!empty(legacyResourceGroupName)) {

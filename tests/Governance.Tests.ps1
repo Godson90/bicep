@@ -441,6 +441,10 @@ Describe 'Policy exemptions (Phase 7)' {
         $flowLogModule.properties.parameters.policyAssignmentId.value | Should -Be "[reference('policies').outputs.storagePublicNetworkAssignmentId.value]"
     }
 
+    It 'writes the flow-log Defender for Storage override only after the subscription plans' {
+        $flowLogModule.dependsOn | Should -Contain 'defenderPlans'
+    }
+
     It 'waives every deny assignment on the legacy resource group, only when one is named' {
         $waiverModule.condition | Should -Be "[not(empty(parameters('legacyResourceGroupName')))]"
         $waiverModule.resourceGroup | Should -Be "[parameters('legacyResourceGroupName')]"
