@@ -54,7 +54,8 @@ var appServiceIntegrationNsgName = '${vnetName}-${appServiceIntegrationSubnetNam
 var virtualMachineNsgName = '${vnetName}-${virtualMachineSubnetName}-nsg'
 var amplsAsgName = '${vnetName}-ampls-asg'
 
-// Administrative inbound is only rendered when approved management sources are supplied.
+// Administrative inbound is only rendered when approved management sources are supplied. This subnet allow is the
+// outer bound on who may ever connect; the jump host's NIC NSG denies SSH and RDP until a JIT grant (ADR-028).
 var managementInboundRules = empty(managementSourceCidrs) ? [] : [
   {
     name: 'allow-management-ssh-rdp'

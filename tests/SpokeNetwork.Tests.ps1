@@ -31,6 +31,13 @@ Describe 'Management subnet isolation (F1)' {
     It 'defaults to no management source CIDRs (deny all admin inbound)' {
         @($template.parameters.managementSourceCidrs.defaultValue).Count | Should -Be 0
     }
+
+    It 'keeps the subnet allow for the admin sources only, so a JIT grant on the NIC NSG can pass it (ADR-028)' {
+        $template.variables.managementInboundRules | Should -Match ([regex]::Escape("if(empty(parameters('managementSourceCidrs')), createArray(), createArray(createObject('name', 'allow-management-ssh-rdp'"))
+        $template.variables.managementInboundRules | Should -Match ([regex]::Escape("'priority', 100, 'access', 'Allow'"))
+        $template.variables.managementInboundRules | Should -Match ([regex]::Escape("'sourceAddressPrefixes', parameters('managementSourceCidrs')"))
+        $template.variables.managementInboundRules | Should -Match ([regex]::Escape("'destinationAddressPrefix', parameters('virtualMachineSubnetAddressPrefix')"))
+    }
 }
 
 Describe 'Subnet default outbound access (PSRule Azure.VNET.PrivateSubnet)' {

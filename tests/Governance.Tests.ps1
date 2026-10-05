@@ -441,3 +441,87 @@ Describe 'Policy exemptions (Phase 7)' {
         $waiver.name | Should -Be "[format('defenstack-legacy-waiver-{0}', last(split(parameters('policyAssignmentIds')[copyIndex()], '/')))]"
     }
 }
+
+Describe 'JIT requester role (Phase 7, ADR-028)' {
+    BeforeAll {
+        $roleTemplate = Get-BicepTemplate -RelativePath 'modules/governance/jitRequesterRole.bicep'
+        $role = Get-TemplateResource -Template $roleTemplate -Type 'Microsoft.Authorization/roleDefinitions' | Select-Object -First 1
+        $assignmentTemplate = Get-BicepTemplate -RelativePath 'modules/governance/jitRequesterAssignment.bicep'
+        $assignment = Get-TemplateResource -Template $assignmentTemplate -Type 'Microsoft.Authorization/roleAssignments' | Select-Object -First 1
+        $roleModule = Get-TemplateResourceBySymbol -Template $governance -Symbol 'jitRequesterRole'
+        $assignmentModule = Get-TemplateResourceBySymbol -Template $governance -Symbol 'jitRequesterAssignments'
+    }
+
+    It 'defines the DefenStack JIT Requester custom role at subscription scope, with a deterministic name' {
+        $roleTemplate.'$schema' | Should -Match 'subscriptionDeploymentTemplate\.json'
+        $role.apiVersion | Should -Be '2022-04-01'
+        $role.name | Should -Be "[guid(subscription().id, 'DefenStack JIT Requester')]"
+        $role.properties.roleName | Should -BeExactly 'DefenStack JIT Requester'
+        $role.properties.type | Should -Be 'CustomRole'
+        @($role.properties.assignableScopes) | Should -Be @('[subscription().id]')
+        $role.properties.description | Should -Match 'ADR-028'
+    }
+
+    It 'grants only reading and initiating JIT requests plus the reads the request needs' {
+        $role.properties.permissions[0].actions | Should -Be "[variables('roleActions')]"
+        @($roleTemplate.variables.roleActions) -join ',' | Should -Be (@(
+                'Microsoft.Security/locations/jitNetworkAccessPolicies/read'
+                'Microsoft.Security/locations/jitNetworkAccessPolicies/initiate/action'
+                'Microsoft.Security/locations/jitNetworkAccessPolicies/*/read'
+                'Microsoft.Compute/virtualMachines/read'
+                'Microsoft.Network/networkInterfaces/read'
+                'Microsoft.Network/networkInterfaces/*/read'
+                'Microsoft.Network/publicIPAddresses/read'
+            ) -join ',')
+        @($role.properties.permissions[0].dataActions).Count | Should -Be 0
+    }
+
+    It 'never grants a write, a delete or a wildcard action outside a read' {
+        foreach ($action in $roleTemplate.variables.roleActions) {
+            $action | Should -Match '(/read|/initiate/action)$' -Because $action
+            $action | Should -Not -Match '/write$|/delete$'
+            ($action -replace '/\*/read$', '/read') | Should -Not -Match '\*' -Because $action
+        }
+    }
+
+    It 'outputs the role definition ID for the assignments' {
+        $roleTemplate.outputs.roleDefinitionId.value | Should -Be "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', guid(subscription().id, 'DefenStack JIT Requester'))]"
+        $governance.outputs.jitRequesterRoleDefinitionId.value | Should -Be "[reference('jitRequesterRole').outputs.roleDefinitionId.value]"
+        $roleModule.PSObject.Properties.Name | Should -Not -Contain 'resourceGroup'
+    }
+
+    It 'takes one admin group per environment, empty by default (same groups as runbook 03)' {
+        $governance.parameters.adminGroupObjectIds.'$ref' | Should -Be '#/definitions/environmentAdminGroups'
+        $governance.parameters.adminGroupObjectIds.defaultValue.dev | Should -BeExactly ''
+        $governance.parameters.adminGroupObjectIds.defaultValue.prod | Should -BeExactly ''
+    }
+
+    It 'marks the first region of each environment as its primary stamp' {
+        $governance.variables.stamps | Should -Match ([regex]::Escape("lambda('location', 'index', createObject("))
+        $governance.variables.stamps | Should -Match ([regex]::Escape("'isPrimary', equals(lambdaVariables('index'), 0)"))
+    }
+
+    It 'assigns the role only at primary stamps, where the jump host runs, and only for environments with a group' {
+        $governance.variables.jumpHostStamps | Should -Be "[filter(variables('stamps'), lambda('stamp', and(lambdaVariables('stamp').isPrimary, not(empty(parameters('adminGroupObjectIds')[lambdaVariables('stamp').environmentName])))))]"
+        $stampTemplate = Get-BicepTemplate -RelativePath 'modules/regionStamp.bicep'
+        (Get-TemplateResourceBySymbol -Template $stampTemplate -Symbol 'virtualMachine').condition |
+            Should -Be "[and(parameters('enableVirtualMachine'), variables('isPrimary'))]"
+    }
+
+    It 'assigns the role to the environment admin group in each jump host resource group' {
+        $assignmentModule.copy.count | Should -Be "[length(variables('jumpHostStamps'))]"
+        $assignmentModule.resourceGroup | Should -Be "[variables('jumpHostStamps')[copyIndex()].resourceGroupName]"
+        $assignmentModule.name | Should -Be "[format('governance-jit-requester-{0}-{1}', variables('jumpHostStamps')[copyIndex()].environmentName, variables('jumpHostStamps')[copyIndex()].regionCode)]"
+        $assignmentModule.properties.parameters.principalId.value | Should -Be "[parameters('adminGroupObjectIds')[variables('jumpHostStamps')[copyIndex()].environmentName]]"
+        $assignmentModule.properties.parameters.roleDefinitionId.value | Should -Be "[reference('jitRequesterRole').outputs.roleDefinitionId.value]"
+    }
+
+    It 'gives each assignment a deterministic GUID name and assigns it to a group' {
+        $assignment.apiVersion | Should -Be '2022-04-01'
+        $assignment.name | Should -Be "[guid(resourceGroup().id, parameters('principalId'), parameters('roleDefinitionId'))]"
+        $assignment.properties.principalType | Should -Be 'Group'
+        $assignment.properties.principalId | Should -Be "[parameters('principalId')]"
+        $assignment.properties.roleDefinitionId | Should -Be "[parameters('roleDefinitionId')]"
+        $assignmentTemplate.parameters.principalId.minLength | Should -Be 36
+    }
+}

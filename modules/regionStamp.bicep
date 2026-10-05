@@ -120,7 +120,8 @@ var names = {
 // Azure Firewall always takes the first usable address (.4) of AzureFirewallSubnet. The hub needs it before
 // the firewall exists (GatewaySubnet route table); runbook 03 checks it matches the firewall's actual IP.
 var firewallPrivateIp = cidrHost(addressPlan.firewallSubnetPrefix, 3)
-// Admin sessions arrive from Bastion or from VPN clients; managementSourceCidrs adds any extra approved ranges.
+// Admin sessions arrive from Bastion or from VPN clients; managementSourceCidrs adds any extra approved ranges. The
+// management subnet NSG allows these sources, and the jump host's JIT policy opens its NIC NSG to them on request (ADR-028).
 var adminSourceCidrs = concat([
   addressPlan.bastionSubnetPrefix
   addressPlan.vpnClientAddressPool

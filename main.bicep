@@ -38,7 +38,7 @@ param allowedOutboundFqdns array = []
 @description('Extra CIDR ranges allowed to reach private endpoints over HTTPS in every region.')
 param additionalPrivateEndpointSourceCidrs array = []
 
-@description('Extra CIDR ranges allowed to administer management VMs over SSH/RDP, beyond the AzureBastionSubnet and VPN client pool of each region.')
+@description('Extra CIDR ranges allowed to administer management VMs over SSH/RDP, beyond the AzureBastionSubnet and VPN client pool of each region. Every session still needs a just-in-time request (ADR-028).')
 param managementSourceCidrs array = []
 
 @description('Deploy Azure Bastion and the point-to-site VPN gateway in the primary region.')
