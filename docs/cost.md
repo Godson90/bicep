@@ -167,11 +167,40 @@ LRS block blob for 90 days of flow logs; Private Link: one endpoint; Azure
 DNS: four private zones; Virtual Network: global peering GB both ways;
 Azure Monitor: metric alert rules).
 
+## Phase 7 delta
+Phase 7 turns on Microsoft Defender for Cloud plans and Azure Policy for the
+whole subscription, from `governance.bicep` (runbook 07). The plans bill per
+subscription, so when dev and prod share one, every row below covers both
+environments together. As with every phase, **fill in the actual dollar
+estimate from the Pricing Calculator; do not invent prices.** Each row names
+the billing unit; read the current rate on the Defender for Cloud pricing page
+(https://azure.microsoft.com/pricing/details/defender-for-cloud/), marked
+**confirm on the pricing page** below.
+
+| Environment | Cost driver | What changed / why it costs more |
+|---|---|---|
+| Subscription | Defender for Servers Plan 2 | Per server per month, metered per second while the server runs: the jump host when `enableVirtualMachine = true` (**confirm on the pricing page**). Includes 500 MB per server per day of free Log Analytics ingestion for some security tables, which offsets part of Sentinel's ingestion of `SecurityEvent` and similar tables |
+| Subscription | Defender for Storage (`DefenderForStorageV2`) | Per storage account per month (**confirm on the pricing page**) for every account in the subscription: each region's app account and flow-log account, plus the legacy group's |
+| Subscription | On-upload malware scanning | Per GB scanned (**confirm on the pricing page**), capped at `malwareScanCapGbPerMonth` (5000 GB) per account per month. Flow-log blobs are scanned on upload too: measure the flow-log volume before raising the cap |
+| Subscription | Defender for App Service | Per App Service instance (plan instance) per month: prod West US 3 runs 3 instances, the warm standby and dev 1 each (**confirm on the pricing page**) |
+| Subscription | Defender for Key Vault | Per vault or per transaction, depending on the sub-plan Azure applies (runbook 07 §9) (**confirm on the pricing page**) |
+| Subscription | Defender for Resource Manager | Per subscription or per API call, depending on the sub-plan (**confirm on the pricing page**) |
+| Subscription | Defender CSPM | Per billable resource per month: servers, storage accounts and databases, not network or most PaaS resources (**confirm on the pricing page**) |
+| Subscription | Azure Policy, exemptions, the custom role, JIT | No charge. JIT is included in Defender for Servers |
+| Both | Sentinel ingestion of Defender alerts | `SecurityAlert` rows from the tenant-based Defender for Cloud connector (runbook 06 §5.1); small |
+
+**Estimate:** fill in from the Pricing Calculator (Microsoft Defender for
+Cloud: Servers Plan 2 × jump hosts, Storage × accounts plus malware scanning
+GB, App Service × instances, Key Vault, Resource Manager, CSPM × billable
+resources). Measure after a month with Cost Analysis filtered to the service
+name "Microsoft Defender for Cloud" at subscription scope; Defender charges do
+not appear under the environment resource groups.
+
 ## Dominant future cost drivers
 From `docs/superpowers/specs/2026-09-25-secure-connectivity-design.md` §6, the
 resources expected to dominate spend in later phases (not present in Phase 0).
 The VPN gateway and Azure Bastion arrived in Phase 3, and Azure Front Door
-Premium in Phase 4, and Microsoft Sentinel in Phase 6 (see their deltas):
+Premium in Phase 4, Microsoft Sentinel in Phase 6, and the Microsoft Defender plans in Phase 7 (see their deltas):
 - Microsoft Sentinel ingestion
 - Microsoft Defender plans
 

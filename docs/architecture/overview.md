@@ -1,6 +1,6 @@
-# Architecture overview: Phase 1-6 (subscription-scope, multi-region, Premium firewall, admin access, public ingress, app and data resilience, private monitoring and detection)
+# Architecture overview: Phase 1-7 (subscription-scope, multi-region, Premium firewall, admin access, public ingress, app and data resilience, private monitoring and detection, governance)
 
-> Owning files: `main.bicep`, `modules/global.bicep`, `modules/regionStamp.bicep`, `modules/privateDnsZoneLinks.bicep`, `modules/types.bicep`, `modules/azureFirewall.bicep`, `modules/firewallPolicyRules.bicep`, `modules/hubNetwork.bicep`, `modules/bastion.bicep`, `modules/vpnGateway.bicep`, `modules/frontDoor.bicep`, `modules/monitorPrivateLinkScope.bicep`, `modules/hubPeering.bicep`, `modules/flowLogs.bicep`, `modules/metricAlerts.bicep`. Spec: `docs/superpowers/specs/2026-09-25-secure-connectivity-design.md` §1, §3, §5.
+> Owning files: `main.bicep`, `modules/global.bicep`, `modules/regionStamp.bicep`, `modules/privateDnsZoneLinks.bicep`, `modules/types.bicep`, `modules/azureFirewall.bicep`, `modules/firewallPolicyRules.bicep`, `modules/hubNetwork.bicep`, `modules/bastion.bicep`, `modules/vpnGateway.bicep`, `modules/frontDoor.bicep`, `modules/monitorPrivateLinkScope.bicep`, `modules/hubPeering.bicep`, `modules/flowLogs.bicep`, `modules/metricAlerts.bicep`, `governance.bicep` (operator-deployed, Phase 7). Spec: `docs/superpowers/specs/2026-09-25-secure-connectivity-design.md` §1, §3, §5.
 
 ## 1. Purpose and status
 
@@ -62,11 +62,17 @@ See [runbook 05](../runbooks/05-app-and-data.md).
 
 See [runbook 06](../runbooks/06-monitoring-and-sentinel.md).
 
-What later phases add (not present after Phase 6):
+**Phase 7** added governance and posture, from a second entry point, `governance.bicep`, that an operator deploys per subscription; the pipeline never does (`ADR-026`):
+- Microsoft Defender for Cloud: Servers Plan 2 with agentless scanning, App Service, Storage (on-upload malware scanning with a monthly cap, sensitive data discovery), Key Vault, Resource Manager and Defender CSPM, plus a security contact (`ADR-026`).
+- Azure Policy at subscription scope: the Microsoft cloud security benchmark, deny public network access on Storage, Key Vault and App Service / Functions, allowed locations, a public IP name allowlist, and an audit of diagnostic settings. Deny assignments go live audit-first (`DoNotEnforce`, then `Default`), with exemptions for the flow-log accounts and a dated waiver for the legacy group (`ADR-027`, `ADR-029`).
+- Just-in-time access to the jump host: its NIC NSG denies SSH/RDP until Defender for Cloud grants a request, and the admin groups hold the **DefenStack JIT Requester** role (`ADR-028`).
+
+See [runbook 07](../runbooks/07-governance.md).
+
+What later phases add (not present after Phase 7):
 
 | Phase | Adds |
 |---|---|
-| 7 | Microsoft Defender for Cloud plans, Azure Policy assignments |
 | 8 | Recovery Services vaults and the backup job alert, DR traffic over the hub-to-hub peering (Phase 6 carries only monitoring), the regional-failover runbook |
 
 ## 2. Topology
@@ -297,10 +303,10 @@ flowchart LR
     VM -.->|"Entra sign-in, OS updates via firewall"| FW
 ```
 
-- The `management` NSG and the jump host NIC NSG allow SSH/RDP only from `AzureBastionSubnet` and the region's VPN client pool (plus any `managementSourceCidrs`).
+- The `management` NSG allows SSH/RDP only from `AzureBastionSubnet` and the region's VPN client pool (plus any `managementSourceCidrs`). The jump host NIC NSG denies both ports (`deny-ssh-rdp-inbound`, priority 4000) until a just-in-time request opens them for up to 3 hours from those sources (Phase 7, `ADR-028`).
 - The `management` route table sends replies back through the firewall (`0.0.0.0/0`, BGP propagation off), so the VPN-to-jump-host flow is symmetric.
 - VPN clients use the hub DNS server, the firewall DNS proxy, so `privatelink.*` names resolve to private endpoint IPs.
-- Admin rights on the jump host come from the `Virtual Machine Administrator Login` role held by a PIM-eligible Entra group (`adminGroupObjectId`). Defender JIT is deferred to Phase 7 (`ADR-014`).
+- Admin rights on the jump host come from the `Virtual Machine Administrator Login` role held by a PIM-eligible Entra group (`adminGroupObjectId`). The same group holds **DefenStack JIT Requester**, so one PIM activation lets an admin request just-in-time access (`ADR-028`, superseding `ADR-014`).
 
 ## 4. Address plan
 
@@ -370,7 +376,7 @@ One row per `names.*` key in `modules/regionStamp.bicep`, plus the resource grou
 |---|---|
 | `NetworkWatcherRG` | `NetworkWatcher_westus3` and `NetworkWatcher_eastus` (created by Azure or by an operator, never by this template); under them, the flow logs `<vnet>-flowlog` for every deployed hub and spoke. The pipeline identities hold `Network Contributor` here (`ADR-023`) |
 
-The subscription also holds the diagnostic setting `activity-log-defenstack-<env>` (`ADR-025`).
+The subscription also holds the diagnostic setting `activity-log-defenstack-<env>` (`ADR-025`) and, from Phase 7, the governance resources shared by every environment in it: the six Defender plans, the security contact `default`, the 11 `defenstack-*` policy assignments and the definition `defenstack-deny-public-ip-except-allowlist`, and the custom role **DefenStack JIT Requester**. Each regional resource group holds its flow-log account's policy exemption; each primary one, the JIT Requester assignment and, with the jump host, the JIT policy `default`. The legacy `defenStack` group holds nine dated waivers (`ADR-027`).
 
 ## 7. Design decisions
 
@@ -397,3 +403,7 @@ The subscription also holds the diagnostic setting `activity-log-defenstack-<env
 - [ADR-023: VNet flow logs write with a managed identity to a regional keyless account, from NetworkWatcherRG](../decisions/ADR-023-flow-log-identity-and-network-watcher.md)
 - [ADR-024: Microsoft Sentinel is onboarded in Bicep; its content comes from Content Hub](../decisions/ADR-024-sentinel-content-through-content-hub.md)
 - [ADR-025: The subscription Activity Log diagnostic setting uses the preview API 2021-05-01-preview](../decisions/ADR-025-preview-api-subscription-diagnostic-setting.md)
+- [ADR-026: Governance is a separate, operator-deployed entry point](../decisions/ADR-026-operator-deployed-governance-entry-point.md)
+- [ADR-027: Azure Policy goes live audit-first through enforcementMode, with exemptions instead of notScopes](../decisions/ADR-027-audit-first-policy-enforcement.md)
+- [ADR-028: Just-in-time access to the jump host: the NIC NSG denies, JIT opens, the subnet NSG bounds](../decisions/ADR-028-jit-access-and-nsg-ownership.md)
+- [ADR-029: Governance uses preview APIs for policy exemptions and the security contact](../decisions/ADR-029-preview-apis-for-governance.md)

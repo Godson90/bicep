@@ -18,3 +18,6 @@ Do not deploy a JIT policy in Phase 3. Phase 7, which enables Defender for Serve
 
 ## Revisit when
 Phase 7 enables Defender for Servers Plan 2.
+
+## Outcome
+Superseded by `ADR-028` (Phase 7): the NIC NSG denies SSH/RDP with an explicit rule, the JIT policy opens it on request, and the subnet NSG keeps its allow for the Bastion subnet and VPN pool. The "NIC NSG without inline rules" option above was rejected there.
