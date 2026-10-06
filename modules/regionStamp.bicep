@@ -116,6 +116,7 @@ var names = {
   appInsights: 'appi-defenstack-${environmentName}-${regionCode}'
   flowLogStorageAccount: 'stfl${regionCode}${nameSuffix}'
   flowLogIdentity: 'id-flowlogs-defenstack-${environmentName}-${regionCode}'
+  recoveryServicesVault: 'rsv-defenstack-${environmentName}-${regionCode}'
 }
 // Azure Firewall always takes the first usable address (.4) of AzureFirewallSubnet. The hub needs it before
 // the firewall exists (GatewaySubnet route table); runbook 03 checks it matches the firewall's actual IP.
@@ -280,6 +281,19 @@ module virtualMachine 'virtualMachine.bicep' = if (enableVirtualMachine && isPri
     logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
     managementSourceCidrs: adminSourceCidrs
     adminGroupObjectId: adminGroupObjectId
+  }
+}
+
+// One Recovery Services vault per stamp (Phase 8): geo-redundant with cross-region restore, and the jump host's daily
+// backup where the jump host exists. Protection waits for the VM through its ID.
+module recoveryServicesVault 'recoveryServicesVault.bicep' = {
+  name: 'recovery-services-vault'
+  params: {
+    location: location
+    vaultName: names.recoveryServicesVault
+    logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
+    virtualMachineId: enableVirtualMachine && isPrimary ? virtualMachine!.outputs.id : ''
+    enableDeleteLock: isProd
   }
 }
 
@@ -516,4 +530,6 @@ output appInsightsName string = appInsights.outputs.name
 output appInsightsId string = appInsights.outputs.id
 output privateEndpointSubnetId string = spokeNetwork.outputs.privateEndpointSubnetId
 output monitorAsgId string = spokeNetwork.outputs.amplsAsgId
+output recoveryServicesVaultId string = recoveryServicesVault.outputs.id
+output recoveryServicesVaultName string = names.recoveryServicesVault
 output dataCollectionEndpointId string = enableVirtualMachine && isPrimary ? virtualMachine!.outputs.dataCollectionEndpointId : ''
