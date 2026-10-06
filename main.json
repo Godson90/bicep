@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "5185882655098667399"
+      "templateHash": "1641210288821103506"
     }
   },
   "definitions": {
@@ -14274,6 +14274,104 @@
             "name": {
               "type": "string",
               "value": "[parameters('alertName')]"
+            }
+          }
+        }
+      },
+      "dependsOn": [
+        "actionGroup"
+      ]
+    },
+    "backupAlertRouting": {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('backup-alert-routing-{0}', parameters('environmentName'))]",
+      "resourceGroup": "[variables('globalResourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "ruleName": {
+            "value": "[format('apr-defenstack-{0}-backup', parameters('environmentName'))]"
+          },
+          "scopes": {
+            "value": "[concat(createArray(subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('primaryResourceGroupName'))), if(parameters('deploySecondaryRegion'), createArray(subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('secondaryResourceGroupName'))), createArray()))]"
+          },
+          "actionGroupId": {
+            "value": "[reference('actionGroup').outputs.id.value]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "1804261500465502185"
+            }
+          },
+          "parameters": {
+            "ruleName": {
+              "type": "string",
+              "metadata": {
+                "description": "Alert processing rule name."
+              }
+            },
+            "scopes": {
+              "type": "array",
+              "minLength": 1,
+              "metadata": {
+                "description": "Resource IDs the rule covers: the resource groups holding the Recovery Services and Backup vaults."
+              }
+            },
+            "actionGroupId": {
+              "type": "string",
+              "metadata": {
+                "description": "Resource ID of the environment's action group, which receives every Azure Backup alert."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.AlertsManagement/actionRules",
+              "apiVersion": "2021-08-08",
+              "name": "[parameters('ruleName')]",
+              "location": "global",
+              "properties": {
+                "description": "Routes Azure Backup alerts from the DefenStack vaults to the platform action group. Triage: runbook 08.",
+                "enabled": true,
+                "scopes": "[parameters('scopes')]",
+                "conditions": [
+                  {
+                    "field": "MonitorService",
+                    "operator": "Equals",
+                    "values": [
+                      "Azure Backup"
+                    ]
+                  }
+                ],
+                "actions": [
+                  {
+                    "actionType": "AddActionGroups",
+                    "actionGroupIds": [
+                      "[parameters('actionGroupId')]"
+                    ]
+                  }
+                ]
+              }
+            }
+          ],
+          "outputs": {
+            "id": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.AlertsManagement/actionRules', parameters('ruleName'))]"
+            },
+            "name": {
+              "type": "string",
+              "value": "[parameters('ruleName')]"
             }
           }
         }

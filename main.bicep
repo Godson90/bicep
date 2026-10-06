@@ -326,7 +326,7 @@ module frontDoor 'modules/frontDoor.bicep' = {
 }
 
 // Global platform alerts (Phase 6): Front Door origin health and WAF blocks, and Service Health for the platform
-// regions. The backup job alert waits for Phase 8.
+// regions. Backup job alerts arrive through the alert processing rule below (Phase 8).
 module globalMetricAlerts 'modules/metricAlerts.bicep' = {
   name: 'global-metric-alerts-${environmentName}'
   scope: resourceGroup(globalResourceGroupName)
@@ -381,6 +381,23 @@ module serviceHealthAlert 'modules/serviceHealthAlert.bicep' = {
     ] : [], [
       'Global'
     ])
+    actionGroupId: actionGroup.outputs.id
+  }
+}
+
+// Azure Backup alerts from the regional vaults (Phase 8) reach the action group through one alert processing rule. It is
+// scoped to the regional resource groups, which exist before any vault, so it covers the Recovery Services vaults and
+// the prod Backup vault without waiting for the stamps; the MonitorService condition keeps it to Azure Backup alerts.
+module backupAlertRouting 'modules/backupAlertRouting.bicep' = {
+  name: 'backup-alert-routing-${environmentName}'
+  scope: resourceGroup(globalResourceGroupName)
+  params: {
+    ruleName: 'apr-defenstack-${environmentName}-backup'
+    scopes: concat([
+      subscriptionResourceId('Microsoft.Resources/resourceGroups', primaryResourceGroupName)
+    ], deploySecondaryRegion ? [
+      subscriptionResourceId('Microsoft.Resources/resourceGroups', secondaryResourceGroupName)
+    ] : [])
     actionGroupId: actionGroup.outputs.id
   }
 }

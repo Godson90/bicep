@@ -89,3 +89,37 @@ Describe 'Service Health alert (Phase 6)' {
         $serviceHealth.properties.actions.actionGroups[0].actionGroupId | Should -Be "[parameters('actionGroupId')]"
     }
 }
+
+Describe 'Backup alert processing rule (Phase 8)' {
+    BeforeAll {
+        $backupRoutingTemplate = Get-BicepTemplate -RelativePath 'modules/backupAlertRouting.bicep'
+        $backupRouting = Get-TemplateResource -Template $backupRoutingTemplate -Type 'Microsoft.AlertsManagement/actionRules' | Select-Object -First 1
+    }
+
+    It 'is a global alert processing rule on the GA API version 2021-08-08, with no kind property' {
+        $backupRouting.apiVersion | Should -Be '2021-08-08'
+        $backupRouting.location | Should -Be 'global'
+        $backupRouting.name | Should -Be "[parameters('ruleName')]"
+        $backupRouting.PSObject.Properties.Name | Should -Not -Contain 'kind'
+        $backupRouting.properties.enabled | Should -BeTrue
+    }
+
+    It 'covers the given scopes' {
+        $backupRoutingTemplate.parameters.scopes.type | Should -Be 'array'
+        $backupRoutingTemplate.parameters.scopes.minLength | Should -Be 1
+        $backupRouting.properties.scopes | Should -Be "[parameters('scopes')]"
+    }
+
+    It 'matches only Azure Backup alerts' {
+        @($backupRouting.properties.conditions).Count | Should -Be 1
+        $backupRouting.properties.conditions[0].field | Should -Be 'MonitorService'
+        $backupRouting.properties.conditions[0].operator | Should -Be 'Equals'
+        @($backupRouting.properties.conditions[0].values) | Should -Be @('Azure Backup')
+    }
+
+    It 'adds the environment action group' {
+        @($backupRouting.properties.actions).Count | Should -Be 1
+        $backupRouting.properties.actions[0].actionType | Should -Be 'AddActionGroups'
+        @($backupRouting.properties.actions[0].actionGroupIds) | Should -Be @("[parameters('actionGroupId')]")
+    }
+}
