@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "16299438805352737828"
+      "templateHash": "8982377337616917922"
     }
   },
   "definitions": {
@@ -942,7 +942,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "4730148825978826468"
+              "templateHash": "8342080141452013034"
             }
           },
           "definitions": {
@@ -4655,7 +4655,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "17097468404704453568"
+                      "templateHash": "1885923117614603570"
                     }
                   },
                   "parameters": {
@@ -4725,7 +4725,7 @@
                         "type": "SystemAssigned"
                       },
                       "properties": {
-                        "publicNetworkAccess": "Disabled",
+                        "publicNetworkAccess": "Enabled",
                         "securitySettings": {
                           "softDeleteSettings": {
                             "softDeleteState": "Enabled",
@@ -7119,7 +7119,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "4730148825978826468"
+              "templateHash": "8342080141452013034"
             }
           },
           "definitions": {
@@ -10832,7 +10832,7 @@
                     "_generator": {
                       "name": "bicep",
                       "version": "0.47.16.16243",
-                      "templateHash": "17097468404704453568"
+                      "templateHash": "1885923117614603570"
                     }
                   },
                   "parameters": {
@@ -10902,7 +10902,7 @@
                         "type": "SystemAssigned"
                       },
                       "properties": {
-                        "publicNetworkAccess": "Disabled",
+                        "publicNetworkAccess": "Enabled",
                         "securitySettings": {
                           "softDeleteSettings": {
                             "softDeleteState": "Enabled",
@@ -14615,7 +14615,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "15737241675199301898"
+              "templateHash": "17103746785574246549"
             }
           },
           "definitions": {
@@ -14677,7 +14677,7 @@
             "location": {
               "type": "string",
               "metadata": {
-                "description": "Azure region for the private endpoint (the primary region)."
+                "description": "Azure region for the private endpoint: the region of the spoke that hosts it."
               }
             },
             "privateLinkScopeId": {
@@ -14704,7 +14704,7 @@
             "privateEndpointSubnetId": {
               "type": "string",
               "metadata": {
-                "description": "Private-endpoint subnet resource ID in the primary spoke."
+                "description": "Private-endpoint subnet resource ID in the spoke that hosts the endpoint."
               }
             },
             "privateDnsZoneIds": {
@@ -14716,7 +14716,7 @@
             "applicationSecurityGroupId": {
               "type": "string",
               "metadata": {
-                "description": "Resource ID of the primary spoke's AMPLS application security group, which the endpoint joins."
+                "description": "Resource ID of the hosting spoke's AMPLS application security group, which the endpoint joins."
               }
             }
           },

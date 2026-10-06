@@ -1,11 +1,12 @@
-// The platform's single Azure Monitor private endpoint, in the primary spoke's private-endpoint subnet. Its NSG
+// An Azure Monitor private endpoint in a spoke's private-endpoint subnet: main.bicep's endpoint in the primary spoke,
+// and failover.bicep's East US endpoint during a declared outage. Its NSG
 // already admits HTTPS from the approved sources, and the shared zones make it resolvable from every linked VNet.
 // The endpoint joins the spoke's AMPLS application security group, the only destination the NSG opens to the
 // peer region's firewall-SNATed traffic (ADR-022). During a declared outage, failover.bicep adds a second endpoint
 // in the East US spoke under its own name; its zone group re-points the shared records there (ADR-032).
 import { privateDnsZoneSet } from 'types.bicep'
 
-@description('Azure region for the private endpoint (the primary region).')
+@description('Azure region for the private endpoint: the region of the spoke that hosts it.')
 param location string
 
 @description('Azure Monitor Private Link Scope resource ID.')
@@ -19,13 +20,13 @@ param privateLinkScopeName string
 @description('Private endpoint name. The default keeps the Phase 6 primary endpoint name; failover.bicep names its East US endpoint.')
 param privateEndpointName string = '${privateLinkScopeName}-pe'
 
-@description('Private-endpoint subnet resource ID in the primary spoke.')
+@description('Private-endpoint subnet resource ID in the spoke that hosts the endpoint.')
 param privateEndpointSubnetId string
 
 @description('Resource IDs of the shared private DNS zones created by the global layer.')
 param privateDnsZoneIds privateDnsZoneSet
 
-@description('Resource ID of the primary spoke\'s AMPLS application security group, which the endpoint joins.')
+@description('Resource ID of the hosting spoke\'s AMPLS application security group, which the endpoint joins.')
 param applicationSecurityGroupId string
 
 resource privateEndpoint 'Microsoft.Network/privateEndpoints@2024-07-01' = {

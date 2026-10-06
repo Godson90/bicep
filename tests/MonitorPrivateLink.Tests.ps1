@@ -52,6 +52,12 @@ Describe 'AMPLS private endpoint (Phase 6)' {
         $endpointTemplate.parameters.privateEndpointName.type | Should -Be 'string'
     }
 
+    It 'describes its parameters for both callers, not only the primary region (Phase 8)' {
+        foreach ($parameter in $endpointTemplate.parameters.PSObject.Properties) {
+            $parameter.Value.metadata.description | Should -Not -Match 'primary (region|spoke)' -Because $parameter.Name
+        }
+    }
+
     It 'keeps the Phase 6 endpoint byte-identical: main.bicep passes no name, so the default name (the scope name plus -pe) applies' {
         $main = Get-BicepTemplate -RelativePath 'main.bicep'
         $caller = Get-TemplateResourceBySymbol -Template $main -Symbol 'monitorPrivateEndpoint'

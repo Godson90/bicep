@@ -26,6 +26,7 @@ PSRule for Azure's `Azure.RSV.ReplicationAlert` expects each Recovery Services v
 - After the lock, retention can only grow. A shorter policy needs a new policy name and a new vault, and the old recovery points live until they expire. Locked immutability also blocks stopping protection with delete data.
 - Immutability does not cover operational (local) blob backups; the platform uses vaulted backup only.
 - The PSRule baseline stays at zero failures with one more exclusion, justified here; a test pins the exclusion and its comment.
+- **Follow-up (Phase 7 gap, not changed in Phase 8):** the Phase 7 diagnostic-settings audit (`diagnosticResourceTypes` in `governance.bicep`) does not list `Microsoft.RecoveryServices/vaults` or `Microsoft.DataProtection/backupVaults`, so the policy does not check the vaults' `rsv-diagnostics` and `bv-diagnostics` settings. Add both types in a governance change (runbook 07 §8).
 
 ## Revisit when
 The first quarterly drill succeeds (runbook 08 §5.3): record the date, the sign-off and the commit that locks the vaults here. Revisit the exclusion if Site Recovery is ever adopted.

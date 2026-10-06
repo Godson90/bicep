@@ -315,6 +315,7 @@ Paste every output into the Phase 7 PR (spec §6 definition of done).
 - **JIT grants and deploys:** schedule workload deploys outside admin sessions; a deploy ends every active grant (§5.4 step 4).
 - **The JIT `default` policy belongs to Bicep:** each pipeline deploy replaces the resource group's whole `default` JIT policy, including its `virtualMachines` list, so a VM added to JIT in the portal is dropped at the next deploy (`ADR-028`). JIT for any other VM belongs in Bicep, next to the jump host's in `modules/virtualMachine.bicep`.
 - **Changing an `adminGroupObjectIds` value:** deploys are incremental, so the old group keeps its JIT Requester assignment. Delete it by hand after the redeploy: `az role assignment delete --assignee <old group object ID> --role "DefenStack JIT Requester" --scope /subscriptions/<sub>/resourceGroups/rg-defenstack-<env>-wus3`.
+- **Follow-up from Phase 8 (not yet done):** the diagnostic-settings audit list (`diagnosticResourceTypes` in `governance.bicep`) lacks `Microsoft.RecoveryServices/vaults` and `Microsoft.DataProtection/backupVaults`, which Phase 8 deploys with diagnostic settings (`rsv-diagnostics`, `bv-diagnostics`). Add both in a governance change, then redeploy governance (`ADR-030`). Phase 8 leaves `governance.bicep` unchanged.
 - **Cost drivers** (`docs/cost.md` "Phase 7 delta"): Defender for Servers P2 per server, Defender for Storage per account plus malware scanning per GB, App Service, Key Vault, Resource Manager and CSPM per billable resource. Azure Policy and JIT add no charge.
 
 ## 9. Troubleshooting

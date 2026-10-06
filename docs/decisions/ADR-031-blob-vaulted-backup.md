@@ -21,7 +21,7 @@ The prod application account (`st<wus3><suffix>`, `Standard_RAGZRS`, `ADR-020`) 
 - **Effects on the protected account, checked against this repository.** The REST guide warns that "Once a storage account is configured for blobs backup, a few capabilities are affected, such as change feed and delete lock" ([REST: back up blobs](https://learn.microsoft.com/azure/backup/backup-azure-dataprotection-use-rest-api-backup-blobs)). Per "Effects on backed-up storage accounts" ([configure and manage](https://learn.microsoft.com/azure/backup/blob-backup-configure-manage#effects-on-backed-up-storage-accounts)):
   - **Vaulted backup** creates **object replication** rules on the account. It also turns on **versioning and change feed**, because object replication needs them.
   - **Operational backup** (not used here) would instead turn on point-in-time restore and blob soft delete with policy-driven retention, and apply a **Backup-owned delete lock** to the account.
-  - Stopping protection removes the object replication policy automatically, unless custom locks exist, in which case it must be removed by hand. It never turns off point-in-time restore, versioning or change feed.
+  - **Stopping protection does not delete the object replication policy**: "If you stop protection (vaulted backup) on a storage account, it doesn't delete the object replication policy created on the storage account. In these scenarios, you need to manually delete the OR policies." Only **removing the backups** deletes it automatically, unless custom locks exist ([support matrix](https://learn.microsoft.com/azure/backup/blob-backup-support-matrix), vaulted backup limitations 9 and 11). Neither turns off point-in-time restore, versioning or change feed.
 
   **No conflict in this repository:**
   - `storage.bicep` already enables versioning and change feed (14-day retention), so Azure Backup finds them on.
@@ -31,6 +31,14 @@ The prod application account (`st<wus3><suffix>`, `Standard_RAGZRS`, `ADR-020`) 
 
   The compliant option is therefore the current one: no change to `storage.bicep`.
 - **The one real interaction is failover.** A **planned** storage failover is refused while change feed, object replication or point-in-time restore is on ([failover FAQ](https://learn.microsoft.com/azure/storage/common/storage-failover-faq#what-are-the-conflicting-features-or-scenarios-for-failovers)). So failback pauses blob backup, deletes the object replication policy, and turns off point-in-time restore and change feed before the planned failover. The pipeline then restores them, and protection resumes (runbook 08 §5.2).
+- **The unplanned failover removes the object replication policy too.** Microsoft's storage docs contradict each other. The object replication overview says "Customer-managed failover isn't supported for either the source or the destination account in an object replication policy" ([object replication](https://learn.microsoft.com/azure/storage/blobs/object-replication-overview)), while the disaster recovery guidance table lists object replication as supported for an unplanned failover ([disaster recovery guidance](https://learn.microsoft.com/azure/storage/common/storage-disaster-recovery-guidance#plan-for-failover)). We take the safe reading. Runbook 08 §4 step 2 suspends the backup instance and deletes the policy before the unplanned failover, which is the sequence the support matrix documents: "pause the backup, remove the object replication policy at the storage account level, complete the failover, and then resume the backup" ([support matrix](https://learn.microsoft.com/azure/backup/blob-backup-support-matrix), limitation 10). Resuming re-creates the policy and "triggers a full backup" (limitation 16), so the first backup after failback is a full re-replication.
+- **Pre-production validation (owner, not yet run).** Runbook 08 §2 asks the owner to test an unplanned failover of a scratch GPv2 GRS account with an object replication policy, in a sandbox subscription, never in prod. Record the result here:
+
+  | Date | Account SKU | OR policy present | Failover accepted? | Error text (if refused) | Recorded by |
+  |---|---|---|---|---|---|
+  | | | | | | |
+- **Pipeline identity reach.** Storage Account Backup Contributor is in the pipeline identity's delegatable list (runbook 00b). The ABAC condition limits role IDs, not principals, so the pipeline identity can assign this role within its resource groups, **including to itself**. Beyond Contributor, which the identity already has, the role adds only lock management (`Microsoft.Authorization/locks/write` and `delete`, [built-in roles](https://learn.microsoft.com/azure/role-based-access-control/built-in-roles/storage#storage-account-backup-contributor)). The prod identity already holds lock management (`-GrantLockManagement`, runbook 00b §8), so the net new reach is the **dev** identity's: it could lift locks in its own resource groups. Accepted, because dev has no locks to protect and the identity is already Contributor there.
+  - **Optional tightening, not applied:** add an ABAC clause that refuses assignments to the pipeline's own principal, for example `@Request[Microsoft.Authorization/roleAssignments:PrincipalId] StringNotEquals '<pipeline object ID>'`, in `New-GitHubDeploymentIdentity.ps1`'s condition. No code changes in Phase 8.
 
 ## Consequences
 - **Limits:**
@@ -43,7 +51,9 @@ The prod application account (`st<wus3><suffix>`, `Standard_RAGZRS`, `ADR-020`) 
 - **Live-only risks**, with fallbacks in runbook 08 §9:
   - backup with `publicNetworkAccess: 'Disabled'`;
   - a role-propagation race on the first deploy;
-  - idempotent re-PUTs of the policy;
+  - idempotent re-PUTs of the policy (fallback: deploy once, then reference the policy as `existing`);
+  - a vaulted-only policy with no operational rule (fallback: the documented combined operational and vaulted policy);
+  - object replication and the unplanned failover (the owner's sandbox test above);
   - the change-feed retention that `storage.bicep` re-asserts.
 
 ## Revisit when

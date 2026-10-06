@@ -113,6 +113,9 @@ Describe 'Blob backup permission and instance (Phase 8)' {
         $source.resourceType | Should -Be 'Microsoft.Storage/storageAccounts'
         $source.resourceID | Should -Be "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]"
         $source.resourceName | Should -Be "[parameters('storageAccountName')]"
+        $source.resourceUri | Should -Be "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]"
+        $source.resourceLocation | Should -Be "[parameters('location')]"
+        $instance.name | Should -Be "[format('{0}/{1}', parameters('vaultName'), parameters('storageAccountName'))]"
         $instance.properties.policyInfo.policyId | Should -Be "[resourceId('Microsoft.DataProtection/backupVaults/backupPolicies', parameters('vaultName'), variables('policyName'))]"
     }
 

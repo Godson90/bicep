@@ -35,9 +35,12 @@ var backupLogCategories = [
 // First run date for the schedule; Azure Backup uses only the time of day (02:00 UTC).
 var dailyRunTime = '2026-01-01T02:00:00Z'
 
-// One vault per stamp (Phase 8). Public network access is denied with no private endpoint: Azure VM backup and
-// restore run on the platform's own path and need neither (ADR-033). Soft delete and immutability start reversible;
-// AlwaysON soft delete and a Locked immutability state are runbook 08 steps after the first successful drill (ADR-030).
+// One vault per stamp (Phase 8). Public network access stays Enabled, with no private endpoint, to keep cross-region
+// restore: "Without a private connection in the secondary region, CRR can't perform the required replication"
+// (https://learn.microsoft.com/azure/backup/backup-azure-backup-faq). Azure VM backup is snapshot-based and moves no
+// data through the vault's network endpoint; access stays Entra/RBAC-authorised (ADR-033). Soft delete and
+// immutability start reversible; AlwaysON soft delete and a Locked immutability state are runbook 08 steps after the
+// first successful drill (ADR-030).
 resource vault 'Microsoft.RecoveryServices/vaults@2026-07-01' = {
   name: vaultName
   location: location
@@ -49,7 +52,7 @@ resource vault 'Microsoft.RecoveryServices/vaults@2026-07-01' = {
     type: 'SystemAssigned'
   }
   properties: {
-    publicNetworkAccess: 'Disabled'
+    publicNetworkAccess: 'Enabled'
     securitySettings: {
       softDeleteSettings: {
         softDeleteState: 'Enabled'

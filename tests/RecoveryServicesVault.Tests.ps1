@@ -17,9 +17,12 @@ Describe 'Recovery Services vault (Phase 8)' {
         $vault.identity.type | Should -Be 'SystemAssigned'
     }
 
-    It 'denies public network access with no private endpoint; Azure VM backup does not need one (ADR-033)' {
-        $vault.properties.publicNetworkAccess | Should -Be 'Disabled'
+    It 'allows public network access with no private endpoint, to keep cross-region restore (ADR-033)' {
+        $vault.properties.publicNetworkAccess | Should -Be 'Enabled'
         Get-TemplateResource -Template $template -Type 'Microsoft.Network/privateEndpoints' | Should -BeNullOrEmpty
+        $source = Get-Content (Get-RepoPath 'modules/recoveryServicesVault.bicep') -Raw
+        $source | Should -Match ([regex]::Escape('https://learn.microsoft.com/azure/backup/backup-azure-backup-faq'))
+        $source | Should -Match 'ADR-033'
     }
 
     It 'keeps soft delete Enabled for 14 days, never the irreversible AlwaysON (ADR-030)' {

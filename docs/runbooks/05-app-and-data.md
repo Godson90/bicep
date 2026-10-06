@@ -24,7 +24,7 @@ Data protection is unchanged from Phase 0 (F7) on every account:
 **Effects of blob vaulted backup on the prod primary account (Phase 8, `ADR-031`).** Microsoft warns that "once a storage account is configured for blobs backup, a few capabilities are affected, such as change feed and delete lock" ([REST: back up blobs](https://learn.microsoft.com/azure/backup/backup-azure-dataprotection-use-rest-api-backup-blobs)).
 - **What vaulted backup does to the account.** It creates an **object replication** policy, and it turns on **versioning and change feed** ([effects on backed-up storage accounts](https://learn.microsoft.com/azure/backup/blob-backup-configure-manage#effects-on-backed-up-storage-accounts)). Both are already on here, and `storage.bicep` leaves the object replication policy alone.
 - **What it does not do.** The Backup-owned **delete lock** and the policy-driven point-in-time restore and soft delete retention come only with **operational** backup, which this platform does not use. No template locks the account.
-- **Stopping protection** removes the object replication policy, but leaves versioning, change feed and point-in-time restore on.
+- **Stopping protection does not delete the object replication policy**: "you need to manually delete the OR policies". Only **removing the backups** deletes it automatically ([support matrix](https://learn.microsoft.com/azure/backup/blob-backup-support-matrix), vaulted backup limitations). Either way, versioning, change feed and point-in-time restore stay on.
 - **The one interaction to plan for:** a **planned** account failover is refused while change feed, object replication or point-in-time restore is on. Runbook 08 §5.2 turns them off first, and the pipeline turns them back on.
 
 **Warm-standby read path (prod only):**
@@ -171,7 +171,7 @@ The examples use the dev primary account `<st>` and container `def-blob`, run ov
   ```
 
   Expected: `status` is `Live`, and `lastSync` is within about 15 minutes.
-- Writes in East US go to the East US account. The customer-managed failover of the RA-GZRS primary account to East US, which makes it writable there, and its planned failback are in [runbook 08](08-dr-failover.md) (§4 step 3, §5.2). A planned failover first needs blob backup paused, the object replication policy deleted, and point-in-time restore and change feed turned off; the next pipeline run turns them back on.
+- Writes in East US go to the East US account. The customer-managed failover of the RA-GZRS primary account to East US, which makes it writable there, and its planned failback are in [runbook 08](08-dr-failover.md) (§4 step 2, §5.2). Both failovers first need blob backup paused and the object replication policy deleted; a planned one also needs point-in-time restore and change feed turned off. Failback turns them back on and resumes backup.
 
 ## 6. Validation
 

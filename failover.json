@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "4203718354573950323"
+      "templateHash": "16541613156910958372"
     }
   },
   "parameters": {
@@ -49,7 +49,7 @@
       "type": "bool",
       "defaultValue": true,
       "metadata": {
-        "description": "Confirms a declared outage. False deploys nothing, so a stray run outside DR changes nothing."
+        "description": "Set false to make a run a no-op; the default arms the failover."
       }
     }
   },
@@ -372,7 +372,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "15737241675199301898"
+              "templateHash": "17103746785574246549"
             }
           },
           "definitions": {
@@ -434,7 +434,7 @@
             "location": {
               "type": "string",
               "metadata": {
-                "description": "Azure region for the private endpoint (the primary region)."
+                "description": "Azure region for the private endpoint: the region of the spoke that hosts it."
               }
             },
             "privateLinkScopeId": {
@@ -461,7 +461,7 @@
             "privateEndpointSubnetId": {
               "type": "string",
               "metadata": {
-                "description": "Private-endpoint subnet resource ID in the primary spoke."
+                "description": "Private-endpoint subnet resource ID in the spoke that hosts the endpoint."
               }
             },
             "privateDnsZoneIds": {
@@ -473,7 +473,7 @@
             "applicationSecurityGroupId": {
               "type": "string",
               "metadata": {
-                "description": "Resource ID of the primary spoke's AMPLS application security group, which the endpoint joins."
+                "description": "Resource ID of the hosting spoke's AMPLS application security group, which the endpoint joins."
               }
             }
           },

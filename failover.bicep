@@ -6,6 +6,8 @@
 // from the global resource group, and the endpoints' zone groups write records into those zones. Nothing here targets
 // the West US 3 resource group: West US 3 appears only in the resource ID of the primary storage account, which the
 // East US blob endpoint connects to. Tests pin both.
+// The zone-group writes still go to the West US 3-homed global resource group, so ARM must accept them during the
+// outage (live risk, runbook 08 §9).
 targetScope = 'subscription'
 
 @description('Environment that fails over. Only prod has a warm standby.')
@@ -33,7 +35,7 @@ param primaryStorageAccountId string = resourceId(
   'stwus3${uniqueString(subscription().id, environmentName, 'westus3')}'
 )
 
-@description('Confirms a declared outage. False deploys nothing, so a stray run outside DR changes nothing.')
+@description('Set false to make a run a no-op; the default arms the failover.')
 param failoverActive bool = true
 
 // The same region code and shared zone names as main.bicep; tests pin the parity.

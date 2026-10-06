@@ -32,10 +32,18 @@ Describe 'Failover entry point (Phase 8)' {
     It 'is armed by failoverActive, true by default, and every module waits on it' {
         $failover.parameters.failoverActive.type | Should -Be 'bool'
         $failover.parameters.failoverActive.defaultValue | Should -BeTrue
+        $failover.parameters.failoverActive.metadata.description | Should -BeExactly 'Set false to make a run a no-op; the default arms the failover.'
         $deployments.Count | Should -Be 4
         foreach ($deployment in $deployments) {
             $deployment.condition | Should -Be "[parameters('failoverActive')]" -Because $deployment.name
         }
+    }
+
+    It 'flags in its header that the zone-group writes go to the West US 3-homed global resource group (a live risk in runbook 08)' {
+        $lines = @(Get-Content (Get-RepoPath 'failover.bicep') -Encoding UTF8)
+        $header = ($lines[0..([array]::IndexOf($lines, "targetScope = 'subscription'") - 1)]) -join "`n"
+        $header | Should -Match 'West US 3-homed global resource group'
+        $header | Should -Match 'live risk, runbook 08'
     }
 
     It 'serves prod in East US only' {
@@ -222,6 +230,13 @@ Describe 'Failover: East US blob private endpoint to the primary storage account
         $main.variables.primaryResourceGroupName | Should -Be "[format('rg-defenstack-{0}-{1}', parameters('environmentName'), variables('primaryRegionCode'))]"
         $stamp.variables.nameSuffix | Should -Be "[uniqueString(subscription().id, parameters('environmentName'), parameters('location'))]"
         $stamp.variables.names.storageAccount | Should -Be "[format('st{0}{1}', parameters('regionCode'), variables('nameSuffix'))]"
+    }
+
+    It 'relies on main''s primary stamp taking the primary location and region code, which name the account' {
+        $primaryStamp = Get-TemplateResourceBySymbol -Template $main -Symbol 'primaryStamp'
+        $primaryStamp.properties.parameters.location.value | Should -Be "[parameters('primaryLocation')]"
+        $primaryStamp.properties.parameters.regionCode.value | Should -Be "[variables('primaryRegionCode')]"
+        $main.variables.primaryRegionCode | Should -Be "[variables('regionCodes')[toLower(parameters('primaryLocation'))]]"
     }
 
     It 'is named after the account with an -eus-pe suffix, distinct from its own -pe and the standby''s -secondary-pe endpoints' {
