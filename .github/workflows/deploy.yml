@@ -8,8 +8,11 @@ on:
       - 'modules/**'
       # Governance is deployed by an operator (runbook 07); a workload redeploy would only reset the JIT NSG rules.
       - '!modules/governance/**'
+      # Failover is deployed by an operator during a declared outage (runbook 08); its root template matches no pattern here.
+      - '!modules/failover/**'
       - 'params/**'
       - '!params/governance.bicepparam'
+      - '!params/failover.bicepparam'
   workflow_dispatch:
     inputs:
       environment:

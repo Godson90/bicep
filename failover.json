@@ -1,0 +1,710 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.47.16.16243",
+      "templateHash": "4203718354573950323"
+    }
+  },
+  "parameters": {
+    "environmentName": {
+      "type": "string",
+      "defaultValue": "prod",
+      "allowedValues": [
+        "prod"
+      ],
+      "metadata": {
+        "description": "Environment that fails over. Only prod has a warm standby."
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "eastus",
+      "allowedValues": [
+        "eastus"
+      ],
+      "metadata": {
+        "description": "Region that takes over: the warm-standby region."
+      }
+    },
+    "appServicePlanCapacity": {
+      "type": "int",
+      "defaultValue": 3,
+      "minValue": 1,
+      "maxValue": 30,
+      "metadata": {
+        "description": "Instance count for the East US App Service plan during the failover. 3 matches the prod primary plan."
+      }
+    },
+    "primaryStorageAccountId": {
+      "type": "string",
+      "defaultValue": "[resourceId(subscription().subscriptionId, format('rg-defenstack-{0}-wus3', parameters('environmentName')), 'Microsoft.Storage/storageAccounts', format('stwus3{0}', uniqueString(subscription().id, parameters('environmentName'), 'westus3')))]",
+      "metadata": {
+        "description": "Resource ID of the prod primary app storage account, which the East US blob endpoint connects to. The default names it as main.bicep and regionStamp.bicep do (rg-defenstack-<env>-wus3, st<code><nameSuffix>); a test pins the parity."
+      }
+    },
+    "failoverActive": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Confirms a declared outage. False deploys nothing, so a stray run outside DR changes nothing."
+      }
+    }
+  },
+  "variables": {
+    "regionCode": "eus",
+    "resourceGroupName": "[format('rg-defenstack-{0}-{1}', parameters('environmentName'), variables('regionCode'))]",
+    "globalResourceGroupName": "[format('rg-defenstack-{0}-global', parameters('environmentName'))]",
+    "privateDnsZoneNames": {
+      "blob": "[format('privatelink.blob.{0}', environment().suffixes.storage)]",
+      "sites": "privatelink.azurewebsites.net",
+      "vault": "privatelink.vaultcore.azure.net",
+      "monitor": "privatelink.monitor.azure.com",
+      "oms": "privatelink.oms.opinsights.azure.com",
+      "ods": "privatelink.ods.opinsights.azure.com",
+      "agentsvc": "privatelink.agentsvc.azure-automation.net"
+    },
+    "names": {
+      "appServicePlan": "[format('asp-defenstack-{0}-{1}', parameters('environmentName'), variables('regionCode'))]",
+      "bastion": "[format('bas-defenstack-{0}-{1}', parameters('environmentName'), variables('regionCode'))]",
+      "bastionPublicIp": "[format('pip-bas-defenstack-{0}-{1}', parameters('environmentName'), variables('regionCode'))]",
+      "hubVnet": "[format('vnet-defenstack-{0}-{1}-hub', parameters('environmentName'), variables('regionCode'))]",
+      "spokeVnet": "[format('vnet-defenstack-{0}-{1}-spoke', parameters('environmentName'), variables('regionCode'))]",
+      "amplsAsg": "[format('vnet-defenstack-{0}-{1}-spoke-ampls-asg', parameters('environmentName'), variables('regionCode'))]",
+      "monitorPrivateEndpoint": "[format('ampls-defenstack-{0}-{1}-pe', parameters('environmentName'), variables('regionCode'))]",
+      "storagePrivateEndpoint": "[format('{0}-{1}-pe', last(split(parameters('primaryStorageAccountId'), '/')), variables('regionCode'))]"
+    }
+  },
+  "resources": [
+    {
+      "condition": "[parameters('failoverActive')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('failover-app-service-plan-{0}', variables('regionCode'))]",
+      "resourceGroup": "[variables('resourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "appServicePlanName": {
+            "value": "[variables('names').appServicePlan]"
+          },
+          "capacity": {
+            "value": "[parameters('appServicePlanCapacity')]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "14004576151233787586"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure region of the existing plan."
+              }
+            },
+            "appServicePlanName": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 60,
+              "metadata": {
+                "description": "Name of the existing App Service plan."
+              }
+            },
+            "capacity": {
+              "type": "int",
+              "minValue": 1,
+              "maxValue": 30,
+              "metadata": {
+                "description": "Instance count during the failover."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Web/serverfarms",
+              "apiVersion": "2025-03-01",
+              "name": "[parameters('appServicePlanName')]",
+              "location": "[parameters('location')]",
+              "sku": {
+                "name": "P2V3",
+                "tier": "PremiumV3",
+                "capacity": "[parameters('capacity')]"
+              },
+              "properties": {
+                "zoneRedundant": false
+              }
+            }
+          ],
+          "outputs": {
+            "name": {
+              "type": "string",
+              "value": "[parameters('appServicePlanName')]"
+            }
+          }
+        }
+      }
+    },
+    {
+      "condition": "[parameters('failoverActive')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('failover-bastion-{0}', variables('regionCode'))]",
+      "resourceGroup": "[variables('resourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "bastionName": {
+            "value": "[variables('names').bastion]"
+          },
+          "publicIpName": {
+            "value": "[variables('names').bastionPublicIp]"
+          },
+          "subnetId": {
+            "value": "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Network/virtualNetworks/subnets', variables('names').hubVnet, 'AzureBastionSubnet')]"
+          },
+          "availabilityZones": {
+            "value": [
+              "1",
+              "2",
+              "3"
+            ]
+          },
+          "logAnalyticsWorkspaceId": {
+            "value": "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('globalResourceGroupName')), 'Microsoft.OperationalInsights/workspaces', format('log-defenstack-{0}', parameters('environmentName')))]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "18276085892748367180"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure region for Bastion."
+              }
+            },
+            "bastionName": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80,
+              "metadata": {
+                "description": "Bastion host name."
+              }
+            },
+            "publicIpName": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 80,
+              "metadata": {
+                "description": "Bastion public IP name."
+              }
+            },
+            "subnetId": {
+              "type": "string",
+              "metadata": {
+                "description": "AzureBastionSubnet resource ID."
+              }
+            },
+            "availabilityZones": {
+              "type": "array",
+              "defaultValue": [],
+              "metadata": {
+                "description": "Availability zones for Bastion and its public IP, for example ['1', '2', '3']. Zones are fixed at creation."
+              }
+            },
+            "logAnalyticsWorkspaceId": {
+              "type": "string",
+              "metadata": {
+                "description": "Log Analytics workspace resource ID for Bastion audit logs."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Network/publicIPAddresses",
+              "apiVersion": "2025-01-01",
+              "name": "[parameters('publicIpName')]",
+              "location": "[parameters('location')]",
+              "zones": "[if(empty(parameters('availabilityZones')), null(), parameters('availabilityZones'))]",
+              "sku": {
+                "name": "Standard"
+              },
+              "properties": {
+                "publicIPAllocationMethod": "Static"
+              }
+            },
+            {
+              "type": "Microsoft.Network/bastionHosts",
+              "apiVersion": "2024-07-01",
+              "name": "[parameters('bastionName')]",
+              "location": "[parameters('location')]",
+              "zones": "[if(empty(parameters('availabilityZones')), null(), parameters('availabilityZones'))]",
+              "sku": {
+                "name": "Standard"
+              },
+              "properties": {
+                "enableTunneling": true,
+                "enableIpConnect": true,
+                "scaleUnits": 2,
+                "ipConfigurations": [
+                  {
+                    "name": "bastion-ipconfig",
+                    "properties": {
+                      "subnet": {
+                        "id": "[parameters('subnetId')]"
+                      },
+                      "publicIPAddress": {
+                        "id": "[resourceId('Microsoft.Network/publicIPAddresses', parameters('publicIpName'))]"
+                      }
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/publicIPAddresses', parameters('publicIpName'))]"
+              ]
+            },
+            {
+              "type": "Microsoft.Insights/diagnosticSettings",
+              "apiVersion": "2021-05-01-preview",
+              "scope": "[resourceId('Microsoft.Network/bastionHosts', parameters('bastionName'))]",
+              "name": "bastion-diagnostics",
+              "properties": {
+                "workspaceId": "[parameters('logAnalyticsWorkspaceId')]",
+                "logs": [
+                  {
+                    "categoryGroup": "allLogs",
+                    "enabled": true
+                  }
+                ],
+                "metrics": [
+                  {
+                    "category": "AllMetrics",
+                    "enabled": true
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/bastionHosts', parameters('bastionName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "id": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Network/bastionHosts', parameters('bastionName'))]"
+            },
+            "name": {
+              "type": "string",
+              "value": "[parameters('bastionName')]"
+            }
+          }
+        }
+      }
+    },
+    {
+      "condition": "[parameters('failoverActive')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('failover-monitor-private-endpoint-{0}', variables('regionCode'))]",
+      "resourceGroup": "[variables('resourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "privateLinkScopeId": {
+            "value": "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('globalResourceGroupName')), 'Microsoft.Insights/privateLinkScopes', format('ampls-defenstack-{0}', parameters('environmentName')))]"
+          },
+          "privateLinkScopeName": {
+            "value": "[format('ampls-defenstack-{0}', parameters('environmentName'))]"
+          },
+          "privateEndpointName": {
+            "value": "[variables('names').monitorPrivateEndpoint]"
+          },
+          "privateEndpointSubnetId": {
+            "value": "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Network/virtualNetworks/subnets', variables('names').spokeVnet, 'private-endpoints')]"
+          },
+          "privateDnsZoneIds": {
+            "value": "[toObject(items(variables('privateDnsZoneNames')), lambda('zone', lambdaVariables('zone').key), lambda('zone', resourceId(subscription().subscriptionId, variables('globalResourceGroupName'), 'Microsoft.Network/privateDnsZones', lambdaVariables('zone').value)))]"
+          },
+          "applicationSecurityGroupId": {
+            "value": "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Network/applicationSecurityGroups', variables('names').amplsAsg)]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "languageVersion": "2.0",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "15737241675199301898"
+            }
+          },
+          "definitions": {
+            "privateDnsZoneSet": {
+              "type": "object",
+              "properties": {
+                "blob": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "Blob storage zone."
+                  }
+                },
+                "sites": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "App Service (sites) zone."
+                  }
+                },
+                "vault": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "Key Vault zone."
+                  }
+                },
+                "monitor": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "Azure Monitor global endpoints zone (AMPLS)."
+                  }
+                },
+                "oms": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "Log Analytics workspace agent endpoints zone (AMPLS)."
+                  }
+                },
+                "ods": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "Log Analytics workspace ingestion (ODS) endpoints zone (AMPLS)."
+                  }
+                },
+                "agentsvc": {
+                  "type": "string",
+                  "metadata": {
+                    "description": "Log Analytics agent service endpoints zone (AMPLS)."
+                  }
+                }
+              },
+              "metadata": {
+                "description": "Private DNS zone names (or resource IDs) keyed by private endpoint group: the application zones plus the Azure Monitor Private Link Scope zones (Phase 6).",
+                "__bicep_imported_from!": {
+                  "sourceTemplate": "types.bicep"
+                }
+              }
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure region for the private endpoint (the primary region)."
+              }
+            },
+            "privateLinkScopeId": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure Monitor Private Link Scope resource ID."
+              }
+            },
+            "privateLinkScopeName": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255,
+              "metadata": {
+                "description": "Azure Monitor Private Link Scope name, used for deterministic private endpoint naming."
+              }
+            },
+            "privateEndpointName": {
+              "type": "string",
+              "defaultValue": "[format('{0}-pe', parameters('privateLinkScopeName'))]",
+              "metadata": {
+                "description": "Private endpoint name. The default keeps the Phase 6 primary endpoint name; failover.bicep names its East US endpoint."
+              }
+            },
+            "privateEndpointSubnetId": {
+              "type": "string",
+              "metadata": {
+                "description": "Private-endpoint subnet resource ID in the primary spoke."
+              }
+            },
+            "privateDnsZoneIds": {
+              "$ref": "#/definitions/privateDnsZoneSet",
+              "metadata": {
+                "description": "Resource IDs of the shared private DNS zones created by the global layer."
+              }
+            },
+            "applicationSecurityGroupId": {
+              "type": "string",
+              "metadata": {
+                "description": "Resource ID of the primary spoke's AMPLS application security group, which the endpoint joins."
+              }
+            }
+          },
+          "resources": {
+            "privateEndpoint": {
+              "type": "Microsoft.Network/privateEndpoints",
+              "apiVersion": "2024-07-01",
+              "name": "[parameters('privateEndpointName')]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "privateLinkServiceConnections": [
+                  {
+                    "name": "azuremonitor",
+                    "properties": {
+                      "privateLinkServiceId": "[parameters('privateLinkScopeId')]",
+                      "groupIds": [
+                        "azuremonitor"
+                      ]
+                    }
+                  }
+                ],
+                "subnet": {
+                  "id": "[parameters('privateEndpointSubnetId')]"
+                },
+                "applicationSecurityGroups": [
+                  {
+                    "id": "[parameters('applicationSecurityGroupId')]"
+                  }
+                ]
+              }
+            },
+            "privateDnsZoneGroup": {
+              "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+              "apiVersion": "2024-07-01",
+              "name": "[format('{0}/{1}', parameters('privateEndpointName'), 'default')]",
+              "properties": {
+                "privateDnsZoneConfigs": [
+                  {
+                    "name": "monitor",
+                    "properties": {
+                      "privateDnsZoneId": "[parameters('privateDnsZoneIds').monitor]"
+                    }
+                  },
+                  {
+                    "name": "oms",
+                    "properties": {
+                      "privateDnsZoneId": "[parameters('privateDnsZoneIds').oms]"
+                    }
+                  },
+                  {
+                    "name": "ods",
+                    "properties": {
+                      "privateDnsZoneId": "[parameters('privateDnsZoneIds').ods]"
+                    }
+                  },
+                  {
+                    "name": "agentsvc",
+                    "properties": {
+                      "privateDnsZoneId": "[parameters('privateDnsZoneIds').agentsvc]"
+                    }
+                  },
+                  {
+                    "name": "blob",
+                    "properties": {
+                      "privateDnsZoneId": "[parameters('privateDnsZoneIds').blob]"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "privateEndpoint"
+              ]
+            }
+          },
+          "outputs": {
+            "id": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Network/privateEndpoints', parameters('privateEndpointName'))]"
+            }
+          }
+        }
+      }
+    },
+    {
+      "condition": "[parameters('failoverActive')]",
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2025-04-01",
+      "name": "[format('failover-storage-private-endpoint-{0}', variables('regionCode'))]",
+      "resourceGroup": "[variables('resourceGroupName')]",
+      "properties": {
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "mode": "Incremental",
+        "parameters": {
+          "location": {
+            "value": "[parameters('location')]"
+          },
+          "storageAccountId": {
+            "value": "[parameters('primaryStorageAccountId')]"
+          },
+          "privateEndpointName": {
+            "value": "[variables('names').storagePrivateEndpoint]"
+          },
+          "privateEndpointSubnetId": {
+            "value": "[extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Network/virtualNetworks/subnets', variables('names').spokeVnet, 'private-endpoints')]"
+          },
+          "blobPrivateDnsZoneId": {
+            "value": "[resourceId(subscription().subscriptionId, variables('globalResourceGroupName'), 'Microsoft.Network/privateDnsZones', variables('privateDnsZoneNames').blob)]"
+          }
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "metadata": {
+            "_generator": {
+              "name": "bicep",
+              "version": "0.47.16.16243",
+              "templateHash": "4394600943286306931"
+            }
+          },
+          "parameters": {
+            "location": {
+              "type": "string",
+              "metadata": {
+                "description": "Azure region for the private endpoint (the warm-standby region)."
+              }
+            },
+            "storageAccountId": {
+              "type": "string",
+              "metadata": {
+                "description": "Resource ID of the prod primary app storage account."
+              }
+            },
+            "privateEndpointName": {
+              "type": "string",
+              "minLength": 2,
+              "maxLength": 80,
+              "metadata": {
+                "description": "Private endpoint name. It must differ from <account>-pe and <account>-secondary-pe."
+              }
+            },
+            "privateEndpointSubnetId": {
+              "type": "string",
+              "metadata": {
+                "description": "Private endpoint subnet in the warm-standby spoke."
+              }
+            },
+            "blobPrivateDnsZoneId": {
+              "type": "string",
+              "metadata": {
+                "description": "Shared privatelink.blob zone resource ID."
+              }
+            }
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Network/privateEndpoints",
+              "apiVersion": "2024-07-01",
+              "name": "[parameters('privateEndpointName')]",
+              "location": "[parameters('location')]",
+              "properties": {
+                "privateLinkServiceConnections": [
+                  {
+                    "name": "blob",
+                    "properties": {
+                      "privateLinkServiceId": "[parameters('storageAccountId')]",
+                      "groupIds": [
+                        "blob"
+                      ]
+                    }
+                  }
+                ],
+                "subnet": {
+                  "id": "[parameters('privateEndpointSubnetId')]"
+                }
+              }
+            },
+            {
+              "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+              "apiVersion": "2024-07-01",
+              "name": "[format('{0}/{1}', parameters('privateEndpointName'), 'default')]",
+              "properties": {
+                "privateDnsZoneConfigs": [
+                  {
+                    "name": "blob",
+                    "properties": {
+                      "privateDnsZoneId": "[parameters('blobPrivateDnsZoneId')]"
+                    }
+                  }
+                ]
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Network/privateEndpoints', parameters('privateEndpointName'))]"
+              ]
+            }
+          ],
+          "outputs": {
+            "id": {
+              "type": "string",
+              "value": "[resourceId('Microsoft.Network/privateEndpoints', parameters('privateEndpointName'))]"
+            },
+            "name": {
+              "type": "string",
+              "value": "[parameters('privateEndpointName')]"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "outputs": {
+    "resourceGroupName": {
+      "type": "string",
+      "value": "[variables('resourceGroupName')]"
+    },
+    "appServicePlanName": {
+      "type": "string",
+      "value": "[if(parameters('failoverActive'), variables('names').appServicePlan, '')]"
+    },
+    "bastionName": {
+      "type": "string",
+      "value": "[if(parameters('failoverActive'), variables('names').bastion, '')]"
+    },
+    "monitorPrivateEndpointId": {
+      "type": "string",
+      "value": "[if(parameters('failoverActive'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', format('failover-monitor-private-endpoint-{0}', variables('regionCode'))), '2025-04-01').outputs.id.value, '')]"
+    },
+    "storagePrivateEndpointId": {
+      "type": "string",
+      "value": "[if(parameters('failoverActive'), reference(extensionResourceId(format('/subscriptions/{0}/resourceGroups/{1}', subscription().subscriptionId, variables('resourceGroupName')), 'Microsoft.Resources/deployments', format('failover-storage-private-endpoint-{0}', variables('regionCode'))), '2025-04-01').outputs.id.value, '')]"
+    }
+  }
+}

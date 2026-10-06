@@ -190,3 +190,31 @@ Describe 'Governance stays outside the pipeline (Phase 7)' {
         $psRuleStep | Should -Match 'SECURITY_CONTACT_EMAILS: security-contact@example\.com'
     }
 }
+
+Describe 'Failover stays outside the pipeline (Phase 8)' {
+    It 'does not redeploy the workload when only failover files change (a redeploy scales the East US plan back to 1, ADR-032)' {
+        $deploy | Should -Match ([regex]::Escape("      - '!modules/failover/**'"))
+        $deploy | Should -Match ([regex]::Escape("      - '!params/failover.bicepparam'"))
+        # GitHub applies path filters in order, so each exclusion must follow the pattern it narrows.
+        $deploy.IndexOf("'!modules/failover/**'") | Should -BeGreaterThan $deploy.IndexOf("'modules/**'")
+        $deploy.IndexOf("'!params/failover.bicepparam'") | Should -BeGreaterThan $deploy.IndexOf("'params/**'")
+    }
+
+    It 'never triggers on failover.bicep, which no include pattern matches' {
+        $paths = $deploy.Substring($deploy.IndexOf('paths:'), $deploy.IndexOf('workflow_dispatch:') - $deploy.IndexOf('paths:'))
+        $paths | Should -Not -Match "- 'failover\.bicep'"
+        $paths | Should -Not -Match "- '\*\.bicep'"
+        $paths | Should -Match "- 'main\.bicep'"
+    }
+
+    It 'runs PSRule over params/, which includes the failover parameter file' {
+        $ci | Should -Match ([regex]::Escape('Assert-PSRule -InputPath params/'))
+        Get-RepoPath 'params/failover.bicepparam' | Should -Exist
+    }
+
+    It 'builds, lints and drift-checks failover.bicep through the test suite that CI runs' {
+        $ci | Should -Match ([regex]::Escape('./tests/Invoke-Tests.ps1 -CI'))
+        $lint = Get-Content (Get-RepoPath 'tests/Lint.Tests.ps1') -Raw
+        $lint | Should -Match "-ForEach 'main', 'governance', 'failover'"
+    }
+}
