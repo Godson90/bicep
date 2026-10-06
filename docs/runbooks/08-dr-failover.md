@@ -254,8 +254,45 @@ The failover procedure. Record the time at each step in the drill log (§5.3); t
      ```
 
      - `'""'` passes an empty value through Windows PowerShell 5.1; in PowerShell 7.3 or later, write `""`. Both mean "none": no public IP and no NIC NSG. The role assignment needs the PIM-activated RBAC role (§2). The local SSH key is a break-glass only; Entra login is the normal path ([Entra login for Linux](https://learn.microsoft.com/entra/identity/devices/howto-vm-sign-in-azure-ad-linux)).
-     - **Phase 7 policies.** The VM has no public IP, so the public IP allowlist (`defenstack-deny-public-ip-except-allowlist`) does not apply; East US is an allowed location. The other deny assignments cover Storage, Key Vault and App Service public access only, so the VM and its NIC are not denied (runbook 07). Defender for Servers may list it; it is deleted at failback.
+     - **No NIC NSG and no JIT policy.** Unlike the jump host (`ADR-028`), this VM has neither a NIC NSG nor a Defender just-in-time policy: `failover.bicep` never adds it to the JIT policy's `virtualMachines` list. The `management` subnet NSG's `allow-management-ssh-rdp` rule (Bastion subnet and VPN pool only) is its only inbound control, for its short, dated life, and it is deleted at failback (§5.2 step 7) or in drill clean-up (§5.3).
+     - **Phase 7 policies.** The VM has no public IP, so the public IP allowlist assignment (`defenstack-deny-public-ip`) does not apply; East US is an allowed location. The other deny assignments cover Storage, Key Vault and App Service public access only, so the VM and its NIC are not denied (runbook 07). Defender for Servers may list it; it is deleted at failback.
      - The extension reaches `packages.microsoft.com` through the East US firewall's `platform-egress` rules for the `management` subnet. If it fails, check `AZFWApplicationRule` for denies (runbook 03 §9).
+     - **Install the Azure CLI.** The image has no `az` CLI preinstalled. Microsoft's one-line installer (`curl -sL https://aka.ms/InstallAzureCLIDeb | sudo bash`) resolves `aka.ms` and downloads from `azurecliprod.blob.core.windows.net` ([install the Azure CLI on Linux](https://learn.microsoft.com/cli/azure/install-azure-cli-linux)); neither FQDN is in `platform-egress` (`modules/firewallPolicyRules.bicep`), so it fails closed here. Use the documented step-by-step apt method instead, which needs only `packages.microsoft.com` — already allowed by the `entra-sign-in` rule:
+
+       ```bash
+       sudo apt-get update
+       sudo apt-get install -y apt-transport-https ca-certificates curl gnupg lsb-release
+       sudo mkdir -p /etc/apt/keyrings
+       curl -sLS https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor | sudo tee /etc/apt/keyrings/microsoft.gpg > /dev/null
+       sudo chmod go+r /etc/apt/keyrings/microsoft.gpg
+       AZ_DIST=$(lsb_release -cs)
+       echo "Types: deb
+       URIs: https://packages.microsoft.com/repos/azure-cli/
+       Suites: ${AZ_DIST}
+       Components: main
+       Architectures: $(dpkg --print-architecture)
+       Signed-by: /etc/apt/keyrings/microsoft.gpg" | sudo tee /etc/apt/sources.list.d/azure-cli.sources
+       sudo apt-get update
+       sudo apt-get install -y azure-cli
+       ```
+
+       `az login --use-device-code` then needs `login.microsoftonline.com` and `device.login.microsoftonline.com`, both already in `platform-egress`'s `entra-sign-in` rule alongside `packages.microsoft.com`. It also needs `management.azure.com` for the ARM calls the checks below make (role assignment, log-analytics query, blob upload) — add that next.
+     - **Add a temporary, dated firewall application rule for `management.azure.com`.** It is the one FQDN the verification VM still cannot reach. This is a **dated, manual exception**, not a change to `firewallPolicyRules.bicep`: post it in the incident channel with its creation time, and delete it at failback (§5.2 step 7) or in drill clean-up (§5.3). Adding and deleting a rule collection group needs **Contributor** on the East US firewall policy's resource group, which the PIM-activated role already covers (§2):
+
+       ```powershell
+       $eusPolicy = 'afwp-defenstack-prod-eus'
+       az network firewall policy rule-collection-group list -g rg-defenstack-prod-eus --policy-name $eusPolicy --query "[].{name:name,priority:priority}" -o table
+       az network firewall policy rule-collection-group create -g rg-defenstack-prod-eus --policy-name $eusPolicy -n dr-verification-temp --priority 900
+       az network firewall policy rule-collection-group collection add-filter-collection -g rg-defenstack-prod-eus --policy-name $eusPolicy --rule-collection-group-name dr-verification-temp -n dr-verification-temp-allow --collection-priority 900 --action Allow --rule-name allow-arm-for-verification --rule-type ApplicationRule --source-addresses 10.10.3.0/24 --protocols Https=443 --target-fqdns management.azure.com
+       ```
+
+       Check the list first: priority `900` is clear of the baseline groups (`dns-egress` 100, `admin-access` 120, `platform-egress` 150, `approved-https-egress` 200, `cross-region-monitoring` 250). `login.microsoftonline.com` and `device.login.microsoftonline.com` need no new rule; they are already in `platform-egress`. Delete the group at failback (§5.2 step 7) or drill clean-up (§5.3):
+
+       ```powershell
+       az network firewall policy rule-collection-group delete -g rg-defenstack-prod-eus --policy-name $eusPolicy -n dr-verification-temp
+       ```
+
+       **If the rule cannot be added** (for example the policy is locked, or the change is refused), skip the CLI-based checks below and run the storage write check from the East US App Service's own write path instead, using `AppRequests` checked from the VPN (P2S) where query access to the `PrivateOnly` workspace works (below, "App-level write check").
    - **Telemetry.** On the verification VM, check that the Azure Monitor names resolve to East US endpoint IPs (`10.10.1.x`):
 
      ```bash
@@ -322,7 +359,7 @@ Before step 1, re-enable geo-redundancy (§4 step 2) if you have not already. Th
    ```
 
    Versioning and soft delete stay on.
-3. **Run the planned failover back to West US 3, convert the account back to RA-GZRS, then remove the East US blob endpoint.** Do the sub-steps in this order:
+3. **Run the planned failover back to West US 3, convert the account back to RA-GZRS, then remove the East US blob endpoint.** Do the sub-steps in this order: a planned failover cannot zone-convert an account on its own, and converting straight out of the failed-over state is not supported, so failback must run before the conversion. Microsoft, on why: "If a user would like to convert their account back to ZRS, they need to perform a failback operation (complete another unplanned or planned failover back to the original primary region). After the failback completes, the user can convert their storage account back to ZRS, GZRS, or RA-GZRS." ([failover FAQ](https://learn.microsoft.com/azure/storage/common/storage-failover-faq)).
    1. **Planned failover.** No data loss is expected: replication completes before the switch ([planned failover](https://learn.microsoft.com/azure/storage/common/storage-failover-customer-managed-planned)):
 
       ```powershell
@@ -330,8 +367,10 @@ Before step 1, re-enable geo-redundancy (§4 step 2) if you have not already. Th
       az storage account show -g rg-defenstack-prod-wus3 -n $st --query "{sku:sku.name, primary:primaryLocation}" -o json
       ```
 
-      Expected: `primary` `westus3`. A planned failover keeps the redundancy, so the account is `Standard_RAGRS`.
-   2. **Precondition for deleting `<st>-eus-pe`: the account is `Standard_RAGZRS` again.** Run the zone conversion with runbook 05 §4 step 4 and wait until `az storage account migration show` reports `Complete`. Do it now, before step 4: the pipeline's storage PUT with `Standard_RAGZRS` fails until the conversion is done (runbook 05 §9, the row "Prod **Deploy** fails at the storage account update with an error about changing to `Standard_RAGZRS`"), and until that pipeline run succeeds nothing restores the West US 3 record. The conversion can take hours to days; the account stays usable, and the app keeps writing through `<st>-eus-pe` meanwhile. Check:
+      Expected: `primary` `westus3`. **The resulting SKU depends on which path brought you here:**
+      - **After a real unplanned failover** (§4 step 2), the account dropped to `Standard_LRS` and was reconverted to `Standard_RAGRS` (§4 step 6). This planned failback does not restore zone-redundancy either: Microsoft states the account's redundancy "becomes GRS regardless of the original account redundancy" when failing back this way. So the account is `Standard_RAGRS` here, and step 3.2 converts it to `Standard_RAGZRS`.
+      - **After a planned drill failover** (§5.3), the account was never unplanned-failed-over and never dropped to LRS, so it stayed `Standard_RAGZRS` throughout both legs. The account is still `Standard_RAGZRS` here, and step 3.2 is a no-op check.
+   2. **Precondition for deleting `<st>-eus-pe`: the account is `Standard_RAGZRS` again.** Run the zone conversion with runbook 05 §4 step 4 and wait until `az storage account migration show` reports `Complete`. Do it now, before step 4: the pipeline's storage PUT with `Standard_RAGZRS` fails until the conversion is done (runbook 05 §9, the row "Prod **Deploy** fails at the storage account update with an error about changing to `Standard_RAGZRS`"), and until that pipeline run succeeds nothing restores the West US 3 record. The conversion can take hours to days; the account stays usable, and the app keeps writing through `<st>-eus-pe` meanwhile. This step applies to a real failback only (above); the drill's account is already `Standard_RAGZRS`, so there is nothing to convert, only the check below to run. The reason a direct conversion is not available for the real path either: "Conversion to ZRS or GZRS for an LRS account resulting from a failover isn't supported. Instead, perform a manual migration to add zone-redundancy." ([redundancy migration](https://learn.microsoft.com/azure/storage/common/redundancy-migration#failover-and-failback)) — which is exactly why step 3.1 must run first. Check:
 
       ```powershell
       az storage account show -g rg-defenstack-prod-wus3 -n $st --query sku.name -o tsv
@@ -339,6 +378,10 @@ Before step 1, re-enable geo-redundancy (§4 step 2) if you have not already. Th
       ```
 
       Go on only when the SKU is `Standard_RAGZRS` or the status is `Complete`. Backup stays suspended and point-in-time restore stays off until step 4; versioning and soft delete still protect the data.
+
+      **If the conversion is refused or is taking too long:** there is no SLA for a customer-initiated conversion ([redundancy migration](https://learn.microsoft.com/azure/storage/common/redundancy-migration#perform-a-conversion), "There's no SLA for completion of a conversion"). While it is outstanding, **blob backup stays suspended and point-in-time restore stays off**, so time-box it — for example **24 hours** — before choosing between:
+      - **(a) Open a Microsoft support request for the conversion** (a support-initiated conversion, same article); or
+      - **(b) Ship a time-boxed hotfix pull request.** Temporarily set the prod primary storage SKU to `Standard_RAGRS` — the line `storageAccountSkuName: isProd ? (isPrimary ? 'Standard_RAGZRS' : 'Standard_GRS') : 'Standard_LRS'` in `modules/regionStamp.bicep` (the prod-primary branch) — through the normal two-approval pipeline (`ADR-012`), so the step 4 deploy's storage PUT succeeds and the zone locks can be restored. Run the RA-GZRS conversion later through runbook 05 §4 step 4, then revert the hotfix once it completes. Record the exception, with its date, in `ADR-020` as a dated, time-boxed deviation.
    3. **Lift the prod `CanNotDelete` locks on the five shared zones** (the four Azure Monitor zones and the blob zone). Prod always has them (`enableDeleteLock`, runbook 01 §9), so deleting an endpoint whose zone group holds records there fails with `ScopeLocked` otherwise. The step 4 pipeline run restores them:
 
       ```powershell
@@ -413,13 +456,14 @@ Before step 1, re-enable geo-redundancy (§4 step 2) if you have not already. Th
    ```
 
    Then dispatch the prod pipeline again (step 4 commands): it re-PUTs `ampls-defenstack-prod-pe`'s zone group, taking the records over, and re-creates the locks. If the records are still wrong after that, delete that zone group (`az network private-endpoint dns-zone-group delete -g rg-defenstack-prod-wus3 --endpoint-name ampls-defenstack-prod-pe -n default`) and dispatch once more.
-7. **Scale East US back down, and remove the East US Bastion and the verification VM.** The step 4 pipeline run already set the plan to 1 instance. Confirm it, then delete the temporary verification VM (§4 step 8, with its login role assignment), Bastion and its IP:
+7. **Scale East US back down, and remove the East US Bastion and the verification VM.** The step 4 pipeline run already set the plan to 1 instance. Confirm it, then delete the temporary verification VM (§4 step 8, with its login role assignment and its temporary `dr-verification-temp` firewall rule), Bastion and its IP:
 
    ```powershell
    az appservice plan show -g rg-defenstack-prod-eus -n asp-defenstack-prod-eus --query "sku.capacity" -o tsv
    $drVmId = az vm show -g rg-defenstack-prod-eus -n vmeusdrcheck --query id -o tsv
    az role assignment delete --scope $drVmId
    az vm delete -g rg-defenstack-prod-eus -n vmeusdrcheck --yes
+   az network firewall policy rule-collection-group delete -g rg-defenstack-prod-eus --policy-name afwp-defenstack-prod-eus -n dr-verification-temp
    az network bastion delete -g rg-defenstack-prod-eus -n bas-defenstack-prod-eus
    az network public-ip delete -g rg-defenstack-prod-eus -n pip-bas-defenstack-prod-eus
    ```
@@ -442,7 +486,7 @@ Before step 1, re-enable geo-redundancy (§4 step 2) if you have not already. Th
 4. Fail back with §5.2.
 5. Prove alert routing: trigger an on-demand backup of a stopped or missing item, or follow Microsoft's test-alert guidance. Check that `ALERT_EMAIL` receives an Azure Backup alert through `apr-defenstack-prod-backup` (§5.5).
 6. Restore test (§5.4): one VM cross-region restore of the jump host's disks (when `enableVirtualMachine` is on) and one blob vaulted restore, both to scratch targets, then delete them.
-7. Clean up: confirm the verification VM, its role assignment and the East US Bastion are gone (§5.2 step 7), and that the zone locks are back (`az lock list -g rg-defenstack-prod-global -o table`).
+7. Clean up: confirm the verification VM, its role assignment, its temporary `dr-verification-temp` firewall rule and the East US Bastion are gone (§5.2 step 7), and that the zone locks are back (`az lock list -g rg-defenstack-prod-global -o table`).
 
 **Drill log.** Add a row for every drill and every real failover:
 
@@ -523,6 +567,7 @@ az graph query -q "alertsmanagementresources | where properties.essentials.monit
 | Workspace replication | `az monitor log-analytics workspace show -g rg-defenstack-prod-global -n log-defenstack-prod --query "replication" -o json` | `enabled: true`, `location: eastus`, `provisioningState: Succeeded` |
 | After failover | §4 step 8 | Front Door `200` from `app-eus`; East US telemetry and a storage write from the temporary verification VM; the app's write operations succeed in `AppRequests` |
 | After failback: verification VM | `az vm list -g rg-defenstack-prod-eus --query "[?name=='vmeusdrcheck'].name" -o tsv` | Empty (§5.2 step 7) |
+| After failback: temporary firewall rule | `az network firewall policy rule-collection-group list -g rg-defenstack-prod-eus --policy-name afwp-defenstack-prod-eus --query "[?name=='dr-verification-temp'].name" -o tsv` | Empty (§5.2 step 7) |
 | After failback: blob record | §5.2 step 4, "Check the blob record" | Only `<st>-pe`'s West US 3 address; no `<st>-eus-pe` in `rg-defenstack-prod-eus` and no DR write grant on `def-blob` |
 
 ## 7. Rollback
@@ -585,7 +630,8 @@ These cannot be proved offline. Each is first exercised by the first deploy, dri
 | **Records restored after failback.** Whether a zone-group re-PUT restores records that a second endpoint overwrote | §5.2 step 6 resolves to no address or to East US | **Fallback:** delete and re-create `ampls-defenstack-prod-pe`'s zone group (§5.2 step 6), then dispatch the pipeline |
 | **The blob record after failback.** The East US endpoint's zone group overwrote the account's A record in the shared blob zone (`<st>.privatelink.blob.core.windows.net`). §5.2 step 3.4 deletes that endpoint and re-adds the West US 3 record by hand at once; the next pipeline deploy's re-PUT of `<st>-pe`'s zone group then takes it over. Whether that re-PUT rewrites a record another zone group overwrote, or adopts a hand-added one, is unverified | The §5.2 step 4 check (`az network private-dns record-set a show … -z privatelink.blob.core.windows.net -n $st`) finds no record set or an East US address; West US 3 blob calls fail with `AuthorizationFailure`, since public access is disabled | **Fallback:** delete `<st>-pe`'s zone group (`az network private-endpoint dns-zone-group delete -g rg-defenstack-prod-wus3 --endpoint-name "$st-pe" -n default`) and dispatch the prod pipeline again, which re-creates it with its record. If the pipeline cannot run, add the record by hand again (`az network private-dns record-set a add-record -g rg-defenstack-prod-global -z privatelink.blob.core.windows.net -n $st -a $peIp`) and let the next deploy take it over. `ScopeLocked`: the zone-lock row in the table above |
 | **The blob endpoint during the storage failover.** §4 step 5 may run while the account's unplanned failover (§4 step 2) is still in progress. Whether the storage provider accepts a new private endpoint connection then is not documented | `failover.bicep` fails only on `failover-storage-private-endpoint-eus`, or `<st>-eus-pe` stays `Pending` | **Fallback:** once `az storage account show -g rg-defenstack-prod-wus3 -n $st --query primaryLocation` reports `eastus`, re-run §4 step 5 (incremental: the other modules are unchanged). Approve a `Pending` connection with `az network private-endpoint-connection approve --id <connection id>` |
-| **Planned failback after an unplanned failover** leaves `Standard_RAGRS` | §5.2 step 3.1 output | **Fallback:** none needed: §5.2 step 3.2 runs the runbook 05 §4 step 4 conversion to `Standard_RAGZRS` before the endpoint is deleted and the pipeline runs |
+| **Planned failback after an unplanned failover** leaves `Standard_RAGRS`, not `Standard_RAGZRS`: a planned failover run after an unplanned one restores geo-redundancy but not zone-redundancy, "regardless of the original account redundancy" ([failover FAQ](https://learn.microsoft.com/azure/storage/common/storage-failover-faq#why-cant-i-change-my-sku-to-zone-redundant-storage-zrs-or-geo-zone-redundant-storage-gzrs-after-a-failover)) | §5.2 step 3.1 output | **Fallback:** §5.2 step 3.2 runs the runbook 05 §4 step 4 conversion to `Standard_RAGZRS` before the endpoint is deleted and the pipeline runs. There is no SLA for that conversion ([redundancy migration](https://learn.microsoft.com/azure/storage/common/redundancy-migration#perform-a-conversion)), and **blob backup stays suspended with point-in-time restore off** while it is outstanding (§5.2 steps 1–2); time-box it (for example 24 hours), then choose: **(a)** open a Microsoft support request for the conversion; or **(b)** ship a time-boxed hotfix pull request setting the prod primary SKU to `Standard_RAGRS` — the `storageAccountSkuName: isProd ? (isPrimary ? 'Standard_RAGZRS' : 'Standard_GRS') : 'Standard_LRS'` line in `modules/regionStamp.bicep` — through the normal two-approval pipeline (`ADR-012`), so the step 4 deploy and the zone locks can be restored; run the RA-GZRS conversion later through runbook 05 §4 step 4, revert the hotfix, and record the dated exception in `ADR-020` |
+| **Verification VM tooling and egress.** The Ubuntu 22.04 image has no Azure CLI preinstalled, and `management.azure.com` is not in `platform-egress` (`modules/firewallPolicyRules.bicep`); the documented one-line CLI installer additionally needs `aka.ms` and `azurecliprod.blob.core.windows.net`, neither of which is allowed | The one-line installer fails resolving `aka.ms`; or `az` commands on the verification VM fail reaching `management.azure.com` (§4 step 8) | **Fallback:** install with the step-by-step apt method (`packages.microsoft.com` only, already allowed) instead of the one-line installer, and add the dated `dr-verification-temp` firewall rule for `management.azure.com` (§4 step 8), deleting it at failback or drill clean-up. **If the rule cannot be added**, skip the CLI-based checks and run the storage write check from the East US App Service's own write path instead, using `AppRequests` checked from the VPN (P2S) where query access works (§4 step 8, "App-level write check") |
 | **Resuming blob backup before the failback pipeline run** (§5.2 step 4). Resume needs change feed, which §5.2 step 2 turned off, so step 4 turns it back on by hand first. What the pipeline's re-PUT of the backup instance does to an instance that is still **suspended** is not documented | `resume-protection` fails; or the step 4 deploy fails on the backup instance, or leaves it `BackupsSuspended` | **Fallback:** if the resume fails, check change feed and versioning are on (`az storage account blob-service-properties show`) and retry. If it still fails, dispatch the pipeline anyway, then check the instance's `currentProtectionState`; resume it after the deploy. A resume always starts a full re-backup ([support matrix](https://learn.microsoft.com/azure/backup/blob-backup-support-matrix)) |
 | **Policy re-PUT.** A redeploy sends an identical body for `vm-daily-enhanced` and `blob-daily-vaulted`; "updating an existing policy" is not supported | A redeploy fails on a policy with an update error | **Fallback: deploy once.** Expected to be idempotent. If ARM refuses an identical re-PUT, change the module so it creates the policy only on the first deploy and references it as `existing` afterwards (for example behind a parameter set after the first creation), with a test. Do not rename the policy to work around it: a new name is a new policy, and the item or instance would move to it (§8). Not implemented now |
 | **Vaulted-only blob policy.** `blob-daily-vaulted` has a `VaultStore` backup rule and retention rule only, with no operational (`OperationalStore`) rule. Microsoft documents vaulted-only policies, but this shape is first exercised by the first prod deploy | The policy or the backup instance is refused, naming a missing operational datastore or rule | **Fallback:** switch to the documented combined operational and vaulted policy ([configure and manage](https://learn.microsoft.com/azure/backup/blob-backup-configure-manage)): add an `OperationalStore` retention rule to `blob-daily-vaulted` under a **new policy name** (`ADR-031`), with its test. Operational backup adds a Backup-owned delete lock on the account (`ADR-031`), so record the change there |

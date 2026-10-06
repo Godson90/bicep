@@ -17,6 +17,7 @@
 - Order matters: governance (Defender for Servers) deploys before the workload that creates the JIT policy (runbook 07 §4).
 - Every admin session needs a JIT request first (runbook 03; runbook 07 §5.4). The VM **Connect** blade no longer offers the request in many regions, so requests go through Defender for Cloud or the REST API.
 - Live-only (runbook 07 §9): which NSG JIT programs, the role's exact action list, whether the pipeline's JIT write also needs a subscription-level read, and the tenant-wide uniqueness of the role name. If JIT programs only the subnet NSG, the fallback is to move the deny there.
+- **The DR verification host (runbook 08 §4 step 8) has neither a NIC NSG nor a JIT policy.** It is not the jump host this ADR covers: `failover.bicep` never adds it to the JIT policy's `virtualMachines` list, and it has no NIC NSG at all. The `management` subnet NSG is its only inbound control, for a short, dated life, and it is deleted at failback (runbook 08 §5.2) or drill clean-up (runbook 08 §5.3).
 
 ## Revisit when
 Microsoft documents JIT behaviour with both NIC and subnet NSGs, or the jump host is deployed in a secondary region too (assign the role there as well).

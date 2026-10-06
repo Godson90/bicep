@@ -20,6 +20,11 @@ The spec (§3) asks for prod storage on **RA-GZRS**, geo-copied to East US, cons
 - Combining RA-GZRS with point-in-time restore and change feed is first exercised by the prod deployment. If Azure rejects the combination, runbook 05 §9 says what to change and requires this ADR to be updated.
 - Moving the existing prod account from GRS to RA-GZRS is a customer-initiated conversion (hours to days), done before the deploy, per runbook 05 §4.
 - Reverting is also a conversion.
+- **Dated exception: a hotfix SKU.** If the post-failback RA-GZRS conversion (runbook 08 §5.2 step 3.2) is refused or exceeds its time-box (for example 24 hours, chosen so blob backup is not left suspended and point-in-time restore off indefinitely), a time-boxed hotfix pull request may temporarily set the prod primary's `storageAccountSkuName` in `modules/regionStamp.bicep` to `Standard_RAGRS` instead of `Standard_RAGZRS`, so the pipeline's storage PUT succeeds and the failback's zone locks can be restored. Each use of this exception is recorded here with its date, the approver and the date it was reverted once the RA-GZRS conversion completed.
+
+  | Date | Reason | Reverted |
+  |---|---|---|
+  | | | |
 
 ## Revisit when
 Phase 8 designs account failover, or the application needs writable storage in East US during normal operation.

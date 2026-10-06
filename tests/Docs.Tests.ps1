@@ -598,7 +598,7 @@ Describe 'Phase 8 documentation' {
     It 'the diagnostic-settings audit gap for the backup vaults is recorded as a follow-up, without changing governance' {
         $script:adr030 | Should -Match ([regex]::Escape('Microsoft.DataProtection/backupVaults'))
         Get-Content (Get-RepoPath 'docs/runbooks/07-governance.md') -Raw | Should -Match ([regex]::Escape('**Follow-up from Phase 8 (not yet done):**'))
-        Get-Content (Get-RepoPath 'governance.bicep') -Raw | Should -Not -Match 'Microsoft\.RecoveryServices/vaults'
+        Get-Content (Get-RepoPath 'governance.bicep') -Raw | Should -Not -Match 'Microsoft\.RecoveryServices/vaults' -Because 'this pins the recorded follow-up in ADR-030: once the vault types are added to the diagnostic audit in governance.bicep, this assertion must be updated (to check the types are present) or removed'
     }
 
     It 'ADR-030 justifies the Azure.RSV.ReplicationAlert exclusion that ps-rule.yaml carries' {
@@ -662,5 +662,62 @@ Describe 'Phase 8 documentation' {
         }
         $phase8 = $cost.Substring($cost.IndexOf('## Phase 8 delta'), $cost.IndexOf('## Dominant future cost drivers') - $cost.IndexOf('## Phase 8 delta'))
         $phase8 | Should -Not -Match '\$\s?\d'
+    }
+
+    It 'the DR runbook installs the Azure CLI on the verification VM with the apt method, not the blocked one-line installer' {
+        $start = $script:runbook08.IndexOf('8. **Verify**')
+        $verify = $script:runbook08.Substring($start, $script:runbook08.IndexOf('## 5. Manual and post-deployment steps') - $start)
+        foreach ($topic in 'aka.ms', 'azurecliprod.blob.core.windows.net', 'packages.microsoft.com/keys/microsoft.asc', 'sudo apt-get install -y azure-cli', 'management.azure.com') {
+            $verify | Should -Match ([regex]::Escape($topic))
+        }
+    }
+
+    It 'the DR runbook adds a temporary, dated firewall rule for the verification VM and deletes it at failback and drill clean-up' {
+        $script:runbook08 | Should -Match ([regex]::Escape('dr-verification-temp'))
+        $script:runbook08 | Should -Match ([regex]::Escape('az network firewall policy rule-collection-group create -g rg-defenstack-prod-eus --policy-name $eusPolicy -n dr-verification-temp --priority 900'))
+        $script:runbook08 | Should -Match ([regex]::Escape('dated, manual exception'))
+        $failback = $script:runbook08.Substring($script:runbook08.IndexOf('### 5.2 Failback (planned)'))
+        $failback | Should -Match ([regex]::Escape('az network firewall policy rule-collection-group delete -g rg-defenstack-prod-eus --policy-name afwp-defenstack-prod-eus -n dr-verification-temp'))
+        $script:runbook08 | Should -Match ([regex]::Escape('its temporary `dr-verification-temp` firewall rule and the East US Bastion are gone'))
+        $script:runbook08 | Should -Match ([regex]::Escape('If the rule cannot be added'))
+    }
+
+    It 'the DR runbook quotes both Microsoft sources on the fail-back-then-convert order and corrects the RA-GRS vs RA-GZRS wording for both paths' {
+        foreach ($quote in 'they need to perform a failback operation', "Conversion to ZRS or GZRS for an LRS account resulting from a failover isn't supported. Instead, perform a manual migration to add zone-redundancy.") {
+            $script:runbook08 | Should -Match ([regex]::Escape($quote))
+        }
+        foreach ($url in 'https://learn.microsoft.com/azure/storage/common/storage-failover-faq', 'https://learn.microsoft.com/azure/storage/common/redundancy-migration#failover-and-failback') {
+            $script:runbook08 | Should -Match ([regex]::Escape($url))
+        }
+        $script:runbook08 | Should -Match ([regex]::Escape('After a real unplanned failover'))
+        $script:runbook08 | Should -Match ([regex]::Escape('After a planned drill failover'))
+        $script:runbook08 | Should -Match ([regex]::Escape('the account is `Standard_RAGRS` here, and step 3.2 converts it to `Standard_RAGZRS`'))
+        $script:runbook08 | Should -Match ([regex]::Escape('The account is still `Standard_RAGZRS` here, and step 3.2 is a no-op check'))
+    }
+
+    It 'the DR runbook and ADR-020 restore a real fallback for a refused or slow RA-GZRS conversion, time-boxed before the hotfix' {
+        foreach ($topic in 'Open a Microsoft support request for the conversion', 'Ship a time-boxed hotfix pull request', 'Standard_RAGRS` — the line `storageAccountSkuName', 'for example **24 hours**', 'There''s no SLA for completion of a conversion') {
+            $script:runbook08 | Should -Match ([regex]::Escape($topic))
+        }
+        $script:runbook08 | Should -Not -Match ([regex]::Escape('**Fallback:** none needed'))
+        $adr020 = Get-Content (Get-RepoPath 'docs/decisions/ADR-020-storage-ra-gzrs-and-warm-standby-read.md') -Raw
+        foreach ($topic in 'Dated exception: a hotfix SKU', 'Standard_RAGRS', 'time-box', 'Reverted') {
+            $adr020 | Should -Match ([regex]::Escape($topic))
+        }
+    }
+
+    It 'the DR verification VM has no NIC NSG and no JIT policy, recorded in the runbook and ADR-028' {
+        $start = $script:runbook08.IndexOf('8. **Verify**')
+        $verify = $script:runbook08.Substring($start, $script:runbook08.IndexOf('## 5. Manual and post-deployment steps') - $start)
+        $verify | Should -Match ([regex]::Escape('No NIC NSG and no JIT policy'))
+        $adr028 = Get-Content (Get-RepoPath 'docs/decisions/ADR-028-jit-access-and-nsg-ownership.md') -Raw
+        $adr028 | Should -Match ([regex]::Escape('The DR verification host (runbook 08 §4 step 8) has neither a NIC NSG nor a JIT policy'))
+    }
+
+    It 'the DR runbook uses the policy assignment name, not the definition name, for the public IP allowlist check' {
+        $start = $script:runbook08.IndexOf('8. **Verify**')
+        $verify = $script:runbook08.Substring($start, $script:runbook08.IndexOf('## 5. Manual and post-deployment steps') - $start)
+        $verify | Should -Match ([regex]::Escape('`defenstack-deny-public-ip`'))
+        $verify | Should -Not -Match ([regex]::Escape('`defenstack-deny-public-ip-except-allowlist`'))
     }
 }
