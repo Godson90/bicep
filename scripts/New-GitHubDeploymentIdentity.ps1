@@ -38,7 +38,8 @@ param(
         'ba92f5b4-2d11-453d-a403-e96b0029c9fe', # Storage Blob Data Contributor (app identity, container scope)
         '1c0163c0-47e6-4577-8991-ea5c82e286e4', # Virtual Machine Administrator Login (admin group, jump host; Phase 3)
         '2a2b9908-6ea1-4ae2-8e65-a410df84e7d1', # Storage Blob Data Reader (warm-standby app on the primary container; Phase 5)
-        '3913510d-42f4-4e42-8a64-420c390055eb'  # Monitoring Metrics Publisher (App Service identity on its App Insights component; Phase 5)
+        '3913510d-42f4-4e42-8a64-420c390055eb', # Monitoring Metrics Publisher (App Service identity on its App Insights component; Phase 5)
+        'e5e2a7ff-d759-4cd2-bb51-3152d37e2eb1'  # Storage Account Backup Contributor (Backup vault identity on the prod app account; Phase 8)
     ),
 
     [Parameter()]

@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "9280508409313640649"
+      "templateHash": "5185882655098667399"
     }
   },
   "definitions": {
@@ -942,7 +942,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "10443429251648404667"
+              "templateHash": "4730148825978826468"
             }
           },
           "definitions": {
@@ -1321,6 +1321,13 @@
                 "description": "Application secrets written to this region's Key Vault, as { name: value } (ADR-019)."
               }
             },
+            "enableBlobVaultedBackup": {
+              "type": "bool",
+              "defaultValue": "[and(equals(parameters('environmentName'), 'prod'), equals(parameters('regionRole'), 'primary'))]",
+              "metadata": {
+                "description": "Back up the application containers to a Backup vault (blob vaulted backup, Phase 8). On by default only in the prod primary stamp, whose account is RA-GZRS."
+              }
+            },
             "hubPeering": {
               "$ref": "#/definitions/hubPeeringPlan",
               "nullable": true,
@@ -1368,7 +1375,8 @@
               "appInsights": "[format('appi-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
               "flowLogStorageAccount": "[format('stfl{0}{1}', parameters('regionCode'), variables('nameSuffix'))]",
               "flowLogIdentity": "[format('id-flowlogs-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
-              "recoveryServicesVault": "[format('rsv-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]"
+              "recoveryServicesVault": "[format('rsv-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
+              "backupVault": "[format('bv-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]"
             },
             "firewallPrivateIp": "[cidrHost(parameters('addressPlan').firewallSubnetPrefix, 3)]",
             "adminSourceCidrs": "[concat(createArray(parameters('addressPlan').bastionSubnetPrefix, parameters('addressPlan').vpnClientAddressPool), parameters('managementSourceCidrs'))]",
@@ -4868,6 +4876,312 @@
                 "virtualMachine"
               ]
             },
+            "blobBackupVault": {
+              "condition": "[parameters('enableBlobVaultedBackup')]",
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "blob-backup-vault",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "location": {
+                    "value": "[parameters('location')]"
+                  },
+                  "vaultName": {
+                    "value": "[variables('names').backupVault]"
+                  },
+                  "storageAccountName": {
+                    "value": "[reference('storage').outputs.name.value]"
+                  },
+                  "containerNames": {
+                    "value": [
+                      "[reference('storage').outputs.blobContainerName.value]"
+                    ]
+                  },
+                  "logAnalyticsWorkspaceId": {
+                    "value": "[parameters('logAnalyticsWorkspaceId')]"
+                  },
+                  "enableDeleteLock": {
+                    "value": "[variables('isProd')]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "languageVersion": "2.0",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.47.16.16243",
+                      "templateHash": "3485538532675794080"
+                    }
+                  },
+                  "parameters": {
+                    "location": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Azure region for the Backup vault: the storage account's region."
+                      }
+                    },
+                    "vaultName": {
+                      "type": "string",
+                      "minLength": 2,
+                      "maxLength": 50,
+                      "metadata": {
+                        "description": "Backup vault name."
+                      }
+                    },
+                    "storageAccountName": {
+                      "type": "string",
+                      "minLength": 3,
+                      "maxLength": 24,
+                      "metadata": {
+                        "description": "Application storage account to protect, in this resource group."
+                      }
+                    },
+                    "containerNames": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "minLength": 1,
+                      "metadata": {
+                        "description": "Blob containers to protect with vaulted backup."
+                      }
+                    },
+                    "logAnalyticsWorkspaceId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Log Analytics workspace resource ID for the backup reporting tables."
+                      }
+                    },
+                    "enableDeleteLock": {
+                      "type": "bool",
+                      "defaultValue": false,
+                      "metadata": {
+                        "description": "Apply a CanNotDelete lock to the vault."
+                      }
+                    }
+                  },
+                  "variables": {
+                    "storageAccountBackupContributorRoleId": "e5e2a7ff-d759-4cd2-bb51-3152d37e2eb1",
+                    "policyName": "blob-daily-vaulted",
+                    "backupLogCategories": [
+                      "CoreAzureBackup",
+                      "AddonAzureBackupJobs",
+                      "AddonAzureBackupPolicy",
+                      "AddonAzureBackupProtectedInstance"
+                    ],
+                    "vaultStore": {
+                      "dataStoreType": "VaultStore",
+                      "objectType": "DataStoreInfoBase"
+                    }
+                  },
+                  "resources": {
+                    "storageAccount": {
+                      "existing": true,
+                      "type": "Microsoft.Storage/storageAccounts",
+                      "apiVersion": "2026-04-01",
+                      "name": "[parameters('storageAccountName')]"
+                    },
+                    "vault": {
+                      "type": "Microsoft.DataProtection/backupVaults",
+                      "apiVersion": "2026-06-01",
+                      "name": "[parameters('vaultName')]",
+                      "location": "[parameters('location')]",
+                      "identity": {
+                        "type": "SystemAssigned"
+                      },
+                      "properties": {
+                        "storageSettings": [
+                          {
+                            "datastoreType": "VaultStore",
+                            "type": "GeoRedundant"
+                          }
+                        ],
+                        "securitySettings": {
+                          "softDeleteSettings": {
+                            "state": "On",
+                            "retentionDurationInDays": 14
+                          },
+                          "immutabilitySettings": {
+                            "state": "Unlocked"
+                          }
+                        },
+                        "featureSettings": {
+                          "crossRegionRestoreSettings": {
+                            "state": "Disabled"
+                          }
+                        },
+                        "monitoringSettings": {
+                          "azureMonitorAlertSettings": {
+                            "alertsForAllJobFailures": "Enabled"
+                          }
+                        }
+                      }
+                    },
+                    "policy": {
+                      "type": "Microsoft.DataProtection/backupVaults/backupPolicies",
+                      "apiVersion": "2026-06-01",
+                      "name": "[format('{0}/{1}', parameters('vaultName'), variables('policyName'))]",
+                      "properties": {
+                        "objectType": "BackupPolicy",
+                        "datasourceTypes": [
+                          "Microsoft.Storage/storageAccounts/blobServices"
+                        ],
+                        "policyRules": [
+                          {
+                            "name": "BackupDaily",
+                            "objectType": "AzureBackupRule",
+                            "backupParameters": {
+                              "objectType": "AzureBackupParams",
+                              "backupType": "Discrete"
+                            },
+                            "dataStore": "[variables('vaultStore')]",
+                            "trigger": {
+                              "objectType": "ScheduleBasedTriggerContext",
+                              "schedule": {
+                                "repeatingTimeIntervals": [
+                                  "R/2026-01-01T02:00:00+00:00/P1D"
+                                ],
+                                "timeZone": "UTC"
+                              },
+                              "taggingCriteria": [
+                                {
+                                  "isDefault": true,
+                                  "taggingPriority": 99,
+                                  "tagInfo": {
+                                    "tagName": "Default"
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "name": "Default",
+                            "objectType": "AzureRetentionRule",
+                            "isDefault": true,
+                            "lifecycles": [
+                              {
+                                "deleteAfter": {
+                                  "objectType": "AbsoluteDeleteOption",
+                                  "duration": "P30D"
+                                },
+                                "sourceDataStore": "[variables('vaultStore')]",
+                                "targetDataStoreCopySettings": []
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "vault"
+                      ]
+                    },
+                    "backupContributor": {
+                      "type": "Microsoft.Authorization/roleAssignments",
+                      "apiVersion": "2022-04-01",
+                      "scope": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
+                      "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), resourceId('Microsoft.DataProtection/backupVaults', parameters('vaultName')), variables('storageAccountBackupContributorRoleId'))]",
+                      "properties": {
+                        "principalId": "[reference('vault', '2026-06-01', 'full').identity.principalId]",
+                        "principalType": "ServicePrincipal",
+                        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageAccountBackupContributorRoleId'))]"
+                      },
+                      "dependsOn": [
+                        "vault"
+                      ]
+                    },
+                    "instance": {
+                      "type": "Microsoft.DataProtection/backupVaults/backupInstances",
+                      "apiVersion": "2026-06-01",
+                      "name": "[format('{0}/{1}', parameters('vaultName'), parameters('storageAccountName'))]",
+                      "properties": {
+                        "objectType": "BackupInstance",
+                        "friendlyName": "[parameters('storageAccountName')]",
+                        "dataSourceInfo": {
+                          "objectType": "Datasource",
+                          "datasourceType": "Microsoft.Storage/storageAccounts/blobServices",
+                          "resourceID": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
+                          "resourceUri": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
+                          "resourceName": "[parameters('storageAccountName')]",
+                          "resourceType": "Microsoft.Storage/storageAccounts",
+                          "resourceLocation": "[parameters('location')]"
+                        },
+                        "policyInfo": {
+                          "policyId": "[resourceId('Microsoft.DataProtection/backupVaults/backupPolicies', parameters('vaultName'), variables('policyName'))]",
+                          "policyParameters": {
+                            "backupDatasourceParametersList": [
+                              {
+                                "objectType": "BlobBackupDatasourceParameters",
+                                "containersList": "[parameters('containerNames')]"
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      "dependsOn": [
+                        "backupContributor",
+                        "policy",
+                        "vault"
+                      ]
+                    },
+                    "vaultDiagnostics": {
+                      "type": "Microsoft.Insights/diagnosticSettings",
+                      "apiVersion": "2021-05-01-preview",
+                      "scope": "[resourceId('Microsoft.DataProtection/backupVaults', parameters('vaultName'))]",
+                      "name": "bv-diagnostics",
+                      "properties": {
+                        "copy": [
+                          {
+                            "name": "logs",
+                            "count": "[length(variables('backupLogCategories'))]",
+                            "input": {
+                              "category": "[variables('backupLogCategories')[copyIndex('logs')]]",
+                              "enabled": true
+                            }
+                          }
+                        ],
+                        "workspaceId": "[parameters('logAnalyticsWorkspaceId')]",
+                        "logAnalyticsDestinationType": "Dedicated"
+                      },
+                      "dependsOn": [
+                        "vault"
+                      ]
+                    },
+                    "vaultLock": {
+                      "condition": "[parameters('enableDeleteLock')]",
+                      "type": "Microsoft.Authorization/locks",
+                      "apiVersion": "2020-05-01",
+                      "scope": "[resourceId('Microsoft.DataProtection/backupVaults', parameters('vaultName'))]",
+                      "name": "[format('{0}-lck', parameters('vaultName'))]",
+                      "properties": {
+                        "level": "CanNotDelete"
+                      },
+                      "dependsOn": [
+                        "vault"
+                      ]
+                    }
+                  },
+                  "outputs": {
+                    "id": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.DataProtection/backupVaults', parameters('vaultName'))]"
+                    },
+                    "name": {
+                      "type": "string",
+                      "value": "[parameters('vaultName')]"
+                    }
+                  }
+                }
+              },
+              "dependsOn": [
+                "storage"
+              ]
+            },
             "bastion": {
               "condition": "[parameters('deployAdminAccess')]",
               "type": "Microsoft.Resources/deployments",
@@ -6707,6 +7021,14 @@
             "recoveryServicesVaultName": {
               "type": "string",
               "value": "[variables('names').recoveryServicesVault]"
+            },
+            "backupVaultId": {
+              "type": "string",
+              "value": "[if(parameters('enableBlobVaultedBackup'), reference('blobBackupVault').outputs.id.value, '')]"
+            },
+            "backupVaultName": {
+              "type": "string",
+              "value": "[if(parameters('enableBlobVaultedBackup'), variables('names').backupVault, '')]"
             },
             "dataCollectionEndpointId": {
               "type": "string",
@@ -6797,7 +7119,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "10443429251648404667"
+              "templateHash": "4730148825978826468"
             }
           },
           "definitions": {
@@ -7176,6 +7498,13 @@
                 "description": "Application secrets written to this region's Key Vault, as { name: value } (ADR-019)."
               }
             },
+            "enableBlobVaultedBackup": {
+              "type": "bool",
+              "defaultValue": "[and(equals(parameters('environmentName'), 'prod'), equals(parameters('regionRole'), 'primary'))]",
+              "metadata": {
+                "description": "Back up the application containers to a Backup vault (blob vaulted backup, Phase 8). On by default only in the prod primary stamp, whose account is RA-GZRS."
+              }
+            },
             "hubPeering": {
               "$ref": "#/definitions/hubPeeringPlan",
               "nullable": true,
@@ -7223,7 +7552,8 @@
               "appInsights": "[format('appi-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
               "flowLogStorageAccount": "[format('stfl{0}{1}', parameters('regionCode'), variables('nameSuffix'))]",
               "flowLogIdentity": "[format('id-flowlogs-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
-              "recoveryServicesVault": "[format('rsv-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]"
+              "recoveryServicesVault": "[format('rsv-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]",
+              "backupVault": "[format('bv-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]"
             },
             "firewallPrivateIp": "[cidrHost(parameters('addressPlan').firewallSubnetPrefix, 3)]",
             "adminSourceCidrs": "[concat(createArray(parameters('addressPlan').bastionSubnetPrefix, parameters('addressPlan').vpnClientAddressPool), parameters('managementSourceCidrs'))]",
@@ -10723,6 +11053,312 @@
                 "virtualMachine"
               ]
             },
+            "blobBackupVault": {
+              "condition": "[parameters('enableBlobVaultedBackup')]",
+              "type": "Microsoft.Resources/deployments",
+              "apiVersion": "2025-04-01",
+              "name": "blob-backup-vault",
+              "properties": {
+                "expressionEvaluationOptions": {
+                  "scope": "inner"
+                },
+                "mode": "Incremental",
+                "parameters": {
+                  "location": {
+                    "value": "[parameters('location')]"
+                  },
+                  "vaultName": {
+                    "value": "[variables('names').backupVault]"
+                  },
+                  "storageAccountName": {
+                    "value": "[reference('storage').outputs.name.value]"
+                  },
+                  "containerNames": {
+                    "value": [
+                      "[reference('storage').outputs.blobContainerName.value]"
+                    ]
+                  },
+                  "logAnalyticsWorkspaceId": {
+                    "value": "[parameters('logAnalyticsWorkspaceId')]"
+                  },
+                  "enableDeleteLock": {
+                    "value": "[variables('isProd')]"
+                  }
+                },
+                "template": {
+                  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                  "languageVersion": "2.0",
+                  "contentVersion": "1.0.0.0",
+                  "metadata": {
+                    "_generator": {
+                      "name": "bicep",
+                      "version": "0.47.16.16243",
+                      "templateHash": "3485538532675794080"
+                    }
+                  },
+                  "parameters": {
+                    "location": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Azure region for the Backup vault: the storage account's region."
+                      }
+                    },
+                    "vaultName": {
+                      "type": "string",
+                      "minLength": 2,
+                      "maxLength": 50,
+                      "metadata": {
+                        "description": "Backup vault name."
+                      }
+                    },
+                    "storageAccountName": {
+                      "type": "string",
+                      "minLength": 3,
+                      "maxLength": 24,
+                      "metadata": {
+                        "description": "Application storage account to protect, in this resource group."
+                      }
+                    },
+                    "containerNames": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      },
+                      "minLength": 1,
+                      "metadata": {
+                        "description": "Blob containers to protect with vaulted backup."
+                      }
+                    },
+                    "logAnalyticsWorkspaceId": {
+                      "type": "string",
+                      "metadata": {
+                        "description": "Log Analytics workspace resource ID for the backup reporting tables."
+                      }
+                    },
+                    "enableDeleteLock": {
+                      "type": "bool",
+                      "defaultValue": false,
+                      "metadata": {
+                        "description": "Apply a CanNotDelete lock to the vault."
+                      }
+                    }
+                  },
+                  "variables": {
+                    "storageAccountBackupContributorRoleId": "e5e2a7ff-d759-4cd2-bb51-3152d37e2eb1",
+                    "policyName": "blob-daily-vaulted",
+                    "backupLogCategories": [
+                      "CoreAzureBackup",
+                      "AddonAzureBackupJobs",
+                      "AddonAzureBackupPolicy",
+                      "AddonAzureBackupProtectedInstance"
+                    ],
+                    "vaultStore": {
+                      "dataStoreType": "VaultStore",
+                      "objectType": "DataStoreInfoBase"
+                    }
+                  },
+                  "resources": {
+                    "storageAccount": {
+                      "existing": true,
+                      "type": "Microsoft.Storage/storageAccounts",
+                      "apiVersion": "2026-04-01",
+                      "name": "[parameters('storageAccountName')]"
+                    },
+                    "vault": {
+                      "type": "Microsoft.DataProtection/backupVaults",
+                      "apiVersion": "2026-06-01",
+                      "name": "[parameters('vaultName')]",
+                      "location": "[parameters('location')]",
+                      "identity": {
+                        "type": "SystemAssigned"
+                      },
+                      "properties": {
+                        "storageSettings": [
+                          {
+                            "datastoreType": "VaultStore",
+                            "type": "GeoRedundant"
+                          }
+                        ],
+                        "securitySettings": {
+                          "softDeleteSettings": {
+                            "state": "On",
+                            "retentionDurationInDays": 14
+                          },
+                          "immutabilitySettings": {
+                            "state": "Unlocked"
+                          }
+                        },
+                        "featureSettings": {
+                          "crossRegionRestoreSettings": {
+                            "state": "Disabled"
+                          }
+                        },
+                        "monitoringSettings": {
+                          "azureMonitorAlertSettings": {
+                            "alertsForAllJobFailures": "Enabled"
+                          }
+                        }
+                      }
+                    },
+                    "policy": {
+                      "type": "Microsoft.DataProtection/backupVaults/backupPolicies",
+                      "apiVersion": "2026-06-01",
+                      "name": "[format('{0}/{1}', parameters('vaultName'), variables('policyName'))]",
+                      "properties": {
+                        "objectType": "BackupPolicy",
+                        "datasourceTypes": [
+                          "Microsoft.Storage/storageAccounts/blobServices"
+                        ],
+                        "policyRules": [
+                          {
+                            "name": "BackupDaily",
+                            "objectType": "AzureBackupRule",
+                            "backupParameters": {
+                              "objectType": "AzureBackupParams",
+                              "backupType": "Discrete"
+                            },
+                            "dataStore": "[variables('vaultStore')]",
+                            "trigger": {
+                              "objectType": "ScheduleBasedTriggerContext",
+                              "schedule": {
+                                "repeatingTimeIntervals": [
+                                  "R/2026-01-01T02:00:00+00:00/P1D"
+                                ],
+                                "timeZone": "UTC"
+                              },
+                              "taggingCriteria": [
+                                {
+                                  "isDefault": true,
+                                  "taggingPriority": 99,
+                                  "tagInfo": {
+                                    "tagName": "Default"
+                                  }
+                                }
+                              ]
+                            }
+                          },
+                          {
+                            "name": "Default",
+                            "objectType": "AzureRetentionRule",
+                            "isDefault": true,
+                            "lifecycles": [
+                              {
+                                "deleteAfter": {
+                                  "objectType": "AbsoluteDeleteOption",
+                                  "duration": "P30D"
+                                },
+                                "sourceDataStore": "[variables('vaultStore')]",
+                                "targetDataStoreCopySettings": []
+                              }
+                            ]
+                          }
+                        ]
+                      },
+                      "dependsOn": [
+                        "vault"
+                      ]
+                    },
+                    "backupContributor": {
+                      "type": "Microsoft.Authorization/roleAssignments",
+                      "apiVersion": "2022-04-01",
+                      "scope": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
+                      "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName')), resourceId('Microsoft.DataProtection/backupVaults', parameters('vaultName')), variables('storageAccountBackupContributorRoleId'))]",
+                      "properties": {
+                        "principalId": "[reference('vault', '2026-06-01', 'full').identity.principalId]",
+                        "principalType": "ServicePrincipal",
+                        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageAccountBackupContributorRoleId'))]"
+                      },
+                      "dependsOn": [
+                        "vault"
+                      ]
+                    },
+                    "instance": {
+                      "type": "Microsoft.DataProtection/backupVaults/backupInstances",
+                      "apiVersion": "2026-06-01",
+                      "name": "[format('{0}/{1}', parameters('vaultName'), parameters('storageAccountName'))]",
+                      "properties": {
+                        "objectType": "BackupInstance",
+                        "friendlyName": "[parameters('storageAccountName')]",
+                        "dataSourceInfo": {
+                          "objectType": "Datasource",
+                          "datasourceType": "Microsoft.Storage/storageAccounts/blobServices",
+                          "resourceID": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
+                          "resourceUri": "[resourceId('Microsoft.Storage/storageAccounts', parameters('storageAccountName'))]",
+                          "resourceName": "[parameters('storageAccountName')]",
+                          "resourceType": "Microsoft.Storage/storageAccounts",
+                          "resourceLocation": "[parameters('location')]"
+                        },
+                        "policyInfo": {
+                          "policyId": "[resourceId('Microsoft.DataProtection/backupVaults/backupPolicies', parameters('vaultName'), variables('policyName'))]",
+                          "policyParameters": {
+                            "backupDatasourceParametersList": [
+                              {
+                                "objectType": "BlobBackupDatasourceParameters",
+                                "containersList": "[parameters('containerNames')]"
+                              }
+                            ]
+                          }
+                        }
+                      },
+                      "dependsOn": [
+                        "backupContributor",
+                        "policy",
+                        "vault"
+                      ]
+                    },
+                    "vaultDiagnostics": {
+                      "type": "Microsoft.Insights/diagnosticSettings",
+                      "apiVersion": "2021-05-01-preview",
+                      "scope": "[resourceId('Microsoft.DataProtection/backupVaults', parameters('vaultName'))]",
+                      "name": "bv-diagnostics",
+                      "properties": {
+                        "copy": [
+                          {
+                            "name": "logs",
+                            "count": "[length(variables('backupLogCategories'))]",
+                            "input": {
+                              "category": "[variables('backupLogCategories')[copyIndex('logs')]]",
+                              "enabled": true
+                            }
+                          }
+                        ],
+                        "workspaceId": "[parameters('logAnalyticsWorkspaceId')]",
+                        "logAnalyticsDestinationType": "Dedicated"
+                      },
+                      "dependsOn": [
+                        "vault"
+                      ]
+                    },
+                    "vaultLock": {
+                      "condition": "[parameters('enableDeleteLock')]",
+                      "type": "Microsoft.Authorization/locks",
+                      "apiVersion": "2020-05-01",
+                      "scope": "[resourceId('Microsoft.DataProtection/backupVaults', parameters('vaultName'))]",
+                      "name": "[format('{0}-lck', parameters('vaultName'))]",
+                      "properties": {
+                        "level": "CanNotDelete"
+                      },
+                      "dependsOn": [
+                        "vault"
+                      ]
+                    }
+                  },
+                  "outputs": {
+                    "id": {
+                      "type": "string",
+                      "value": "[resourceId('Microsoft.DataProtection/backupVaults', parameters('vaultName'))]"
+                    },
+                    "name": {
+                      "type": "string",
+                      "value": "[parameters('vaultName')]"
+                    }
+                  }
+                }
+              },
+              "dependsOn": [
+                "storage"
+              ]
+            },
             "bastion": {
               "condition": "[parameters('deployAdminAccess')]",
               "type": "Microsoft.Resources/deployments",
@@ -12562,6 +13198,14 @@
             "recoveryServicesVaultName": {
               "type": "string",
               "value": "[variables('names').recoveryServicesVault]"
+            },
+            "backupVaultId": {
+              "type": "string",
+              "value": "[if(parameters('enableBlobVaultedBackup'), reference('blobBackupVault').outputs.id.value, '')]"
+            },
+            "backupVaultName": {
+              "type": "string",
+              "value": "[if(parameters('enableBlobVaultedBackup'), variables('names').backupVault, '')]"
             },
             "dataCollectionEndpointId": {
               "type": "string",

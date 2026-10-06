@@ -81,6 +81,9 @@ param primaryStorageAccountName string = ''
 @secure()
 param keyVaultSecrets object = {}
 
+@description('Back up the application containers to a Backup vault (blob vaulted backup, Phase 8). On by default only in the prod primary stamp, whose account is RA-GZRS.')
+param enableBlobVaultedBackup bool = environmentName == 'prod' && regionRole == 'primary'
+
 @description('Prod with DR only: routing and Azure Monitor rules for the hub-to-hub peering with the other region. Absent in dev and in prod without DR.')
 param hubPeering hubPeeringPlan?
 
@@ -117,6 +120,7 @@ var names = {
   flowLogStorageAccount: 'stfl${regionCode}${nameSuffix}'
   flowLogIdentity: 'id-flowlogs-defenstack-${environmentName}-${regionCode}'
   recoveryServicesVault: 'rsv-defenstack-${environmentName}-${regionCode}'
+  backupVault: 'bv-defenstack-${environmentName}-${regionCode}'
 }
 // Azure Firewall always takes the first usable address (.4) of AzureFirewallSubnet. The hub needs it before
 // the firewall exists (GatewaySubnet route table); runbook 03 checks it matches the firewall's actual IP.
@@ -293,6 +297,21 @@ module recoveryServicesVault 'recoveryServicesVault.bicep' = {
     vaultName: names.recoveryServicesVault
     logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
     virtualMachineId: enableVirtualMachine && isPrimary ? virtualMachine!.outputs.id : ''
+    enableDeleteLock: isProd
+  }
+}
+
+// Blob vaulted backup of the application container (Phase 8, ADR-031): a daily offsite copy in a Backup vault.
+module blobBackupVault 'blobBackupVault.bicep' = if (enableBlobVaultedBackup) {
+  name: 'blob-backup-vault'
+  params: {
+    location: location
+    vaultName: names.backupVault
+    storageAccountName: storage.outputs.name
+    containerNames: [
+      storage.outputs.blobContainerName
+    ]
+    logAnalyticsWorkspaceId: logAnalyticsWorkspaceId
     enableDeleteLock: isProd
   }
 }
@@ -532,4 +551,6 @@ output privateEndpointSubnetId string = spokeNetwork.outputs.privateEndpointSubn
 output monitorAsgId string = spokeNetwork.outputs.amplsAsgId
 output recoveryServicesVaultId string = recoveryServicesVault.outputs.id
 output recoveryServicesVaultName string = names.recoveryServicesVault
+output backupVaultId string = enableBlobVaultedBackup ? blobBackupVault!.outputs.id : ''
+output backupVaultName string = enableBlobVaultedBackup ? names.backupVault : ''
 output dataCollectionEndpointId string = enableVirtualMachine && isPrimary ? virtualMachine!.outputs.dataCollectionEndpointId : ''
