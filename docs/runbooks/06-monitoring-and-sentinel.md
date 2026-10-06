@@ -43,7 +43,7 @@ sequenceDiagram
 - **Both rules** live in the rule collection group `cross-region-monitoring` (priority 250), which exists only with DR.
 - **West US 3 private-endpoint NSG, the enforcement point** (`<spoke VNet>-private-endpoints-nsg`, rule `allow-peer-monitoring-https`, priority 110): TCP 443 from the region's own `AzureFirewallSubnet` prefix, the SNAT source, to the application security group `<spoke VNet>-ampls-asg` only. The AMPLS endpoint is the group's only member, so East US traffic reaches no other private endpoint, whatever name it asks for. The firewall subnet is never an `allow-approved-https` source. Only the Host region gets the rule; every spoke has the (free) group.
 - **Routing:** each hub's `AzureFirewallSubnet` has the route table `<hub VNet>-firewall-rt`: `remote-spoke-<n>-through-peer-firewall` (the other region's spoke prefix to the other firewall's `.4` address) and `default-to-internet` (`0.0.0.0/0` to `Internet`, which Azure requires there).
-- **Peering:** `hub-to-eus-hub` and `hub-to-wus3-hub`, forwarded traffic allowed, no gateway transit. Nothing but Azure Monitor crosses until Phase 8.
+- **Peering:** `hub-to-eus-hub` and `hub-to-wus3-hub`, forwarded traffic allowed, no gateway transit. Only Azure Monitor traffic crosses; Phase 8 kept it that way, because a failover re-points Azure Monitor to an East US endpoint instead (runbook 08).
 
 **VNet flow logs and Traffic Analytics (`ADR-023`), per region:**
 - A keyless flow-log account `stfl<region><suffix>` (no shared key; public network access `Enabled` with the firewall at default `Deny`, the `AzureServices` bypass and no IP or VNet rules, so only trusted Azure services reach it; prod ZRS, dev LRS).
@@ -71,11 +71,11 @@ sequenceDiagram
 | `alert-defenstack-<env>-front-door-waf-blocks` | Front Door profile | `WebApplicationFirewallRequestCount` with `Action` = Block > `alertThresholds.frontDoorWafBlocks` (total) | Sev2 |
 | `alert-defenstack-<env>-service-health` | Subscription | Service Health events for West US 3, East US (prod with DR) and Global | (activity log alert) |
 
-The backup job alert is deferred to Phase 8, together with the Recovery Services vaults.
+Azure Backup job alerts (Phase 8) are not metric alerts: the Recovery Services vaults and the prod Backup vault raise built-in Azure Monitor alerts, and the alert processing rule `apr-defenstack-<env>-backup` adds this action group to them. Triage: runbook 08 §5.5.
 
 **Not in scope:**
 - Defender for Cloud plans and Azure Policy: Phase 7, deployed by an operator from `governance.bicep` (runbook 07).
-- Backup, the backup job alert, DR traffic over the peering, and the failover runbook (Phase 8).
+- Backup, the backup alert routing and the failover procedure: Phase 8, runbook 08. DR traffic over the peering stays limited to Azure Monitor.
 - Sentinel analytics rules as code (`ADR-024`).
 
 ## 2. Prerequisites
@@ -238,9 +238,9 @@ Each alert email uses the common alert schema: it names the rule, the resource a
 | `vpn-p2s-connections` (Sev3) | More admin VPN sessions than expected | `az network vnet-gateway vpn-client show-health -g <rg> -n vpng-defenstack-<env>-<region>`, or the gateway's **Point-to-site sessions** blade; Entra sign-in logs for the VPN app | Confirm the sessions belong to the admin group; remove unexpected users from the admin group in Entra ID (runbook 03 §5.5 and §8) |
 | `front-door-origin-health` (Sev1) | Fewer than 90% of Front Door health probes succeed | `AzureDiagnostics \| where Category == "FrontDoorHealthProbeLog"`; the origins' `app-health-check`; the Private Link connection status (runbook 04 §6) | Fix the failing origin; an unapproved Private Link connection also fails probes (runbook 04 §5.2) |
 | `front-door-waf-blocks` (Sev2) | The WAF blocked more requests than the threshold | `AzureDiagnostics \| where Category == "FrontDoorWebApplicationFirewallLog" and action_s == "Block" \| summarize count() by ruleName_s, clientIP_s` | An attack: no action beyond watching, and Sentinel incidents. A false positive after an app change: follow runbook 04 §5.3 "WAF tuning and exclusions" |
-| `service-health` | Azure reports an incident, maintenance or advisory in West US 3, East US (prod) or Global | The email links to the Service Health event | Follow Microsoft's guidance in the event; in a prolonged West US 3 outage, the failover decision belongs to the Phase 8 DR runbook |
+| `service-health` | Azure reports an incident, maintenance or advisory in West US 3, East US (prod) or Global | The email links to the Service Health event | Follow Microsoft's guidance in the event; in a prolonged West US 3 outage, the failover decision and procedure are in runbook 08 |
 
-A Sev1 alert pages the on-call person by email only. Phase 8 may add SMS or a webhook to the action group.
+A Sev1 alert pages the on-call person by email only. Phase 8 added no SMS or webhook receiver; add one to `modules/actionGroup.bicep` if email is not fast enough for the DR declaration (runbook 08 §2).
 
 ## 6. Validation
 
@@ -289,7 +289,7 @@ Deployments are incremental: reverting the commit does not delete anything Phase
 - **ALERT_EMAIL changes:** update the variable on `dev`, `dev-plan` and `prod` (§4 step 3) and run the deploy workflow; the action group follows.
 - **Sentinel content:** apply Content Hub updates monthly (**Content hub** → **Updates**). Review enabled analytics rules quarterly.
 - **Retention:** workspace and flow logs keep 90 days; do not raise it without a cost review.
-- **Backup job alert:** arrives with the Recovery Services vaults in Phase 8.
+- **Backup job alerts:** delivered since Phase 8 by `apr-defenstack-<env>-backup` to this action group; triage in runbook 08 §5.5.
 - **Cost drivers** (`docs/cost.md` "Phase 6 delta"): Sentinel ingestion, Traffic Analytics processing, flow-log storage, the AMPLS endpoint, the four zones, global peering (prod), and alert rules.
 
 ## 9. Troubleshooting

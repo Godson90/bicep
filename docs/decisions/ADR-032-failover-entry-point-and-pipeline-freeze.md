@@ -1,0 +1,37 @@
+# ADR-032: Regional failover is a separate, operator-run entry point, and the pipeline freezes during DR
+
+## Context
+Prod runs a warm standby in East US (`ADR-008`). In steady state the standby is cut down: one App Service instance, no Bastion and no VPN gateway, and Azure Monitor traffic crosses the hub peering to the single AMPLS endpoint in West US 3 (`ADR-022`). The target for a declared West US 3 outage is **RTO 1 hour, RPO 15 minutes**, and an operator drives the failover from runbook 08.
+
+The pipeline cannot do this:
+- `main.bicep` deploys every stamp, starting with the West US 3 one, so a run during the outage fails in the unreachable region.
+- Every successful run puts the standby back to its steady state: the East US plan to 1 instance, the West US 3 Front Door origin back to `Enabled`, and the primary storage account back in `westus3`.
+
+## Decision
+- **`failover.bicep` is a third root entry point** (`targetScope = 'subscription'`, with `params/failover.bicepparam`, prod only). An operator deploys it with PIM-activated rights (runbook 08 §4 step 5). `main.bicep` never references it, `deploy.yml` never deploys it, and its path filter ignores `modules/failover/**` and `params/failover.bicepparam`. CI lints, builds, tests and drift-checks it (`failover.json` is committed) and runs PSRule on its parameter file, as it does for governance (`ADR-026`).
+- **It deploys into `rg-defenstack-prod-eus` only:**
+  - The East US App Service plan, at `appServicePlanCapacity` instances (default 3, the primary's count). It uses the prod SKU `P2V3`/`PremiumV3` and the same name, so only the instance count changes, and the app is not redeployed. Zone redundancy stays off, because a plan's zone redundancy is fixed at creation. The existing ADR-008 PSRule suppression for `asp-defenstack-prod-eus` covers this.
+  - Bastion `bas-defenstack-prod-eus` from `modules/bastion.bicep`, in the hub's existing `AzureBastionSubnet`. Its public IP `pip-bas-defenstack-prod-eus` is already in the governance allowlist. The VPN gateway is **not** deployed: it takes too long for the RTO, and Bastion is enough to reach a jump host restored into East US.
+  - A second Azure Monitor endpoint, `ampls-defenstack-prod-eus-pe`, from `modules/monitorPrivateEndpoint.bicep` (its new `privateEndpointName` parameter defaults to the Phase 6 name, so `main.bicep`'s endpoint is unchanged). Its zone group rewrites the shared Azure Monitor records to East US IPs. Microsoft documents that with several endpoints in one DNS, "only the last one set in the DNS applies" ([AMPLS design](https://learn.microsoft.com/azure/azure-monitor/fundamentals/private-link-design#plan-by-network-topology)).
+  - An East US blob endpoint, `<account>-eus-pe`, from `modules/failover/storagePrivateEndpoint.bicep`. It has the same shape as the stamp's storage endpoint in `privateConnectivity.bicep`: group `blob`, in the East US spoke's `private-endpoints` subnet, connected to the prod primary app account. The account's own endpoint `<account>-pe` sits in the West US 3 spoke, which is unreachable during the outage, so without this endpoint the East US app could not write to the account after it fails over. Its zone group overwrites the account's A record in the shared `privatelink.blob.core.windows.net` zone, as the Azure Monitor endpoint does for its records. The name differs from `<account>-pe` and from the standby's `<account>-secondary-pe` (`blob_secondary`).
+  - The account ID is the `primaryStorageAccountId` parameter. A parameter file cannot call `subscription()`, so its default computes the ID as `regionStamp.bicep` names the account: `stwus3` plus `uniqueString(subscription().id, 'prod', 'westus3')`, in `rg-defenstack-prod-wus3`. A test pins the parity.
+- **The write role stays a manual, PIM-gated runbook step, outside Bicep.** During DR, one command grants **Storage Blob Data Contributor** to the East US app's identity on `def-blob`, and failback removes it (runbook 08 §4 step 6, §5.2 step 3). The warm standby holds only Storage Blob Data Reader in normal operation (`ADR-020`), and a stray `failover.bicep` run cannot widen that.
+- **It only reads from the global resource group:** the workspace, the AMPLS and the shared zones are `existing` references, and the endpoints' zone groups write records into the zones.
+- **Nothing targets West US 3.** Every module deploys into `rg-defenstack-prod-eus`. West US 3 appears only as a referenced resource ID: the storage account in the blob endpoint's `privateLinkServiceId` (the `primaryStorageAccountId` default). Tests pin both: each deployment's scope, and that `wus3` and `westus3` appear nowhere in `failover.json` outside that default.
+- **`failoverActive` (default `true`) gates every module.** `false` deploys nothing, so an accidental run outside DR is harmless.
+- **Pipeline freeze.** From the outage declaration until failback step 9, the `deploy` workflow is disabled (`gh workflow disable deploy`), no pull request merges to `main`, and nobody dispatches a prod deploy. The failback re-enables the workflow only for operator-dispatched prod runs, then lifts the freeze (runbook 08 §5.2). A pipeline run during DR would:
+  - fail in West US 3;
+  - scale East US back to 1 instance;
+  - re-enable the dead origin;
+  - try to move the failed-over storage account back to `westus3`.
+
+## Consequences
+- Failover is not reviewed in a pull request at the time it runs. The template is, and the operator runs `what-if` first.
+- Nothing in `failover.bicep` is removed automatically. Failback removes the DR write grant, then deletes the East US blob endpoint, the East US Azure Monitor endpoint and Bastion by hand. The next prod pipeline run scales the plan back to 1, re-enables the West US 3 origin and re-PUTs the primary endpoints' zone groups, restoring their West US 3 records in the shared Azure Monitor and blob zones (runbook 08 §5.2). Whether that re-PUT rewrites a record another zone group overwrote is unverified, so runbook 08 §5.2 step 4 checks the blob record and §9 gives the fallback.
+- **The shared zones, the AMPLS, the workspace, Front Door and the action group live in `rg-defenstack-prod-global`, which runbook 01 creates in `westus3`.** A resource group's metadata is stored in its region. Microsoft states that ARM "automatically reroutes ARM control plane requests to a backup region" when that region is unavailable ([ARM overview](https://learn.microsoft.com/azure/azure-resource-manager/management/overview#which-location-should-i-use-for-my-resource-group)), but this platform has not exercised that, so it is **unverified**. If the East US endpoints' zone group writes fail during an outage, the fallback is either of these, until the global resource group is reachable (runbook 08 §9):
+  - a temporary conditional-forwarder or hosts entry for the Azure Monitor FQDNs and the account's blob FQDN on the East US firewall DNS proxy, pointing at the East US endpoints' IPs;
+  - creating the A records by hand once ARM accepts writes again.
+- The pipeline freeze also delays unrelated changes. Emergency fixes during DR are made by hand in East US and back-ported to Bicep after failback.
+
+## Revisit when
+The platform moves the global resource group to a non-failing region or splits it per region, adopts an active-active design, or Microsoft documents automatic zone-group behaviour for this case.

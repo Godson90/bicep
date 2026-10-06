@@ -196,6 +196,39 @@ resources). Measure after a month with Cost Analysis filtered to the service
 name "Microsoft Defender for Cloud" at subscription scope; Defender charges do
 not appear under the environment resource groups.
 
+## Phase 8 delta
+Phase 8 adds backup in every stamp and the operator-run regional failover
+(runbook 08). As with every phase, **fill in the actual dollar estimate from
+the Pricing Calculator; do not invent prices.** Each row names the billing
+unit. Read the current rate on the Azure Backup pricing page
+(https://azure.microsoft.com/pricing/details/backup/) or the service's own
+page, marked **confirm on the pricing page** below.
+
+| Environment | Cost driver | What changed / why it costs more |
+|---|---|---|
+| Both | Recovery Services vault: Azure VM protected instance | Per protected VM per month, tiered by the VM's protected size: the jump host only, when `enableVirtualMachine = true` (**confirm on the pricing page**). A vault with nothing protected costs nothing |
+| Both | Recovery Services vault: backup storage | Per GB-month of vaulted recovery points at **GRS** rates (`GeoRedundant`, with cross-region restore): 30 daily and 12 weekly points of the jump host's disks (**confirm on the pricing page**). Cross-region restore itself is not billed separately when it is not used; a restore adds data transfer |
+| Both | Instant-restore snapshots | Per GB-month of managed-disk snapshots kept 7 days in `AzureBackupRG_<region>_1` (Enhanced policy), billed as snapshot storage (**confirm on the pricing page**) |
+| Prod | Backup vault: blob protected instance | Per protected storage account per month, sized by the protected data (`def-blob`) (**confirm on the pricing page**) |
+| Prod | Backup vault: vault storage | Per GB-month of vaulted blob recovery points (`VaultStore`, **GRS**), 30 days of daily points (**confirm on the pricing page**) |
+| Prod | Object replication on the source account | Change feed and versioning were already on (Phase 0). The new cost is object replication: read transactions on the source and the replicated data. Versions retained for replication add stored capacity (**confirm on the pricing page**) |
+| Both | Backup diagnostics and alerts | Resource-specific backup tables ingested into the workspace, per GB (small; Sentinel rates, Phase 6). Built-in backup alerts and the alert processing rule have no charge (**confirm on the pricing page**) |
+| Prod, **DR only** | Azure Bastion Standard in East US | Per hour per Bastion host plus per extra scale unit (2 units), and outbound data per GB, from `failover.bicep` until failback deletes it (**confirm on the pricing page**). Plus one Standard public IP per hour |
+| Prod, **DR only** | App Service plan P2V3 in East US | Per instance-hour: 2 more instances than steady state (3 instead of 1) while failed over (**confirm on the pricing page**); also 2 more Defender for App Service instances (Phase 7) |
+| Prod, **DR only** | AMPLS private endpoint in East US | Per endpoint-hour plus inbound and outbound GB processed (**confirm on the pricing page**) |
+| Prod, **DR only** | Blob private endpoint `<primary account>-eus-pe` in East US | Per endpoint-hour plus inbound and outbound GB processed, from `failover.bicep` until failback deletes it (**confirm on the pricing page**) |
+| Prod, **DR only** | Storage failover and re-replication | An unplanned failover leaves the account LRS. Re-enabling RA-GRS, then the RA-GZRS conversion after failback, bills geo-replication data transfer per GB for the full re-copy (**confirm on the pricing page**) |
+| Prod, **DR only** | Workspace switchover | No charge for the switchover itself; workspace replication is already billed per replicated GB since Phase 6 (**confirm on the pricing page**) |
+
+**Estimate:** fill in from the Pricing Calculator: Azure Backup (Azure VM ×
+protected instances and GB, Azure Blob vaulted × protected GB), Storage
+(object replication transactions), and a separate DR scenario (Bastion
+Standard × hours, App Service P2V3 × 2 instances × hours, private endpoints ×2
+× hours) priced per day of outage. Measure after a month with Cost Analysis
+filtered to the service names "Backup" and "Storage" in
+`rg-defenstack-<env>-<region>`; DR-time costs appear in
+`rg-defenstack-prod-eus` only during a drill or a real failover.
+
 ## Dominant future cost drivers
 From `docs/superpowers/specs/2026-09-25-secure-connectivity-design.md` §6, the
 resources expected to dominate spend in later phases (not present in Phase 0).
