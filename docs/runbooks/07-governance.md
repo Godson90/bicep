@@ -240,7 +240,7 @@ A command-line override (`--parameters denyEnforcement=Default`) works for a one
 4. Redeploy governance: it creates the new flow-log exemption, allows the new public IP names and assigns the JIT role.
 5. Set `denyEnforcement = 'Default'` and redeploy governance.
 
-Turning on the prod warm standby's admin access during failover needs no step: its public IPs are already allowed.
+Turning on the prod warm standby's admin access during failover needs no step: its public IPs are already allowed, including `pip-bas-defenstack-prod-eus`, which `failover.bicep` creates with the East US Bastion (runbook 08 §4 step 5). Azure Backup creates `AzureBackupRG_<region>_1` for instant-restore snapshots in the vault's region (West US 3 or East US), which the resource-group locations assignment allows. Do not run governance during a declared outage: its flow-log exemptions target the West US 3 resource group (runbook 08 §5.1).
 
 **The legacy waiver.** It exempts `defenStack` from the 9 deny assignments until `legacyWaiverExpiresOn`. The committed date `2027-03-31` is a **placeholder to confirm** with the platform owner. When runbook 01a has deleted `defenStack`, set `legacyResourceGroupName = ''` and redeploy (the exemptions went with the group). If the teardown slips past the date, extend `legacyWaiverExpiresOn` with a dated reason in runbook 01a, and redeploy before the old date passes.
 

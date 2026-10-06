@@ -146,7 +146,7 @@ Every `main.bicep` parameter, with the value each committed `.bicepparam` file s
 
 ## 7. Rollback
 
-- **New environment, before it holds real data:** delete the new resource groups. Prod's resource groups carry `CanNotDelete` locks (`enableDeleteLock` when `isProd`) on individual **resources**, not on the resource groups themselves, so list and remove every locked resource's lock first. In prod this is the spoke VNet, the hub VNet, the Key Vault, the firewall, the firewall policy, and the firewall public IP (per stamp — [runbook 02](02-firewall.md) §6), plus the shared private DNS zones and the Log Analytics workspace in the global resource group:
+- **New environment, before it holds real data:** delete the new resource groups. Prod's resource groups carry `CanNotDelete` locks (`enableDeleteLock` when `isProd`) on individual **resources**, not on the resource groups themselves, so list and remove every locked resource's lock first. In prod this is the spoke VNet, the hub VNet, the Key Vault, the firewall, the firewall policy, and the firewall public IP (per stamp — [runbook 02](02-firewall.md) §6), plus the shared private DNS zones and the Log Analytics workspace in the global resource group, and from Phase 8 each Recovery Services vault and the Backup vault (their recovery points must also be removed or expire first, [runbook 08](08-dr-failover.md) §7):
 
   ```powershell
   az lock list -g <resource-group> -o table
@@ -164,12 +164,8 @@ Every `main.bicep` parameter, with the value each committed `.bicepparam` file s
 
 ## 8. Operations
 
-- **Never change `primaryLocation` or `secondaryLocation` after the first deploy of an environment.** The Log Analytics workspace's region is fixed at creation and cannot be changed in place; and swapping which region is "primary" would try to relocate the workspace and would flip which App Service plan is zone-redundant versus single-instance on already-provisioned plans — neither is a supported in-place change. Regional failover (making East US active) is an operational procedure for Phase 8, not a parameter swap in this template.
-- **To scale East US for a failover exercise or a real failover,** scale out its App Service plan (the rest of the DR runbook, including DNS/traffic cutover, lands in Phase 8):
-
-  ```powershell
-  az appservice plan update -g rg-defenstack-prod-eus -n asp-defenstack-prod-eus --number-of-workers 3
-  ```
+- **Never change `primaryLocation` or `secondaryLocation` after the first deploy of an environment.** The Log Analytics workspace's region is fixed at creation and cannot be changed in place; and swapping which region is "primary" would try to relocate the workspace and would flip which App Service plan is zone-redundant versus single-instance on already-provisioned plans — neither is a supported in-place change. Regional failover (making East US active) is an operator procedure with its own entry point, `failover.bicep`, not a parameter swap in this template ([runbook 08](08-dr-failover.md), `ADR-032`).
+- **For a failover exercise or a real failover,** follow [runbook 08](08-dr-failover.md). Its `failover.bicep` scales the East US plan to 3 instances, adds Bastion, re-points Azure Monitor to East US and adds an East US blob endpoint to the primary account; the runbook covers Front Door, the storage failover, the workspace switchover, the pipeline freeze and failback. Do not scale the plan by hand: the next pipeline run would set it back to 1.
 
 - **To add approved egress FQDNs,** add them to `allowedOutboundFqdns` in the environment's `.bicepparam` file and redeploy (§4 steps 4–6).
 

@@ -211,7 +211,8 @@ Describe 'Phase 6 documentation' {
         foreach ($rule in 'firewall-health', 'firewall-snat-ports', 'app-http-5xx', 'app-health-check', 'key-vault-availability', 'key-vault-forbidden', 'vpn-p2s-connections', 'front-door-origin-health', 'front-door-waf-blocks', 'service-health') {
             $script:runbook06 | Should -Match ([regex]::Escape("``$rule``"))
         }
-        $script:runbook06 | Should -Match 'backup job alert[^.]*Phase 8'
+        $script:runbook06 | Should -Match ([regex]::Escape('apr-defenstack-<env>-backup'))
+        $script:runbook06 | Should -Not -Match 'deferred to Phase 8'
     }
 
     It 'the monitoring runbook sets ALERT_EMAIL on dev, dev-plan and prod' {
@@ -374,5 +375,204 @@ Describe 'Phase 7 documentation' {
         foreach ($driver in 'Defender for Servers Plan 2', 'Defender for Storage', 'malware scanning', 'Defender CSPM', 'confirm on the pricing page') {
             $cost | Should -Match ([regex]::Escape($driver))
         }
+    }
+}
+
+Describe 'Phase 8 documentation' {
+    BeforeAll {
+        $script:runbook08 = Get-Content (Get-RepoPath 'docs/runbooks/08-dr-failover.md') -Raw -ErrorAction SilentlyContinue
+        $script:runbook00bPhase8 = Get-Content (Get-RepoPath 'docs/runbooks/00b-configure-pipeline-credentials.md') -Raw
+        $script:runbook05Phase8 = Get-Content (Get-RepoPath 'docs/runbooks/05-app-and-data.md') -Raw
+        $script:adr030 = Get-Content (Get-RepoPath 'docs/decisions/ADR-030-backup-vaults-immutability-and-lock-later.md') -Raw -ErrorAction SilentlyContinue
+        $script:adr031 = Get-Content (Get-RepoPath 'docs/decisions/ADR-031-blob-vaulted-backup.md') -Raw -ErrorAction SilentlyContinue
+        $script:adr032 = Get-Content (Get-RepoPath 'docs/decisions/ADR-032-failover-entry-point-and-pipeline-freeze.md') -Raw -ErrorAction SilentlyContinue
+    }
+
+    It '<_> exists' -ForEach 'docs/runbooks/08-dr-failover.md', 'docs/decisions/ADR-030-backup-vaults-immutability-and-lock-later.md', 'docs/decisions/ADR-031-blob-vaulted-backup.md', 'docs/decisions/ADR-032-failover-entry-point-and-pipeline-freeze.md', 'docs/decisions/ADR-033-recovery-services-vault-public-access-denied-without-private-endpoint.md' {
+        Get-RepoPath $_ | Should -Exist
+    }
+
+    It 'the DR runbook follows the 9-section template' {
+        foreach ($section in '## 1. Purpose and scope', '## 2. Prerequisites', '## 3. Parameters', '## 4. Step-by-step', '## 5. Manual and post-deployment steps', '## 6. Validation', '## 7. Rollback', '## 8. Operations', '## 9. Troubleshooting') {
+            $script:runbook08 | Should -Match ([regex]::Escape($section))
+        }
+    }
+
+    It 'the DR runbook states RTO 1 hour and RPO 15 minutes and how each is met' {
+        $script:runbook08 | Should -Match '\*\*RTO\*\*[^\n]*\*\*1 hour\*\*'
+        $script:runbook08 | Should -Match '\*\*RPO\*\*[^\n]*\*\*15 minutes\*\*'
+        $script:runbook08 | Should -Match 'Last Sync Time'
+    }
+
+    It 'the failover procedure runs in order: declare, Front Door, storage, workspace, failover.bicep, endpoint approvals, Key Vault, verify' {
+        $steps = @(
+            '1. **Declare the outage**',
+            '2. **Front Door: disable the West US 3 origin**',
+            '3. **Storage: fail the primary account over to East US (unplanned).**',
+            '4. **Log Analytics workspace switchover.**',
+            '5. **Run `failover.bicep`.**',
+            '6. **Private endpoint connections and storage writes from East US.**',
+            '7. **Key Vault: no action.**',
+            '8. **Verify**'
+        )
+        $previous = -1
+        foreach ($step in $steps) {
+            $at = $script:runbook08.IndexOf($step)
+            $at | Should -BeGreaterThan $previous -Because $step
+            $previous = $at
+        }
+    }
+
+    It 'the failover procedure uses the documented commands and re-enables geo-redundancy after the unplanned failover' {
+        foreach ($command in '--enabled-state Disabled', '--expand geoReplicationStats', '--failover-type Unplanned', '--sku Standard_RAGRS', 'az monitor log-analytics workspace failover', 'at least 24 hours', '--template-file failover.bicep --parameters params/failover.bicepparam', 'az deployment sub what-if --location eastus', './scripts/Approve-FrontDoorPrivateEndpoints.ps1', 'sharedPrivateLinkResource.status') {
+            $script:runbook08 | Should -Match ([regex]::Escape($command))
+        }
+    }
+
+    It 'the DR runbook freezes the pipeline during DR' {
+        $script:runbook08 | Should -Match '### 5\.1 Pipeline freeze during DR'
+        $script:runbook08 | Should -Match ([regex]::Escape('gh workflow disable deploy'))
+        $script:runbook08 | Should -Match ([regex]::Escape('gh workflow enable deploy'))
+    }
+
+    It 'the failback runs in order: pause backup and delete OR, disable PITR and change feed, planned failover, pipeline, workspace, AMPLS endpoint, scale down and Bastion, origin, lift the freeze' {
+        $start = $script:runbook08.IndexOf('### 5.2 Failback (planned)')
+        $start | Should -BeGreaterThan 0
+        $failback = $script:runbook08.Substring($start)
+        $markers = @(
+            'az dataprotection backup-instance suspend-backup',
+            'az storage account or-policy delete',
+            '--enable-restore-policy false --enable-change-feed false',
+            '--failover-type Planned',
+            'az role assignment delete --assignee $eusPrincipal --role "Storage Blob Data Contributor"',
+            'az network private-endpoint delete -g rg-defenstack-prod-eus -n "$st-eus-pe"',
+            'gh workflow run deploy',
+            'az dataprotection backup-instance resume-protection',
+            'az network private-dns record-set a show -g rg-defenstack-prod-global -z privatelink.blob.core.windows.net -n $st',
+            'az monitor log-analytics workspace failback',
+            'az network private-endpoint delete -g rg-defenstack-prod-eus -n ampls-defenstack-prod-eus-pe',
+            'az network bastion delete',
+            '--origin-name app-wus3 --enabled-state Enabled',
+            '9. **Lift the freeze.**'
+        )
+        $previous = -1
+        foreach ($marker in $markers) {
+            $at = $failback.IndexOf($marker)
+            $at | Should -BeGreaterThan $previous -Because $marker
+            $previous = $at
+        }
+    }
+
+    It 'the DR runbook takes the East US blob endpoint from failover.bicep and keeps only the write grant manual (ADR-020)' {
+        $script:runbook08 | Should -Match ([regex]::Escape('the blob endpoint `<st>-eus-pe`'))
+        $script:runbook08 | Should -Match ([regex]::Escape('| `primaryStorageAccountId` |'))
+        $script:runbook08 | Should -Match ([regex]::Escape('**Create** `<st>-eus-pe` and its zone group `default` (blob).'))
+        $start = $script:runbook08.IndexOf('6. **Private endpoint connections and storage writes from East US.**')
+        $step6 = $script:runbook08.Substring($start, $script:runbook08.IndexOf('7. **Key Vault: no action.**') - $start)
+        $step6 | Should -Match ([regex]::Escape('**The grant is the one manual step.**'))
+        ([regex]::Matches($step6, 'az role assignment create')).Count | Should -Be 1
+        $step6 | Should -Match ([regex]::Escape('--role "Storage Blob Data Contributor" --scope "$stId/blobServices/default/containers/def-blob"'))
+        $step6 | Should -Not -Match 'az network private-endpoint create'
+        $step6 | Should -Not -Match 'dns-zone-group create'
+        $script:runbook08 | Should -Not -Match 'dr-pe'
+    }
+
+    It 'the DR runbook covers restores: VM cross-region restore and blob vaulted restore to another account, with no blob cross-region restore' {
+        foreach ($topic in '### 5.4 Restores', '--use-secondary-region', 'az backup restore restore-disks', 'initialize-for-item-recovery', '--source-datastore VaultStore', '**no cross-region restore for blobs**') {
+            $script:runbook08 | Should -Match ([regex]::Escape($topic))
+        }
+    }
+
+    It 'the DR runbook has the quarterly drill, the drill log table and the irreversible hardening with an ADR sign-off' {
+        $script:runbook08 | Should -Match 'Quarterly drill'
+        $script:runbook08 | Should -Match ([regex]::Escape('| Date | Type (drill / real) | RTO measured | RPO measured | Issues | Sign-off |'))
+        foreach ($topic in '--immutability-state Locked', '--soft-delete-feature-state AlwaysON', '--soft-delete-state AlwaysOn', 'sign-off recorded in `ADR-030`') {
+            $script:runbook08 | Should -Match ([regex]::Escape($topic))
+        }
+    }
+
+    It 'the DR runbook has backup alert triage through the alert processing rule' {
+        $script:runbook08 | Should -Match '### 5\.5 Backup alert triage'
+        $script:runbook08 | Should -Match ([regex]::Escape('apr-defenstack-<env>-backup'))
+    }
+
+    It 'the DR runbook lists each unverified item as a live-only risk with a fallback' {
+        $risks = $script:runbook08.Substring($script:runbook08.IndexOf('### Live-only risks'))
+        foreach ($risk in "publicNetworkAccess: 'Disabled'", 'Private link after the workspace switchover', 'Bastion deploy time', 'The global resource group lives in westus3', 'RBAC race', 'container discovery', 'public access denied and no private endpoint', 'unverified', 'hosts-file', 'conditional forwarder', 'The blob record after failback', 'privatelink.blob.core.windows.net -n $st', 'dns-zone-group delete -g rg-defenstack-prod-wus3 --endpoint-name "$st-pe"', 'The blob endpoint during the storage failover') {
+            $risks | Should -Match ([regex]::Escape($risk))
+        }
+        ([regex]::Matches($risks, '\*\*Fallback:\*\*')).Count | Should -BeGreaterOrEqual 7
+    }
+
+    It 'the DR runbook never locks AzureBackupRG and stops protection by hand when the jump host goes' {
+        $script:runbook08 | Should -Match ([regex]::Escape('Never lock `AzureBackupRG_<region>_1`'))
+        $script:runbook08 | Should -Match ([regex]::Escape('az backup protection disable'))
+    }
+
+    It 'the DR runbook cites Microsoft Learn for platform behaviour' {
+        ([regex]::Matches($script:runbook08, 'https://learn\.microsoft\.com/')).Count | Should -BeGreaterOrEqual 10
+    }
+
+    It 'ADR-030 justifies the Azure.RSV.ReplicationAlert exclusion that ps-rule.yaml carries' {
+        $script:adr030 | Should -Match ([regex]::Escape('Azure.RSV.ReplicationAlert'))
+        $script:adr030 | Should -Match 'Locked'
+        Get-Content (Get-RepoPath 'ps-rule.yaml') -Raw | Should -Match '# ADR-030:'
+    }
+
+    It 'ADR-031 records the datasource type, the wrong Adls correction and the effects on the protected account' {
+        foreach ($topic in 'BlobBackupDatasourceParameters', 'AdlsBlobBackupDatasourceParameters', 'That correction was wrong', 'BCP036', 'Effects on backed-up storage accounts', 'change feed and delete lock', 'No conflict in this repository', 'no cross-region restore', 'new policy name') {
+            $script:adr031 | Should -Match ([regex]::Escape($topic))
+        }
+    }
+
+    It 'ADR-032 records the failover entry point, the pipeline freeze and the global resource group risk as unverified' {
+        foreach ($topic in 'failover.bicep', 'Pipeline freeze', 'westus3', 'unverified', 'conditional-forwarder') {
+            $script:adr032 | Should -Match ([regex]::Escape($topic))
+        }
+    }
+
+    It 'ADR-032 records the East US blob endpoint, the West US 3 reference-only rule and the manual write grant' {
+        foreach ($topic in '`<account>-eus-pe`', 'modules/failover/storagePrivateEndpoint.bicep', '`primaryStorageAccountId`', 'uniqueString(subscription().id, ''prod'', ''westus3'')', '**Nothing targets West US 3.**', '`privateLinkServiceId`', '**The write role stays a manual, PIM-gated runbook step, outside Bicep.**', '**Storage Blob Data Contributor**', '`ADR-020`') {
+            $script:adr032 | Should -Match ([regex]::Escape($topic))
+        }
+        $script:adr032 | Should -Not -Match 'the build contains no'
+    }
+
+    It 'runbook 00b adds the Storage Account Backup Contributor role and asks for an identity script re-run before Phase 8' {
+        $script:runbook00bPhase8 | Should -Match 'e5e2a7ff-d759-4cd2-bb51-3152d37e2eb1'
+        $script:runbook00bPhase8 | Should -Match 're-run the identity script before the first Phase 8 deploy'
+        $script:runbook00bPhase8 | Should -Match ([regex]::Escape('The pipeline does not run `failover.bicep`'))
+    }
+
+    It 'runbook 05 points blob backup and the account failover to runbook 08 and documents the backup effects' {
+        $script:runbook05Phase8 | Should -Match ([regex]::Escape('08-dr-failover.md'))
+        $script:runbook05Phase8 | Should -Match 'blob vaulted backup'
+        $script:runbook05Phase8 | Should -Match 'Effects of blob vaulted backup'
+        $script:runbook05Phase8 | Should -Not -Match 'belongs to the DR runbook \(Phase 8\)'
+    }
+
+    It 'runbook 01 sends failover to runbook 08 instead of scaling by hand' {
+        $text = Get-Content (Get-RepoPath 'docs/runbooks/01-deploy-stack.md') -Raw
+        $text | Should -Match ([regex]::Escape('08-dr-failover.md'))
+        $text | Should -Not -Match 'lands in Phase 8'
+    }
+
+    It 'runbook 07 says the allowlist already covers the East US Bastion IP' {
+        Get-Content (Get-RepoPath 'docs/runbooks/07-governance.md') -Raw | Should -Match ([regex]::Escape('pip-bas-defenstack-prod-eus'))
+    }
+
+    It 'the architecture overview, README and cost document cover Phase 8' {
+        $overview = Get-Content (Get-RepoPath 'docs/architecture/overview.md') -Raw
+        foreach ($adr in 'ADR-030', 'ADR-031', 'ADR-032', 'ADR-033') { $overview | Should -Match $adr }
+        $overview | Should -Match '\*\*Phase 8\*\*'
+        Get-Content (Get-RepoPath 'README.md') -Raw | Should -Match ([regex]::Escape('08-dr-failover.md'))
+        $cost = Get-Content (Get-RepoPath 'docs/cost.md') -Raw
+        $cost | Should -Match '## Phase 8 delta'
+        $cost | Should -Match ([regex]::Escape('Blob private endpoint `<primary account>-eus-pe` in East US'))
+        foreach ($driver in 'protected instance', 'GRS', 'Backup vault', 'Object replication', 'Bastion', 'P2V3', 'confirm on the pricing page') {
+            $cost | Should -Match ([regex]::Escape($driver))
+        }
+        $phase8 = $cost.Substring($cost.IndexOf('## Phase 8 delta'), $cost.IndexOf('## Dominant future cost drivers') - $cost.IndexOf('## Phase 8 delta'))
+        $phase8 | Should -Not -Match '\$\s?\d'
     }
 }

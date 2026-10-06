@@ -21,6 +21,12 @@ Data protection is unchanged from Phase 0 (F7) on every account:
 - point-in-time restore for 13 days;
 - no shared keys, no public network access.
 
+**Effects of blob vaulted backup on the prod primary account (Phase 8, `ADR-031`).** Microsoft warns that "once a storage account is configured for blobs backup, a few capabilities are affected, such as change feed and delete lock" ([REST: back up blobs](https://learn.microsoft.com/azure/backup/backup-azure-dataprotection-use-rest-api-backup-blobs)).
+- **What vaulted backup does to the account.** It creates an **object replication** policy, and it turns on **versioning and change feed** ([effects on backed-up storage accounts](https://learn.microsoft.com/azure/backup/blob-backup-configure-manage#effects-on-backed-up-storage-accounts)). Both are already on here, and `storage.bicep` leaves the object replication policy alone.
+- **What it does not do.** The Backup-owned **delete lock** and the policy-driven point-in-time restore and soft delete retention come only with **operational** backup, which this platform does not use. No template locks the account.
+- **Stopping protection** removes the object replication policy, but leaves versioning, change feed and point-in-time restore on.
+- **The one interaction to plan for:** a **planned** account failover is refused while change feed, object replication or point-in-time restore is on. Runbook 08 §5.2 turns them off first, and the pipeline turns them back on.
+
 **Warm-standby read path (prod only):**
 - The East US stamp has a private endpoint `<primary account>-secondary-pe` on the primary account's **read-only secondary** (`blob_secondary`). It is registered in the shared `privatelink.blob` zone as `<primary account>-secondary`.
 - The East US App Service identity holds **Storage Blob Data Reader** on the primary account's `def-blob` container: read only, never write (`modules/storageReaderAssignment.bicep`, deployed into the primary resource group).
@@ -42,7 +48,7 @@ Data protection is unchanged from Phase 0 (F7) on every account:
 
 **Not in scope:**
 - AMPLS, alerts and Sentinel ([runbook 06](06-monitoring-and-sentinel.md)).
-- Recovery Services vaults and the failover procedure (Phase 8).
+- Backup vaults and the regional failover: [runbook 08](08-dr-failover.md). Since Phase 8, the prod primary account also has **blob vaulted backup**: a daily copy of `def-blob` in the Backup vault `bv-defenstack-prod-wus3`, kept 30 days (`ADR-031`). Azure Backup adds an object replication policy to the account and relies on its versioning and change feed, which this runbook already turns on.
 - App code and its own use of the secrets.
 
 ## 2. Prerequisites
@@ -165,7 +171,7 @@ The examples use the dev primary account `<st>` and container `def-blob`, run ov
   ```
 
   Expected: `status` is `Live`, and `lastSync` is within about 15 minutes.
-- Writes in East US go to the East US account. Account failover, which makes East US writable for the primary account, belongs to the DR runbook (Phase 8).
+- Writes in East US go to the East US account. The customer-managed failover of the RA-GZRS primary account to East US, which makes it writable there, and its planned failback are in [runbook 08](08-dr-failover.md) (§4 step 3, §5.2). A planned failover first needs blob backup paused, the object replication policy deleted, and point-in-time restore and change feed turned off; the next pipeline run turns them back on.
 
 ## 6. Validation
 
