@@ -38,8 +38,9 @@ Describe 'Bicep lint' {
 }
 
 Describe 'Generated ARM template' {
-    # Both root entry points commit their build: main.json (pipeline) and governance.json (operator, Phase 7).
-    It '<_>.json matches a fresh build of <_>.bicep' -ForEach 'main', 'governance' {
+    # Every root entry point commits its build: main.json (pipeline), governance.json (operator, Phase 7) and
+    # failover.json (operator during a declared outage, Phase 8).
+    It '<_>.json matches a fresh build of <_>.bicep' -ForEach 'main', 'governance', 'failover' {
         [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
         $expected = ((& bicep build (Get-RepoPath "$_.bicep") --stdout) -join "`n").Trim()
         $actual = ((Get-Content (Get-RepoPath "$_.json") -Raw -Encoding UTF8) -replace "`r`n", "`n").Trim()

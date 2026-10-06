@@ -6,7 +6,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.47.16.16243",
-      "templateHash": "1641210288821103506"
+      "templateHash": "16299438805352737828"
     }
   },
   "definitions": {
@@ -14615,7 +14615,7 @@
             "_generator": {
               "name": "bicep",
               "version": "0.47.16.16243",
-              "templateHash": "7912882350473231885"
+              "templateHash": "15737241675199301898"
             }
           },
           "definitions": {
@@ -14694,6 +14694,13 @@
                 "description": "Azure Monitor Private Link Scope name, used for deterministic private endpoint naming."
               }
             },
+            "privateEndpointName": {
+              "type": "string",
+              "defaultValue": "[format('{0}-pe', parameters('privateLinkScopeName'))]",
+              "metadata": {
+                "description": "Private endpoint name. The default keeps the Phase 6 primary endpoint name; failover.bicep names its East US endpoint."
+              }
+            },
             "privateEndpointSubnetId": {
               "type": "string",
               "metadata": {
@@ -14717,7 +14724,7 @@
             "privateEndpoint": {
               "type": "Microsoft.Network/privateEndpoints",
               "apiVersion": "2024-07-01",
-              "name": "[format('{0}-pe', parameters('privateLinkScopeName'))]",
+              "name": "[parameters('privateEndpointName')]",
               "location": "[parameters('location')]",
               "properties": {
                 "privateLinkServiceConnections": [
@@ -14744,7 +14751,7 @@
             "privateDnsZoneGroup": {
               "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
               "apiVersion": "2024-07-01",
-              "name": "[format('{0}/{1}', format('{0}-pe', parameters('privateLinkScopeName')), 'default')]",
+              "name": "[format('{0}/{1}', parameters('privateEndpointName'), 'default')]",
               "properties": {
                 "privateDnsZoneConfigs": [
                   {
@@ -14787,7 +14794,7 @@
           "outputs": {
             "id": {
               "type": "string",
-              "value": "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-pe', parameters('privateLinkScopeName')))]"
+              "value": "[resourceId('Microsoft.Network/privateEndpoints', parameters('privateEndpointName'))]"
             }
           }
         }

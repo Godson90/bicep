@@ -43,8 +43,29 @@ Describe 'AMPLS private endpoint (Phase 6)' {
     }
 
     It 'uses the existing <resource>-pe naming and the private-endpoint subnet passed in' {
-        $endpoint.name | Should -Be "[format('{0}-pe', parameters('privateLinkScopeName'))]"
+        $endpoint.name | Should -Be "[parameters('privateEndpointName')]"
+        $endpointTemplate.parameters.privateEndpointName.defaultValue | Should -Be "[format('{0}-pe', parameters('privateLinkScopeName'))]"
         $endpoint.properties.subnet.id | Should -Be "[parameters('privateEndpointSubnetId')]"
+    }
+
+    It 'takes an optional endpoint name, so failover.bicep can add a second endpoint in East US (Phase 8)' {
+        $endpointTemplate.parameters.privateEndpointName.type | Should -Be 'string'
+    }
+
+    It 'keeps the Phase 6 endpoint byte-identical: main.bicep passes no name, so the default name (the scope name plus -pe) applies' {
+        $main = Get-BicepTemplate -RelativePath 'main.bicep'
+        $caller = Get-TemplateResourceBySymbol -Template $main -Symbol 'monitorPrivateEndpoint'
+        $caller.properties.parameters.PSObject.Properties.Name | Should -Not -Contain 'privateEndpointName'
+        $caller.properties.parameters.privateLinkScopeName.value | Should -Be "[reference('monitorPrivateLinkScope').outputs.name.value]"
+        $embedded = $caller.properties.template
+        $embedded.parameters.privateEndpointName.defaultValue | Should -Be "[format('{0}-pe', parameters('privateLinkScopeName'))]"
+        $embeddedEndpoint = Get-TemplateResource -Template $embedded -Type 'Microsoft.Network/privateEndpoints' | Select-Object -First 1
+        $embeddedEndpoint.name | Should -Be "[parameters('privateEndpointName')]"
+        # Every other property of the Phase 6 endpoint and its zone group is unchanged.
+        @($embeddedEndpoint.properties.PSObject.Properties.Name) -join ',' | Should -Be 'privateLinkServiceConnections,subnet,applicationSecurityGroups'
+        $embeddedEndpoint.properties.privateLinkServiceConnections[0].name | Should -Be 'azuremonitor'
+        $embeddedEndpoint.properties.subnet.id | Should -Be "[parameters('privateEndpointSubnetId')]"
+        $embeddedEndpoint.properties.applicationSecurityGroups[0].id | Should -Be "[parameters('applicationSecurityGroupId')]"
     }
 
     It 'joins the AMPLS application security group, the only destination the peer firewall may reach (final review I-1)' {

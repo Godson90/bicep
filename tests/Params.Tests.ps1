@@ -29,10 +29,11 @@ Describe 'Committed parameter files' {
         Get-RepoPath 'params/prod.bicepparam' | Should -Exist
     }
 
-    It 'binds dev and prod to main.bicep and the governance file to governance.bicep (Phase 7)' {
+    It 'binds dev and prod to main.bicep, governance to governance.bicep and failover to failover.bicep (Phases 7-8)' {
         Get-Content (Get-RepoPath 'params/dev.bicepparam') -TotalCount 1 | Should -Be "using '../main.bicep'"
         Get-Content (Get-RepoPath 'params/prod.bicepparam') -TotalCount 1 | Should -Be "using '../main.bicep'"
         Get-Content (Get-RepoPath 'params/governance.bicepparam') -TotalCount 1 | Should -Be "using '../governance.bicep'"
+        Get-Content (Get-RepoPath 'params/failover.bicepparam') -TotalCount 1 | Should -Be "using '../failover.bicep'"
     }
 
     It '<Name> builds against its template' -ForEach $paramFiles {
