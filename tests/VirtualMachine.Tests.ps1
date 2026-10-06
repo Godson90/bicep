@@ -212,3 +212,9 @@ Describe 'Jump host access (Phase 3)' {
         ($nsg.properties.securityRules | ConvertTo-Json -Depth 10) | Should -Match 'deny-ssh-rdp-outbound'
     }
 }
+
+Describe 'VM backup hand-off (Phase 8)' {
+    It 'outputs the VM resource ID, which the Recovery Services vault protects' {
+        $template.outputs.id.value | Should -Be "[resourceId('Microsoft.Compute/virtualMachines', parameters('vmName'))]"
+    }
+}

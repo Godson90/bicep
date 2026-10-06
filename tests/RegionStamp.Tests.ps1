@@ -330,3 +330,32 @@ Describe 'Region stamp alerts (Phase 6)' {
         }
     }
 }
+
+Describe 'Region stamp backup (Phase 8)' {
+    BeforeAll {
+        $vaultModule = Get-ModuleDeployment -Template $stamp -Name 'recovery-services-vault'
+        $vaultParameters = $vaultModule.properties.parameters
+    }
+
+    It 'deploys one Recovery Services vault in every stamp, named rsv-defenstack-<env>-<region>' {
+        $vaultModule.PSObject.Properties.Name | Should -Not -Contain 'condition'
+        $stamp.variables.names.recoveryServicesVault | Should -Be "[format('rsv-defenstack-{0}-{1}', parameters('environmentName'), parameters('regionCode'))]"
+        $vaultParameters.vaultName.value | Should -Be "[variables('names').recoveryServicesVault]"
+        $vaultParameters.location.value | Should -Be "[parameters('location')]"
+        $vaultParameters.logAnalyticsWorkspaceId.value | Should -Be "[parameters('logAnalyticsWorkspaceId')]"
+    }
+
+    It 'locks the vault in prod only' {
+        $vaultParameters.enableDeleteLock.value | Should -Be "[variables('isProd')]"
+    }
+
+    It 'protects the jump host only in the stamp where it exists' {
+        $vaultParameters.virtualMachineId |
+            Should -Be "[if(and(parameters('enableVirtualMachine'), variables('isPrimary')), createObject('value', reference('virtualMachine').outputs.id.value), createObject('value', ''))]"
+    }
+
+    It 'outputs the vault ID and name for the alert processing rule and runbook 08' {
+        $stamp.outputs.recoveryServicesVaultId.value | Should -Be "[reference('recoveryServicesVault').outputs.id.value]"
+        $stamp.outputs.recoveryServicesVaultName.value | Should -Be "[variables('names').recoveryServicesVault]"
+    }
+}

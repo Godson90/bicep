@@ -26,3 +26,5 @@ rule:
     - Azure.VNET.SingleDNS
     # ADR-006: no application code is deployed yet, so no dedicated health endpoint exists.
     - Azure.AppService.WebProbePath
+    # ADR-030: no Site Recovery replication exists; backup alerts are Azure Monitor alerts routed to the action group.
+    - Azure.RSV.ReplicationAlert
