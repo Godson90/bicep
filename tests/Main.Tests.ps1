@@ -357,3 +357,26 @@ Describe 'Alerts (Phase 6)' {
         $main.variables.regionDisplayNames.eastus | Should -BeExactly 'East US'
     }
 }
+
+Describe 'Backup alert routing (Phase 8)' {
+    BeforeAll {
+        $backupRouting = Get-TemplateResourceBySymbol -Template $main -Symbol 'backupAlertRouting'
+        $backupRoutingParameters = $backupRouting.properties.parameters
+    }
+
+    It 'deploys apr-defenstack-<env>-backup into the global resource group, next to the action group' {
+        $backupRouting.resourceGroup | Should -Be "[variables('globalResourceGroupName')]"
+        $backupRoutingParameters.ruleName.value | Should -Be "[format('apr-defenstack-{0}-backup', parameters('environmentName'))]"
+        $backupRoutingParameters.actionGroupId.value | Should -Be "[reference('actionGroup').outputs.id.value]"
+    }
+
+    It 'scopes the rule to the regional resource groups that hold the vaults, the secondary only with DR' {
+        $backupRoutingParameters.scopes.value |
+            Should -Be "[concat(createArray(subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('primaryResourceGroupName'))), if(parameters('deploySecondaryRegion'), createArray(subscriptionResourceId('Microsoft.Resources/resourceGroups', variables('secondaryResourceGroupName'))), createArray()))]"
+    }
+
+    It 'does not wait for the stamps: the resource groups exist before any vault (runbook 01)' {
+        @($backupRouting.dependsOn) | Should -Not -Contain 'primaryStamp'
+        @($backupRouting.dependsOn) | Should -Not -Contain 'secondaryStamp'
+    }
+}
